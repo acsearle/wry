@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 20/9/2023.
 //
 
+#include "assert.hpp"
 #include "machine.hpp"
 #include "world.hpp"
 #include "debug.hpp"
@@ -1626,8 +1627,8 @@ namespace wry {
         // and the 7 was copied, not taken
         {
             Term t{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
-            assert(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
+            CHECK(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+            CHECK(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
             assert(t._data == term_make_integer_with(7)._data);
         }
 
@@ -1698,8 +1699,8 @@ namespace wry {
             assert((test_stack_is(b, {})));
             assert(world._ptr->_money == 8);
             Term t{};
-            assert(!world._ptr->_term_for_coordinate.try_get(Coordinate{2, 4}, t));
-            assert(world._ptr->_term_for_coordinate.try_get(Coordinate{3, 4}, t));
+            CHECK(!world._ptr->_term_for_coordinate.try_get(Coordinate{2, 4}, t));
+            CHECK(world._ptr->_term_for_coordinate.try_get(Coordinate{3, 4}, t));
             assert(t._data == term_make_matter(MATTER_WATER)._data);
             const Machine* c = test_machine_for(world, mc);
             assert((c->_new_location == Coordinate{3, 5}));
@@ -1732,27 +1733,27 @@ namespace wry {
             Terrain t = -1;
             const auto& terrain = world._ptr->_terrain_for_coordinate;
             if (!seed) {
-                assert(!terrain.try_get(Coordinate{x, 8}, t));
-                assert(!terrain.try_get(Coordinate{0, 0}, t));
+                CHECK(!terrain.try_get(Coordinate{x, 8}, t));
+                CHECK(!terrain.try_get(Coordinate{0, 0}, t));
                 continue;
             }
             // made: every cell of the chunks around the machine, rows
             // y = -16 .. 31, the next chunk east included
             for (i32 y = -TERRAIN_CHUNK; y < 2 * TERRAIN_CHUNK; ++y)
                 for (i32 xx = (cx - 1) * TERRAIN_CHUNK; xx < (cx + 2) * TERRAIN_CHUNK; ++xx)
-                    assert(terrain.try_get(Coordinate{xx, y}, t));
+                    CHECK(terrain.try_get(Coordinate{xx, y}, t));
             // and equal to the generator's
             Terrain cells[TERRAIN_CHUNK * TERRAIN_CHUNK];
             generate_terrain_chunk(seed, cx + 1, 0, cells);
             for (i32 j = 0; j != TERRAIN_CHUNK; ++j)
                 for (i32 i = 0; i != TERRAIN_CHUNK; ++i) {
-                    assert(terrain.try_get(Coordinate{(cx + 1) * TERRAIN_CHUNK + i, j}, t));
+                    CHECK(terrain.try_get(Coordinate{(cx + 1) * TERRAIN_CHUNK + i, j}, t));
                     assert(t == cells[j * TERRAIN_CHUNK + i]);
                 }
             // not made: two chunks ahead, and two rows of chunks off the track
-            assert(!terrain.try_get(Coordinate{(cx + 2) * TERRAIN_CHUNK, 8}, t));
-            assert(!terrain.try_get(Coordinate{x, 2 * TERRAIN_CHUNK}, t));
-            assert(!terrain.try_get(Coordinate{x, -TERRAIN_CHUNK - 1}, t));
+            CHECK(!terrain.try_get(Coordinate{(cx + 2) * TERRAIN_CHUNK, 8}, t));
+            CHECK(!terrain.try_get(Coordinate{x, 2 * TERRAIN_CHUNK}, t));
+            CHECK(!terrain.try_get(Coordinate{x, -TERRAIN_CHUNK - 1}, t));
         }
         co_return;
     };

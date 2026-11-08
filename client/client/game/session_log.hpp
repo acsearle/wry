@@ -65,7 +65,8 @@ namespace wry {
 
         // A log for a session whose World at `head` serializes to
         // `checkpoint`.  Nothing is written until the first append, so a
-        // session that ends before a step leaves no file
+        // session that ends before a step leaves no file; an empty
+        // directory writes nothing at all (append is false)
         SessionLog(std::filesystem::path directory, uint64_t head, uint64_t head_hash,
                    std::vector<uint8_t> checkpoint);
         ~SessionLog();

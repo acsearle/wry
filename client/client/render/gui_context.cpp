@@ -13,6 +13,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include "assert.hpp"
+#include "save.hpp"
 #include "gui_context.hpp"
 #include "gui_widget.hpp"
 #include "image.hpp"
@@ -614,6 +616,8 @@ namespace wry {
         // floating log once a scene is up.
         std::vector<String> warnings;
         settings = load_settings(settings_paths, &warnings);
+        // Sessions log next to the saves (the cwd is the assets directory)
+        session_log_directory = saves_directory();
         for (String const& w : warnings) {
             fprintf(stderr, "%.*s\n", (int)w.chars.size(), w.chars.data());
             append_log(w, std::chrono::seconds(15));
@@ -1671,7 +1675,7 @@ namespace wry {
             assert(esc.reply.status == Reply::OK);
             (void) esc;
             assert(gc.events.size() == 2);
-            assert(gc.events.pop_front().key == gui::key::Escape);
+            CHECK(gc.events.pop_front().key == gui::key::Escape);
             gc.events.clear();
 
             bool quit_called = false;

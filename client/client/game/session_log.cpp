@@ -130,6 +130,8 @@ namespace wry {
     // takes a suffix.  Created exclusively, so two processes sharing a
     // directory (the net smoke test) never share a file
     bool SessionLog::_open(wire::Welcome const& welcome) {
+        if (_directory.empty())
+            return false;   // a session that keeps no log (GuiContext::session_log_directory)
         std::error_code ec;
         std::filesystem::create_directories(_directory, ec);
         std::time_t now = std::time(nullptr);

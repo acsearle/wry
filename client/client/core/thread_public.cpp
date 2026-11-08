@@ -54,8 +54,10 @@ namespace wry {
 
     ThreadPublic* thread_public_ring_sentinel() {
         // First caller must be pinned: we allocate.  The function-local
-        // static Root keeps the sentinel rooted for the life of the
-        // process; it is never marked, so never unlinked.
+        // static is a raw pointer; what keeps the sentinel alive for the
+        // life of the process is its one-time entry in the root set
+        // (garbage_collected_roots_add below).  It is never marked, so
+        // never unlinked.
         assert(epoch::local_state.is_pinned);
         static ThreadPublic* _sentinel{[] {
             ThreadPublic* s = new ThreadPublic("(ring)");
@@ -111,7 +113,9 @@ namespace wry {
                                                     {expected.ptr, true}))
                 break;
         }
-        // Drop the root; the ring holds the node until it is unlinked.
+        // Forget our raw pointer (it was never a root): the ring's strong
+        // edge from the predecessor holds the node until an iterator
+        // unlinks it.
         _thread_local_thread_public = nullptr;
     }
 

@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <optional>
 #include <map>
 #include <memory>
@@ -113,6 +114,13 @@ namespace wry {
         // the address, so pointers wired to members below stay valid.
         Settings settings = default_settings();
         SettingsPaths settings_paths = wry::settings_paths();
+
+        // Where a world session writes its session-*.wrylog (game/
+        // session_log.hpp).  Empty, as constructed: no log -- so the unit
+        // tests' sessions leave nothing behind in the player's saves; the
+        // host sets it to saves/ in configure_from_arguments.  A test that
+        // wants a log sets a directory of its own.
+        std::filesystem::path session_log_directory;
 
         // Generic overlays, available regardless of scene: the floating log and
         // the drop-down console.  (Scene-specific overlays -- the palette, the

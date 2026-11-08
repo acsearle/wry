@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <map>
 
+#include "assert.hpp"
 #include "transaction.hpp"
 #include "world.hpp"
 
@@ -754,7 +755,7 @@ namespace wry {
                 if (weights.contains(id))
                     continue;
                 int64_t cumulant = -1;
-                assert(!try_lookup_cumulant(f, id, cumulant));
+                CHECK(!try_lookup_cumulant(f, id, cumulant));
             }
             if (!(iter & 15))
                 mutator_repin();

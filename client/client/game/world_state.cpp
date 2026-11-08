@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 8/7/2023.
 //
 
+#include "assert.hpp"
 #include "world_state.hpp"
 
 #include <algorithm>
@@ -539,7 +540,7 @@ namespace wry {
 
     void WorldState::_open_log(World const* world) {
         if (_log_directory.empty())
-            _log_directory = saves_directory();
+            _log_directory = _gui.session_log_directory;   // empty: no log
         _log = std::make_unique<SessionLog>(_log_directory, (uint64_t)world->_time,
                                             world->content_hash(), serialize_world(world));
     }
@@ -2566,7 +2567,7 @@ namespace wry {
             }
             co_await ws.end_session(std::chrono::milliseconds(200));
             assert(!ws._log && !ws._server);
-            assert(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
+            CHECK(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
 
             // The whole log replays to the same World
             co_await run_to_completion("replay \"" + log.string() + "\"");
@@ -2576,7 +2577,7 @@ namespace wry {
             assert(displayed()->content_hash() == end_hash);
             assert(tile(Coordinate{4, 4}).is_opcode());
             assert(!ws._server && ws._replay && ws._replay->result);
-            assert(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
+            CHECK(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
 
             // ... or to an earlier step
             co_await run_to_completion("replay \"" + log.string() + "\" " + std::to_string(end_time - 2));
@@ -2608,8 +2609,8 @@ namespace wry {
                 assert(contains(narrow(o.reply.text), "hashes differ at step " + std::to_string(tampered)));
             }
             // Not a log: an error at once; a step the log does not hold too
-            assert(issue("replay \"" + (dir / "absent.wrylog").string() + "\"").reply.status == Reply::ERROR);
-            assert(issue("replay \"" + log.string() + "\" " + std::to_string(end_time + 5)).reply.status == Reply::ERROR);
+            CHECK(issue("replay \"" + (dir / "absent.wrylog").string() + "\"").reply.status == Reply::ERROR);
+            CHECK(issue("replay \"" + log.string() + "\" " + std::to_string(end_time + 5)).reply.status == Reply::ERROR);
 
             // dump: the displayed World as text, the same twice
             {
@@ -2634,9 +2635,9 @@ namespace wry {
             // corrupt: the displayed World changes, off the stream
             {
                 const uint64_t before = displayed()->content_hash();
-                assert(issue("corrupt Coordinate(9, 9) 1").reply.status == Reply::OK);
+                CHECK(issue("corrupt Coordinate(9, 9) 1").reply.status == Reply::OK);
                 assert(displayed()->content_hash() != before);
-                assert(narrow(issue("get Coordinate(9, 9)").reply.text) == "1");
+                CHECK(narrow(issue("get Coordinate(9, 9)").reply.text) == "1");
             }
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
