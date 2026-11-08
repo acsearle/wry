@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <optional>
 #include <bit>
 #include <random>
 
@@ -19,6 +20,7 @@
 
 #include <sqlite3.h>
 
+#include "load_timing.hpp"
 #include "WryMesh.h"
 #include "WryRenderContext.h"
 #include "WryWorldScene.h"
@@ -252,6 +254,29 @@ struct WryNumberGlyph {
 
 -(void) dealloc {
     NSLog(@"%s\n", __PRETTY_FUNCTION__);
+}
+
+// The decodes the init below makes, by the same paths and premultiplication
+// (newTextureFromResource: and newMipmappedTextureFromResource: premultiply;
+// the symbol atlas and glyphs do not).  The tiny constant-colour textures
+// and the palette are left out: their decode is cheaper than the round
+// trip.  A list that drifts from the init costs only speed: an asset taken
+// but never requested decodes on the spot, and one requested but never
+// taken stays decoded in the preload (memory, until the context dies).
++ (void)preloadAssetsWithContext:(WryRenderContext*)context {
+    wry::AssetPreload* preload = context.assetPreload;
+    if (!preload)
+        return;
+    // Longest first: the pool starts them in order
+    preload->symbol_field(wry::path_for_resource("assets_tile", "png"));
+    preload->image(wry::path_for_resource("assets_tile", "png"), false);
+    preload->image(wry::path_for_resource("assets", "png"), false);
+    for (const char* name : {"terrain/Terrain_Albedo", "terrain/Terrain_NormalGL", "terrain/Terrain_ORM",
+                             "day", "sandbox_photo", "Container20_AO", "Container20_Normal", "testpattern"})
+        preload->image(wry::path_for_resource(name, "png"), true);
+    for (const char* name : {"sandbox.obj", "truck2.obj", "furnace.obj", "mine.obj",
+                             "ship_prow.obj", "ship_hold.obj", "ship_stern.obj", "Container20_Proxy.obj"})
+        preload->mesh(name);
 }
 
 // The Metal device, command queue, shader library, depth-stencil states,
@@ -527,6 +552,10 @@ struct WryNumberGlyph {
     if ((self = [super init])) {
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
+
+        // WRY_LOAD_TIMING (core/load_timing.hpp): the pipelines and other
+        // device objects up to the first texture
+        std::optional<wry::LoadTimer> pipelinesTimer(std::in_place, "  pipelines and device state");
                 
         auto newBufferWithArray = [&](auto& a) {
             void* bytes = a.data();
@@ -792,6 +821,7 @@ struct WryNumberGlyph {
         {
             // The symbol atlas and its field are loaded by
             // -loadSymbolAtlasNamed: below, once the opcode table exists
+            pipelinesTimer.reset();
             _hackmesh = [[WryMesh alloc] init];
             _black = [_ctx newTextureFromResource:@"black" ofType:@"png"];
             _white = [_ctx newTextureFromResource:@"white" ofType:@"png"];
@@ -851,8 +881,19 @@ struct WryNumberGlyph {
         
         {
             auto f = [&](WryMesh *__strong& p, std::filesystem::path v) {
-                auto m = wry::from_obj(v);
-                m.MeshVertexify();
+                wry::LoadTimer timer("mesh ", v.c_str());
+                // Preloaded (parsed and vertexified on the pool), or now
+                std::optional<wry::mesh::mesh> preloaded;
+                if (wry::AssetPreload* preload = _ctx.assetPreload) {
+                    wry::LoadTimer timer("  take preloaded ", v.c_str());
+                    preloaded = preload->take_mesh(v);
+                }
+                if (!preloaded) {
+                    wry::LoadTimer timer("  from_obj and MeshVertexify ", v.c_str());
+                    preloaded = wry::from_obj(v);
+                    preloaded->MeshVertexify();
+                }
+                wry::mesh::mesh& m = *preloaded;
                 
                 p = [[WryMesh alloc] init];
                 p.vertexBuffer = newBufferWithArray(m.hack_MeshVertex);
@@ -946,7 +987,10 @@ struct WryNumberGlyph {
 //            }
 
                 
-            [self loadSymbolAtlasNamed:@"assets_tile"];
+            {
+                wry::LoadTimer timer("loadSymbolAtlasNamed assets_tile");
+                [self loadSymbolAtlasNamed:@"assets_tile"];
+            }
 
             {
                 // Initialize the palette's grid and transform on the
@@ -1037,7 +1081,12 @@ struct WryNumberGlyph {
         // cache, or built from the atlas's silhouette at half the
         // atlas resolution and cached
         auto t0 = std::chrono::steady_clock::now();
-        wry::SymbolSDF sdf = wry::symbol_sdf_for_atlas(wry::path_for_resource(wry::StringView(name.UTF8String), "png"));
+        wry::LoadTimer timer("  symbol field");
+        const std::filesystem::path atlasPath = wry::path_for_resource(wry::StringView(name.UTF8String), "png");
+        std::optional<wry::SymbolSDF> preloaded;
+        if (wry::AssetPreload* preload = _ctx.assetPreload)
+            preloaded = preload->take_symbol_field(atlasPath);
+        wry::SymbolSDF sdf = preloaded ? std::move(*preloaded) : wry::symbol_sdf_for_atlas(atlasPath);
         const int cell = sdf.cell;
         MTLTextureDescriptor* descriptor =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
@@ -1195,9 +1244,12 @@ struct WryNumberGlyph {
     // Level 0 is final (label stamping above is its last edit), so
     // fill the mip chain.  Blocking; nothing has sampled it yet.  The
     // kernel stays inside each kCells x kCells cell
-    [_ctx generateMipmapsForTexture:_symbols
-                           cellSize:_symbols.width / wry::SymbolSDF::kCells
-                      straightAlpha:YES];
+    {
+        wry::LoadTimer timer("  symbol atlas mipmaps");
+        [_ctx generateMipmapsForTexture:_symbols
+                               cellSize:_symbols.width / wry::SymbolSDF::kCells
+                          straightAlpha:YES];
+    }
 
     _symbolAtlasName = name.UTF8String;
     NSLog(@"symbol atlas: %@", name);

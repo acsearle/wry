@@ -24,6 +24,13 @@
 
 @interface WryWorldScene : NSObject <WryScene>
 
+// Ask the context's asset preload (render/asset_preload.hpp) for the CPU
+// decodes -initWithContext: will want: the large textures, the meshes and
+// the symbol field.  The host calls it as it starts, so the work runs on
+// the pool under the splash and the main menu instead of on the main
+// thread at New Game.  Does nothing if the context has no preload.
++ (void)preloadAssetsWithContext:(nonnull WryRenderContext*)context;
+
 // Built against the host-owned render context (device + shared 2D services).
 - (nonnull instancetype)initWithContext:(nonnull WryRenderContext*)context
                                   model:(std::shared_ptr<wry::WorldState>)model_;

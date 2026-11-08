@@ -25,6 +25,7 @@
 #include "WryAudio.h"
 
 #include "gui_event.hpp"
+#include "load_timing.hpp"
 
 // Carbon's umbrella header drags in a `typedef UInt16 EventKind` at global
 // scope, which is why our event-kind enum is named WryEventKind (declared
@@ -241,8 +242,15 @@ namespace {
     // Build the shared render context, then the boot scene chain against it.
     // This host owns the context and the per-frame command buffer / drawable /
     // present; scenes only encode their passes (see -render below).
-    _ctx = [[WryRenderContext alloc] initWithDevice:device
-                                drawablePixelFormat:pixelFormat];
+    {
+        wry::LoadTimer timer("WryRenderContext init");
+        _ctx = [[WryRenderContext alloc] initWithDevice:device
+                                    drawablePixelFormat:pixelFormat];
+    }
+    // The world scene's decodes start now, on the pool, under the splash
+    // and the menu (docs/async_loading.md)
+    [_ctx startAssetPreloadWithScope:_gui->scope];
+    [WryWorldScene preloadAssetsWithContext:_ctx];
 
     // Boot flow: splash -> main menu -> world.  The world scene is built lazily
     // (its asset load is heavy) the moment the menu hands control on.
@@ -251,10 +259,22 @@ namespace {
     // `new-game` and `load` at the menu (its NEW / LOAD issue them) build a
     // WorldState and hand it here to be wrapped in the world scene -- the host
     // no longer owns the world state.  Shown once this frame is presented.
+    // Before `new-game` or `load` builds the WorldState, which starts its
+    // session's handshake clock (Relay::Limits::handshake_deadline), the
+    // preloads land: otherwise a long one (a symbol field cache miss) would
+    // stall the main thread inside the world scene's init, where the
+    // self-hosted client cannot send its HELLO, and the client is kicked
+    _gui->on_before_world = [ctx] {
+        if (wry::AssetPreload* preload = ctx.assetPreload) {
+            wry::LoadTimer timer("wait for asset preload");
+            preload->wait();
+        }
+    };
     _gui->on_world = [weakSelf, ctx](std::shared_ptr<wry::WorldState> world) {
         WryDelegate* strongSelf = weakSelf;
         if (!strongSelf)
             return;
+        wry::LoadTimer timer("WryWorldScene init");
         strongSelf->_pendingScene = [[WryWorldScene alloc] initWithContext:ctx model:std::move(world)];
     };
     void (^quit)(void) = ^{
@@ -283,7 +303,11 @@ namespace {
     _makeMenu = ^id<WryScene>(void) {
         return [[WryMainMenuScene alloc] initWithContext:ctx gui:gui quit:quit];
     };
-    id<WryScene> menu = _makeMenu();
+    id<WryScene> menu = nil;
+    {
+        wry::LoadTimer timer("WryMainMenuScene init");
+        menu = _makeMenu();
+    }
     // `main-menu` (the in-game menu's Quit to Main Menu): a fresh menu, shown
     // once this frame is presented; the world scene's release then drops the
     // WorldState, whose destructor ends its session
@@ -293,12 +317,14 @@ namespace {
             return;
         strongSelf->_pendingScene = strongSelf->_makeMenu();
     };
-    if (_gui->skip_splash)
+    if (_gui->skip_splash) {
         _scene = menu;
-    else
+    } else {
+        wry::LoadTimer timer("WrySplashScene init");
         _scene = [[WrySplashScene alloc] initWithContext:_ctx
                                          durationSeconds:2.5
                                                     next:menu];
+    }
     // The `quit` command ends the app the same way.
     _gui->on_quit = [quit] { quit(); };
     // The window-size command: pixels to points by the backing scale,
@@ -952,6 +978,7 @@ namespace {
     if (next) {
         _scene = next;
         [_scene drawableResize:[self drawableSizePixels]];
+        wry::load_timing_mark("scene shown: ", NSStringFromClass([next class]).UTF8String);
     }
 }
 

@@ -26,6 +26,7 @@
 #include "coroutine.hpp"
 #include "host.hpp"
 #include "kqueue_reactor.hpp"
+#include "load_timing.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
 #include "machine.hpp"
@@ -360,8 +361,16 @@ namespace wry {
     // A new or loaded game is a new stream: a fresh relay whose steps
     // continue the installed world's time, that world as its genesis
     void WorldState::new_game() {
-        World* world = make_starting_world();
-        _start_hosting((uint64_t)world->_time);
+        World* world = nullptr;
+        {
+            LoadTimer timer("make_starting_world");
+            world = make_starting_world();
+        }
+        {
+            LoadTimer timer("_start_hosting");
+            _start_hosting((uint64_t)world->_time);
+        }
+        LoadTimer timer("install_displayed_world");
         install_displayed_world(*this, world);
     }
 
@@ -1409,7 +1418,14 @@ namespace wry {
         Reply show_new_world(Ctx& c, std::optional<int> save) {
             if (!c.gui.on_world)
                 return Reply::error(String("this host cannot show a world"));
-            c.gui.on_world(std::make_shared<WorldState>(c.gui, save));
+            if (c.gui.on_before_world)
+                c.gui.on_before_world();
+            std::shared_ptr<WorldState> world;
+            {
+                LoadTimer timer("WorldState construction");
+                world = std::make_shared<WorldState>(c.gui, save);
+            }
+            c.gui.on_world(std::move(world));
             return Reply::ok();
         }
 

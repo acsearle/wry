@@ -277,6 +277,12 @@ namespace wry {
         // GAME and LOAD GAME issue them): show the WorldState they built,
         // from the next frame
         std::function<void(std::shared_ptr<WorldState>)> on_world;
+        // Optionally set by the same host: called by `new-game` and `load`
+        // at the menu before they build the WorldState (whose session's
+        // handshake clock starts with it), to finish any work the world's
+        // display will block on.  The windowed host waits for its asset
+        // preload here
+        std::function<void()> on_before_world;
         // Set by the host: what `main-menu` does (the in-game menu's Quit
         // to Main Menu): once this frame is over, drop the world showing,
         // which ends its session, and show the main menu

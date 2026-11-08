@@ -16,6 +16,7 @@
 #include "assert.hpp"
 #include "save.hpp"
 #include "gui_context.hpp"
+#include "load_timing.hpp"
 #include "gui_widget.hpp"
 #include "image.hpp"
 #include "json.hpp"
@@ -619,7 +620,10 @@ namespace wry {
         if (const char* given = value_after(find("--settings")))
             settings_paths = wry::settings_paths(given);
         std::vector<String> warnings;
-        settings = load_settings(settings_paths, &warnings);
+        {
+            LoadTimer timer("load_settings");
+            settings = load_settings(settings_paths, &warnings);
+        }
         // Sessions log next to the saves (the cwd is the assets directory)
         session_log_directory = saves_directory();
         for (String const& w : warnings) {

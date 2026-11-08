@@ -10,6 +10,7 @@
 
 #import <Metal/Metal.h>
 
+#include "asset_preload.hpp"
 #include "font.hpp"
 #include "SpriteAtlas.hpp"
 #import "WryBufferArena.h"
@@ -70,6 +71,15 @@
 // Returned by reference: callers read the cubic-bezier / glyph tables in
 // place rather than copying the (vector-backed) Font2 each access.
 - (wry::Font2&)font2;
+
+// ---- Asset preload (render/asset_preload.hpp) --------------------------
+//
+// nil until the host starts it.  Once started, the newTextureFromResource
+// family takes a decode it requested (same path, same premultiplication)
+// instead of decoding again; scenes take preloaded meshes and fields from
+// it directly.  Main thread only, like the rest of this object.
+- (void)startAssetPreloadWithScope:(nonnull wry::coroutine::Nursery*)scope;
+- (nullable wry::AssetPreload*)assetPreload;
 
 // ---- Factory helpers ---------------------------------------------------
 //

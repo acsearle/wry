@@ -30,6 +30,7 @@
 #include "kqueue_reactor.hpp"
 #include "nursery.hpp"
 #include "thread_public.hpp"
+#include "load_timing.hpp"
 
 #import "WryDelegate.h"
 
@@ -127,6 +128,9 @@ namespace {
 
 int main(int argc, const char** argv) {
 
+    // The origin of the WRY_LOAD_TIMING clock (core/load_timing.hpp)
+    wry::load_timing_mark("main");
+
     // Argument handling, deliberately minimal.
     //
     //   --test-only [SUBSTRING]
@@ -200,6 +204,7 @@ int main(int argc, const char** argv) {
     }
 
     wry::global_reactor_start();
+    wry::load_timing_mark("pool, collector and reactor started");
 
     // TODO: At this point, optionally run a stress test of the garbage
     // collector and epoch system itself.

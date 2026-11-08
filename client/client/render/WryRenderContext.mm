@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +23,7 @@
 #include "SpriteAtlas.hpp"
 #include "font.hpp"
 #include "image.hpp"
+#include "load_timing.hpp"
 #include "platform.hpp"
 #include "vertex.hpp"
 
@@ -33,6 +36,7 @@
     wry::SpriteAtlas* _atlas;
     wry::Font* _font;
     wry::Font2 _font2;
+    std::unique_ptr<wry::AssetPreload> _assetPreload;
     // Single-attachment 2D pipeline with STRAIGHT (non-premultiplied) alpha
     // blending, for backdrop images drawn via -drawImage:... (fade + pan).
     id<MTLRenderPipelineState> _imageRenderPipelineState;
@@ -50,7 +54,10 @@
 
         _device = device;
         _drawablePixelFormat = drawablePixelFormat;
-        _library = [_device newDefaultLibrary];
+        {
+            wry::LoadTimer timer("default library");
+            _library = [_device newDefaultLibrary];
+        }
         _commandQueue = [_device newCommandQueue];
         _arena = [[WryBufferArena alloc] initWithDevice:_device];
 
@@ -167,13 +174,28 @@
 
             _atlas = new wry::SpriteAtlas(2048, (__bridge void*)device,
                                           (__bridge void*)_arena);
-            _font = new wry::Font(build_font(*_atlas, 2.0f));
+            {
+                wry::LoadTimer timer("build_font");
+                _font = new wry::Font(build_font(*_atlas, 2.0f));
+            }
 
-            _font2 = build_font2();
+            {
+                wry::LoadTimer timer("build_font2");
+                _font2 = build_font2();
+            }
         }
 
     }
     return self;
+}
+
+- (void)startAssetPreloadWithScope:(wry::coroutine::Nursery*)scope {
+    if (!_assetPreload)
+        _assetPreload = std::make_unique<wry::AssetPreload>(scope);
+}
+
+- (wry::AssetPreload*)assetPreload {
+    return _assetPreload.get();
 }
 
 - (wry::Font2&)font2 {
@@ -282,14 +304,31 @@
                                mipmapped:(BOOL)mipmapped
                            premultiplied:(BOOL)premultiplied
 {
-    wry::matrix<wry::RGBA8Unorm_sRGB> image = wry::from_png(wry::path_for_resource([name UTF8String], [ext UTF8String]).c_str());
+    wry::LoadTimer timer("texture ", name.UTF8String);
+    const std::filesystem::path path = wry::path_for_resource([name UTF8String], [ext UTF8String]);
+    // A decode the preload made (premultiplied already, if asked)
+    std::optional<wry::matrix<wry::RGBA8Unorm_sRGB>> preloaded;
+    if (_assetPreload) {
+        wry::LoadTimer take("  take preloaded ", name.UTF8String);
+        preloaded = _assetPreload->take_image(path, premultiplied);
+    }
+    const bool fromPreload = preloaded.has_value();
+    wry::matrix<wry::RGBA8Unorm_sRGB> image;
+    if (fromPreload) {
+        image = std::move(*preloaded);
+    } else {
+        wry::LoadTimer decode("  from_png ", name.UTF8String);
+        image = wry::from_png(path.c_str());
+    }
     // PNGs are straight alpha; the 2D pipelines blend premultiplied, so
     // the usual load multiplies through.  The symbol atlas is kept
     // straight (premultiplied:NO): its transparent margins carry the
     // colour the slabs' walls read (Shaders.metal symbol_march), and the
     // 2D draws of it premultiply in the shader (WryQuadFlagStraight)
-    if (premultiplied)
+    if (premultiplied && !fromPreload) {
+        wry::LoadTimer premultiply("  multiply_alpha ", name.UTF8String);
         wry::multiply_alpha_inplace(image);
+    }
 
     MTLTextureDescriptor* descriptor = [MTLTextureDescriptor new];
     descriptor.textureType = MTLTextureType2D;
@@ -326,7 +365,10 @@
                                                    ofType:ext
                                           withPixelFormat:pixelFormat
                                                 mipmapped:YES];
-    [self generateMipmapsForTexture:texture];
+    {
+        wry::LoadTimer timer("  generate mipmaps ", name.UTF8String);
+        [self generateMipmapsForTexture:texture];
+    }
     return texture;
 }
 
