@@ -208,8 +208,8 @@ struct WryNumberGlyph {
     simd_float4 _false_coordinate;
     simd_float4 _cdot_coordinate;
     simd_float4 _border_coordinate;
-    simd_float4 _token_truck_coordinate;
-    std::string _loaded_environment;     // the name _deferredLightImageBasedTexture was made from   // the machine's playing piece (atlas row 15)
+    simd_float4 _token_truck_coordinate;   // the machine's playing piece (atlas row 15)
+    std::string _loaded_environment;       // the name _deferredLightImageBasedTexture was made from
     simd_float4 _blank_coordinate;         // the plain tile numbers are printed on
     simd_float4 _dash_coordinate;          // the minus sign's glyph
     // The number tiles' abbreviations (number_caption.hpp): the decimal

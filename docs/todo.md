@@ -43,7 +43,9 @@
 - Make the palette a GUI widget
 - Make the console a GUI widget
 - Replace Futura Medium Condensed with something we clearly have rights to.   Noto Condensed?
+  - NOTE 2026-11-08: assets/Noto_Sans has every Noto Sans Condensed weight (OFL.txt beside them).  Futura's live use is only the tile captions baked by tools/make_tile_atlas.py (--caption-font); font.mm's FreeType Font3 path names it but is not called.  Swapping means regenerating assets_tile.png (and its ~50 s field cache)
 - Replace the current font weight with something heavier
+  - DONE 2026-11-08: the UI font is Noto Sans Medium (was Light); Light / Regular / Medium compared in assets/ui_font_weights.png
 - DONE 2026-11-08: The pixel-scale font shadow is not enough to guarantee clarity.  We need a heavy outline for free text, and no shadow at all.  Glyphs are plain padded coverage; free text (log, console, money, dialog titles) sets WryQuadFlagOutlined and the shader dilates the coverage (max over a radius-2.25 texel disc) into a 90% black outline; text on buttons and cells is drawn plain
 
 ## Bugs

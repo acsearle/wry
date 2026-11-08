@@ -235,7 +235,7 @@ namespace wry {
         // Load the font file and parse with our bespoke OTF/CFF stack.
         // OTF is a binary container, so go through bytes_from_file rather
         // than the UTF-8-validating string_from_file.
-        ContiguousDeque<byte> bytes = bytes_from_file("Noto_Sans/static/NotoSans-Light.ttf");
+        ContiguousDeque<byte> bytes = bytes_from_file("Noto_Sans/static/NotoSans-Medium.ttf");
         auto handle = otf::Handle::parse({
             bytes.data(),
             bytes.size()
