@@ -6,12 +6,18 @@
 //
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <system_error>
 #include <limits>
 
 #include "symbol_sdf.hpp"
+#include "coroutine.hpp"
+#include "nursery.hpp"
 #include "test.hpp"
 
 namespace wry {
@@ -195,83 +201,128 @@ namespace wry {
         return d;
     }
 
-    SymbolSDF build_symbol_sdf(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell) {
-        constexpr int kCells = SymbolSDF::kCells;
-        assert(atlas.minor() == atlas.major());
-        assert(atlas.minor() % (std::size_t)kCells == 0);
-        const int source_cell = (int)(atlas.minor() / (std::size_t)kCells);
-        assert(source_cell % cell == 0);
-        const int k = source_cell / cell;   // source texels per field texel
+    namespace {
 
-        SymbolSDF result;
-        result.source_cell = source_cell;
-        result.cell = cell;
-        result.image = matrix<SymbolSDFTexel>((std::size_t)(kCells * cell), (std::size_t)(kCells * cell));
+        // The field with its texels unset: the shapes build_symbol_sdf
+        // asserts, the cell sizes, the image allocated
+        SymbolSDF symbol_sdf_shell(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell) {
+            constexpr int kCells = SymbolSDF::kCells;
+            assert(atlas.minor() == atlas.major());
+            assert(atlas.minor() % (std::size_t)kCells == 0);
+            const int source_cell = (int)(atlas.minor() / (std::size_t)kCells);
+            assert(source_cell % cell == 0);
+            SymbolSDF result;
+            result.source_cell = source_cell;
+            result.cell = cell;
+            result.image = matrix<SymbolSDFTexel>((std::size_t)(kCells * cell), (std::size_t)(kCells * cell));
+            return result;
+        }
 
-        matrix<float> coverage((std::size_t)source_cell, (std::size_t)source_cell);
-        for (int cy = 0; cy != kCells; ++cy) {
-            for (int cx = 0; cx != kCells; ++cx) {
-                // The cell's silhouette; a cell with nothing in it is all
-                // far, gradient zero
-                bool any = false;
-                for (int y = 0; y != source_cell; ++y) {
-                    for (int x = 0; x != source_cell; ++x) {
-                        const float a = atlas[cy * source_cell + y, cx * source_cell + x].a;
-                        coverage[y, x] = a;
-                        any = any || (a >= 0.5f);
-                    }
+        // One cell's texels of the field, (cx, cy) in cells.  Reads only
+        // the atlas and writes only the cell's own block of result.image,
+        // so distinct cells may be built concurrently, and in any order
+        // to the same bytes
+        void build_symbol_sdf_cell(matrix_view<const RGBA8Unorm_sRGB> atlas, SymbolSDF& result, int cx, int cy) {
+            const int source_cell = result.source_cell;
+            const int cell = result.cell;
+            const int k = source_cell / cell;   // source texels per field texel
+
+            // The cell's silhouette; a cell with nothing in it is all
+            // far, gradient zero
+            matrix<float> coverage((std::size_t)source_cell, (std::size_t)source_cell);
+            bool any = false;
+            for (int y = 0; y != source_cell; ++y) {
+                for (int x = 0; x != source_cell; ++x) {
+                    const float a = atlas[cy * source_cell + y, cx * source_cell + x].a;
+                    coverage[y, x] = a;
+                    any = any || (a >= 0.5f);
                 }
-                if (!any) {
-                    for (int y = 0; y != cell; ++y)
-                        for (int x = 0; x != cell; ++x)
-                            result.image[cy * cell + y, cx * cell + x] = SymbolSDFTexel{255, 128, 128, 255};
-                    continue;
-                }
-                matrix<float> d = signed_distance(coverage);
+            }
+            if (!any) {
+                for (int y = 0; y != cell; ++y)
+                    for (int x = 0; x != cell; ++x)
+                        result.image[cy * cell + y, cx * cell + x] = SymbolSDFTexel{255, 128, 128, 255};
+                return;
+            }
+            matrix<float> d = signed_distance(coverage);
 
-                // Box-filter distance and the central-difference gradient
-                // down to the field's resolution
-                auto dd = [&](int y, int x) -> float {
-                    y = std::clamp(y, 0, source_cell - 1);
-                    x = std::clamp(x, 0, source_cell - 1);
-                    return d[y, x];
-                };
-                for (int y = 0; y != cell; ++y) {
-                    for (int x = 0; x != cell; ++x) {
-                        float sum = 0.0f, gx = 0.0f, gy = 0.0f;
-                        for (int j = 0; j != k; ++j) {
-                            for (int i = 0; i != k; ++i) {
-                                const int sy = y * k + j, sx = x * k + i;
-                                sum += dd(sy, sx);
-                                // Central differences, one-sided at the
-                                // cell's border (the span is 1 there)
-                                const float span_x = (float)(std::min(sx + 1, source_cell - 1) - std::max(sx - 1, 0));
-                                const float span_y = (float)(std::min(sy + 1, source_cell - 1) - std::max(sy - 1, 0));
-                                gx += (dd(sy, sx + 1) - dd(sy, sx - 1)) / span_x;
-                                gy += (dd(sy + 1, sx) - dd(sy - 1, sx)) / span_y;
-                            }
+            // Box-filter distance and the central-difference gradient
+            // down to the field's resolution
+            auto dd = [&](int y, int x) -> float {
+                y = std::clamp(y, 0, source_cell - 1);
+                x = std::clamp(x, 0, source_cell - 1);
+                return d[y, x];
+            };
+            for (int y = 0; y != cell; ++y) {
+                for (int x = 0; x != cell; ++x) {
+                    float sum = 0.0f, gx = 0.0f, gy = 0.0f;
+                    for (int j = 0; j != k; ++j) {
+                        for (int i = 0; i != k; ++i) {
+                            const int sy = y * k + j, sx = x * k + i;
+                            sum += dd(sy, sx);
+                            // Central differences, one-sided at the
+                            // cell's border (the span is 1 there)
+                            const float span_x = (float)(std::min(sx + 1, source_cell - 1) - std::max(sx - 1, 0));
+                            const float span_y = (float)(std::min(sy + 1, source_cell - 1) - std::max(sy - 1, 0));
+                            gx += (dd(sy, sx + 1) - dd(sy, sx - 1)) / span_x;
+                            gy += (dd(sy + 1, sx) - dd(sy - 1, sx)) / span_y;
                         }
-                        const float mean = sum / (float)(k * k);
-                        const float g = std::hypot(gx, gy);
-                        float ux = 0.0f, uy = 0.0f;
-                        if (g > 0.0f && std::abs(mean) < SymbolSDF::kRange) {
-                            ux = gx / g;
-                            uy = gy / g;
-                        }
-                        auto unorm = [](float v) -> std::uint8_t {
-                            return (std::uint8_t)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f);
-                        };
-                        SymbolSDFTexel& t = result.image[cy * cell + y, cx * cell + x];
-                        t.distance = unorm(mean / (2.0f * SymbolSDF::kRange) + 0.5f);
-                        t.gradient_x = unorm(ux * 0.5f + 0.5f);
-                        t.gradient_y = unorm(uy * 0.5f + 0.5f);
-                        t.far_distance = unorm(mean / (2.0f * SymbolSDF::kFarRange) + 0.5f);
                     }
+                    const float mean = sum / (float)(k * k);
+                    const float g = std::hypot(gx, gy);
+                    float ux = 0.0f, uy = 0.0f;
+                    if (g > 0.0f && std::abs(mean) < SymbolSDF::kRange) {
+                        ux = gx / g;
+                        uy = gy / g;
+                    }
+                    auto unorm = [](float v) -> std::uint8_t {
+                        return (std::uint8_t)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f);
+                    };
+                    SymbolSDFTexel& t = result.image[cy * cell + y, cx * cell + x];
+                    t.distance = unorm(mean / (2.0f * SymbolSDF::kRange) + 0.5f);
+                    t.gradient_x = unorm(ux * 0.5f + 0.5f);
+                    t.gradient_y = unorm(uy * 0.5f + 0.5f);
+                    t.far_distance = unorm(mean / (2.0f * SymbolSDF::kFarRange) + 0.5f);
                 }
             }
         }
+
+    } // namespace
+
+    SymbolSDF build_symbol_sdf(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell) {
+        constexpr int kCells = SymbolSDF::kCells;
+        SymbolSDF result = symbol_sdf_shell(atlas, cell);
+        for (int cy = 0; cy != kCells; ++cy)
+            for (int cx = 0; cx != kCells; ++cx)
+                build_symbol_sdf_cell(atlas, result, cx, cy);
         result.stroke_width = stroke_widths(result.image);
         return result;
+    }
+
+    // One child per cell, forked into a nursery and joined.  Each child
+    // writes only its own cell's block of result.image (see
+    // build_symbol_sdf_cell); the frame, and with it `atlas`'s storage
+    // (the caller's) and `result`, outlives every child because the join
+    // is awaited before either is touched again.  The join's acquire of
+    // the children's release decrements (Nursery::_static_resume, the
+    // join's `Establish child completions happens-before`) orders every
+    // child's texel writes before stroke_widths reads them.
+    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell) {
+        constexpr int kCells = SymbolSDF::kCells;
+        SymbolSDF result = symbol_sdf_shell(atlas, cell);
+        {
+            coroutine::Nursery cells;
+            for (int cy = 0; cy != kCells; ++cy)
+                for (int cx = 0; cx != kCells; ++cx)
+                    cells.soon([](matrix_view<const RGBA8Unorm_sRGB> atlas, SymbolSDF* result, int cx, int cy) -> coroutine::Task {
+                        build_symbol_sdf_cell(atlas, *result, cx, cy);
+                        co_return;
+                    }(atlas, &result, cx, cy));
+            [[maybe_unused]] std::ptrdiff_t cancelled = co_await cells.join();
+            assert(cancelled == 0);
+        }
+        result.stroke_width = stroke_widths(result.image);
+        co_return result;
     }
 
     std::vector<float> stroke_widths(matrix_view<const SymbolSDFTexel> image) {
@@ -302,7 +353,7 @@ namespace wry {
     // API moves the bytes untouched either way (the file's sRGB tag is
     // only an interpretation).  Rebuilt when missing, older than the
     // atlas, or not the shape expected.
-    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path) {
+    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path) {
         constexpr int kCells = SymbolSDF::kCells;
         std::filesystem::path cache_path = atlas_path;
         cache_path.replace_filename(atlas_path.stem().string() + "_field_v3.png");
@@ -320,17 +371,23 @@ namespace wry {
                 for (std::size_t y = 0; y != png.minor(); ++y)
                     std::memcpy(&result.image[(ptrdiff_t)y, 0], &png[(ptrdiff_t)y, 0], png.major() * sizeof(SymbolSDFTexel));
                 result.stroke_width = stroke_widths(result.image);
-                return result;
+                co_return result;
             }
         }
         matrix<RGBA8Unorm_sRGB> atlas = from_png(StringView(atlas_path.string().c_str()));
         const int cell = (int)(atlas.minor() / (std::size_t)kCells) / 2;
-        SymbolSDF result = build_symbol_sdf(atlas, cell);
+        SymbolSDF result = co_await build_symbol_sdf_parallel(atlas, cell);
         matrix<RGBA8Unorm_sRGB> png(result.image.minor(), result.image.major());
         for (std::size_t y = 0; y != png.minor(); ++y)
             std::memcpy(&png[(ptrdiff_t)y, 0], &result.image[(ptrdiff_t)y, 0], png.major() * sizeof(SymbolSDFTexel));
         to_png(png, StringView(cache_path.string().c_str()));
-        return result;
+        co_return result;
+    }
+
+    // Blocks the calling thread, which must not be a pool worker: the
+    // children run on the pool
+    SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path) {
+        return execution::sync_wait(symbol_sdf_for_atlas_parallel(atlas_path)).value();
     }
 
     // ----------------------------------------------------------------
@@ -434,6 +491,53 @@ namespace wry {
         assert(worst_distance < 0.2f);
         assert(worst_gradient < 0.06f);
         assert(worst_far < 0.7f);
+        co_return;
+    };
+
+    // The parallel build is the sequential one, byte for byte: a small
+    // atlas with a few occupied cells (a disc, a bar, a corner block),
+    // built both ways.  Then, under WRY_BENCH, both builds of the shipped
+    // tile atlas timed (a cache miss's cost; nothing is written)
+    define_test("symbol_sdf_parallel") {
+        constexpr int kCells = SymbolSDF::kCells;
+        const int n = 32;
+        matrix<RGBA8Unorm_sRGB> atlas((std::size_t)(kCells * n), (std::size_t)(kCells * n));
+        for (int y = 0; y != n; ++y) {
+            for (int x = 0; x != n; ++x) {
+                const float disc = std::clamp(10.5f - std::hypot(x + 0.5f - 15.7f, y + 0.5f - 16.2f), 0.0f, 1.0f);
+                atlas[2 * n + y, 7 * n + x] = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, disc);
+                const float bar = (x >= 6 && x < 25) ? 1.0f : 0.0f;
+                atlas[9 * n + y, 1 * n + x] = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, (y >= 12 && y < 19) ? bar : 0.0f);
+                atlas[15 * n + y, 15 * n + x] = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, (x < 9 && y < 9) ? 1.0f : 0.0f);
+            }
+        }
+        SymbolSDF a = build_symbol_sdf(atlas, n / 2);
+        SymbolSDF b = co_await build_symbol_sdf_parallel(atlas, n / 2);
+        assert(a.cell == b.cell && a.source_cell == b.source_cell);
+        assert(a.image.minor() == b.image.minor() && a.image.major() == b.image.major());
+        for (std::size_t y = 0; y != a.image.minor(); ++y)
+            assert(std::memcmp(&a.image[(ptrdiff_t)y, 0], &b.image[(ptrdiff_t)y, 0],
+                               a.image.major() * sizeof(SymbolSDFTexel)) == 0);
+        assert(a.stroke_width == b.stroke_width);
+        assert(a.stroke_width_at(7, 2) > 0.0f && a.stroke_width_at(0, 0) == 0.0f);
+
+        if (std::getenv("WRY_BENCH") && std::filesystem::exists("assets_tile.png")) {
+            matrix<RGBA8Unorm_sRGB> tiles = from_png(StringView("assets_tile.png"));
+            const int cell = (int)(tiles.minor() / (std::size_t)kCells) / 2;
+            auto t0 = std::chrono::steady_clock::now();
+            SymbolSDF c = build_symbol_sdf(tiles, cell);
+            auto t1 = std::chrono::steady_clock::now();
+            SymbolSDF d = co_await build_symbol_sdf_parallel(tiles, cell);
+            auto t2 = std::chrono::steady_clock::now();
+            bool same = c.stroke_width == d.stroke_width;
+            for (std::size_t y = 0; same && y != c.image.minor(); ++y)
+                same = std::memcmp(&c.image[(ptrdiff_t)y, 0], &d.image[(ptrdiff_t)y, 0],
+                                   c.image.major() * sizeof(SymbolSDFTexel)) == 0;
+            using ms = std::chrono::duration<double, std::milli>;
+            printf("symbol_sdf_parallel: assets_tile.png field build %.0f ms sequential, %.0f ms parallel%s\n",
+                   ms(t1 - t0).count(), ms(t2 - t1).count(), same ? "" : " MISMATCH");
+            assert(same);
+        }
         co_return;
     };
 

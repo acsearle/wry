@@ -54,6 +54,7 @@
 #include <filesystem>
 #include <vector>
 
+#include "coroutine.hpp"
 #include "image.hpp"
 #include "matrix.hpp"
 
@@ -96,10 +97,20 @@ namespace wry {
     // `cell` field texels per cell; source_cell must be a multiple of cell.
     SymbolSDF build_symbol_sdf(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell);
 
+    // The same field, its cells built concurrently on the pool, one child
+    // task each (they are independent; the bytes are identical).  The
+    // atlas's storage must outlive the await
+    coroutine::Future<SymbolSDF> build_symbol_sdf_parallel(matrix_view<const RGBA8Unorm_sRGB> atlas, int cell);
+
     // The field for the atlas PNG at `atlas_path`, at half its resolution:
     // from the cache PNG beside it when that is newer than the atlas,
     // else built and cached.
+    //
+    // A cache miss builds with build_symbol_sdf_parallel.  The blocking
+    // form waits on the calling thread, which must not be a pool worker;
+    // on the pool, await the other
     SymbolSDF symbol_sdf_for_atlas(std::filesystem::path const& atlas_path);
+    coroutine::Future<SymbolSDF> symbol_sdf_for_atlas_parallel(std::filesystem::path atlas_path);
 
     // The signed distance of a texel's centre from the edge of a half-plane
     // covering fraction `a` of it, the edge's unit normal being (gx, gy)
