@@ -232,35 +232,29 @@ namespace wry {
             c = c.down();
         while (codeof(c) < lo128)
             c = c.succ();
-        const KvAMT* kv2 = kv;
-        const KiAMT* ki2 = ki;
+        // Gather the range's actions (the cursor walks in code order, so
+        // each list is sorted with no duplicates), then apply each list to
+        // its leaf in one pass: rebuild_serial merges a leaf against the
+        // sorted slice through SortedBuilder, allocating and hashing every
+        // node of the result once, where inserting the actions one at a
+        // time built and discarded a transient leaf per action.
+        std::vector<std::pair<Code, ValA>> kv_mods;
+        std::vector<std::pair<Code, KiA>> ki_mods;
         while (codeof(c) < hi128) {
             Code code = (Code)codeof(c);
             std::pair<ValA, KiA> p = co_await action_for_key(*c.key());
             c = c.succ();
-            if (p.first.tag != ValA::NONE) {
-                T old{};
-                bool has = kv2 && kv2->try_get(code, old);
-                std::optional<T> nu = ParallelRebuildValueCombine<T>{}(has ? &old : nullptr, p.first);
-                if (nu)
-                    kv2 = KvAMT::insert(kv2, code, std::move(*nu));
-                else if (has) {
-                    T victim{};
-                    kv2 = kv2->clone_and_erase_key(code, victim).first;
-                }
-            }
-            if (p.second.tag != KiA::NONE) {
-                WaitSet old{};
-                bool has = ki2 && ki2->try_get(code, old);
-                std::optional<WaitSet> nu = WaitSetMergeCombine{}(has ? &old : nullptr, p.second);
-                if (nu)
-                    ki2 = KiAMT::insert(ki2, code, std::move(*nu));
-                else if (has) {
-                    WaitSet victim{};
-                    ki2 = ki2->clone_and_erase_key(code, victim).first;
-                }
-            }
+            if (p.first.tag != ValA::NONE)
+                kv_mods.emplace_back(code, std::move(p.first));
+            if (p.second.tag != KiA::NONE)
+                ki_mods.emplace_back(code, std::move(p.second));
         }
+        const KvAMT* kv2 = kv_mods.empty() ? kv
+            : KvAMT::rebuild_serial(kv, std::span<const std::pair<Code, ValA>>(kv_mods),
+                                    0, kv_mods.size(), ParallelRebuildValueCombine<T>{});
+        const KiAMT* ki2 = ki_mods.empty() ? ki
+            : KiAMT::rebuild_serial(ki, std::span<const std::pair<Code, KiA>>(ki_mods),
+                                    0, ki_mods.size(), WaitSetMergeCombine{});
         co_return std::pair<const KvAMT*, const KiAMT*>{kv2, ki2};
     }
 
