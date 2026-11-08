@@ -1,7 +1,8 @@
 # Todo
 
 ## Things to build
--  Coroutines that wait on MTLSharedEvent
+- Terrain on-demand when a machine nears the edge.  Generation allowed to be expensive, so what we should probably do is deterministically require it to be added at some well-defined point, but also eagerly compute a boundary of terrain in the background so we usually don't have to stall the simulation.  Chunked at some convenient size (16x16?).
+-  Coroutines that wait on Metal to finish something.  Via MTLSharedEvent?  Cancellation?
 - Async resource loading; do we just load everything in parallel or is there a benefit to serializing parts (like disk access).  Cache?
 - High quality mip-map generation on GPU via separable Gaussian
 - SVG loading for OTF and standalone files.  Only partial support needed.  Should produce geometry, not a rasterization, and use the same on-CPU and on-GPU rasterization code as the font engine.
