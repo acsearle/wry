@@ -17,6 +17,7 @@
 
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -903,6 +904,61 @@ namespace wry {
 
         // If the timer is only reaped when it fires, this is still 1 after
         // the census's one-second bound
+        co_await census.drained();
+        co_return;
+    };
+
+    namespace {
+
+        // Stops of its own accord: awaiting a stopped Outcome destroys the
+        // frame, the stopped completion
+        coroutine::Future<int> wd_thrower() {
+            throw std::runtime_error("boom");
+            co_return 0;
+        }
+
+        coroutine::Future<int> wd_self_stopping() {
+            execution::Outcome<int> outcome;
+            set_stopped(outcome);
+            co_return co_await outcome;
+        }
+
+    }
+
+    define_test("kqueue_with_deadline_senders", test_exclusive) {
+        FrameCensus census = co_await FrameCensus::open("kqueue_with_deadline_senders");
+        // with_deadline is a race (inner, timer) over any sender, not only a
+        // Future; each case must also withdraw its 10 second timer promptly
+        auto t0 = steady_clock::now();
+
+        // A sender that completes inside start wins at once; the timer
+        // entrant starts under the already-requested interior token
+        auto r = co_await with_deadline(steady_clock::now() + seconds(10), execution::just(5));
+        assert(r.has_value() && (*r == 5));
+
+        // An inner that stops of its own accord is nullopt, delivered
+        // without waiting for the deadline (the outer was not requested)
+        auto s = co_await with_deadline(steady_clock::now() + seconds(10), wd_self_stopping());
+        assert(!s.has_value());
+
+        // A void inner yields optional<monostate>
+        auto v = co_await with_deadline(steady_clock::now() + seconds(10), cancelable_sleep(0.001));
+        assert(v.has_value());
+
+        // An error wins like a value
+        bool caught = false;
+        try {
+            (void) co_await with_deadline(steady_clock::now() + seconds(10), wd_thrower());
+        } catch (std::runtime_error const&) {
+            caught = true;
+        }
+        assert(caught);
+
+        // sync_wait takes it as a sender directly
+        auto o = execution::sync_wait(with_deadline(steady_clock::now() + seconds(10), execution::just(7)));
+        assert(o.value() == std::optional<int>{7});
+
+        assert(steady_clock::now() - t0 < seconds(5));
         co_await census.drained();
         co_return;
     };

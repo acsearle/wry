@@ -93,117 +93,111 @@ namespace wry {
     cancelable_sleep(double seconds);
 
 
-    template<typename OuterPromise, typename T>
-    struct WithDeadlineAwaitable : coroutine::OutcomeDelegate<WithDeadlineAwaitable<OuterPromise, T>, T> {
+    // ---- with_deadline: a race of the inner against a timer ---------------
+    //
+    //   optional<T> r = co_await with_deadline(t, sender);
+    //
+    // A two-entrant race under one interior stop source: entrant 0 is the
+    // inner under stopped_as_optional, entrant 1 a timer that yields nullopt
+    // at the deadline.  Whichever completes first hastens the other through
+    // the interior source; the outer's token is bridged into it.  So the
+    // inner's value or error wins if it comes first, and nullopt wins when
+    // the deadline passes (the inner is then cancelled) or when the inner
+    // stops of its own accord (the timer is then withdrawn).  The race
+    // delivers once BOTH entrants have retired.
+    //
+    // Unlike a plain stopped_as_optional, the outer's own request is not
+    // absorbed: a nullopt that is delivered while the outer's token is
+    // requested becomes stopped (the bridge cancelled both entrants; the
+    // awaiting frame unwinds).  A value that wins is delivered even if the
+    // outer is requested by then, as for any sender that completes before
+    // it sees the request.
 
-        struct Callback {
-            std::stop_source _stop_source;
-            void operator()() {
-                // Local copy to survive possible self-destruct
-                std::stop_source stop_source{std::move(_stop_source)};
-                stop_source.request_stop();
-            }
-        };
+    template<typename U>
+    coroutine::Future<std::optional<U>> deadline_timer(std::chrono::steady_clock::time_point deadline) {
+        // Measured when the race starts this entrant.  A stop request on the
+        // interior token withdraws the sleep and destroys this frame, which
+        // is the timer's stopped completion
+        co_await cancelable_sleep(std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count());
+        co_return std::nullopt;
+    }
 
-        OuterPromise* _outer_promise;
-        std::chrono::steady_clock::time_point _deadline;
-        coroutine::Future<T> _future;
-        std::stop_source _inner_stop_source;
-        std::optional<std::stop_callback<Callback>> _stop_callback;
-        execution::Outcome<T> _outcome;
-
-        WithDeadlineAwaitable(OuterPromise* outer_promise,
-                              std::chrono::steady_clock::time_point deadline,
-                              coroutine::Future<T> future)
-        : _outer_promise(outer_promise)
-        , _deadline(std::move(deadline))
-        , _future(std::move(future)) {
-        }
-
-        execution::Outcome<T>& outcome() noexcept {
-            return _outcome;
-        }
-
-        constexpr bool await_ready() const noexcept {
-            return false;
-        }
-
-        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise>) noexcept {
-            using coroutine::get_stop_token;
-            _future._promise->set_delegate(this);
-            _stop_callback.emplace(get_stop_token(*_outer_promise),
-                                   Callback{_inner_stop_source});
-            cancelable_after(_inner_stop_source.get_token(),
-                             _deadline - std::chrono::steady_clock::now(),
-                             [stop_source = _inner_stop_source]() mutable {
-                // Local copy: the callbacks this fires may unwind the owner
-                std::stop_source keepalive = stop_source;
-                keepalive.request_stop();
-            });
-            return handle_from_future(std::move(_future));
-        }
-
-        // optional<monostate> for a void inner, as stopped_as_optional yields
-        std::optional<typename execution::Outcome<T>::stored_type> await_resume() {
-            _inner_stop_source.request_stop();
-            return _outcome.stopped_as_optional();
-        }
-
-        virtual void unhandled_stopped() noexcept override {
-            // Absorb: the inner stopped (usually by our own timer), so the
-            // outer resumes with nullopt -- unless the outer's own token is
-            // requested, in which case the unwinding continues through it
-            using coroutine::get_stop_token;
-            set_stopped(_outcome);
-            OuterPromise* outer = take(_outer_promise);
-            if (get_stop_token(*outer).stop_requested())
-                handle_from_promise(outer).destroy();
-            else
-                handle_from_promise(outer).resume();
-        }
-
-        virtual std::coroutine_handle<> final_await_suspend() noexcept override {
-            return handle_from_promise(take(_outer_promise));
-        }
-
-        virtual std::stop_token get_stop_token() noexcept override {
-            // The inner runs under the interior source, which the timer
-            // requests at the deadline and the outer's token is bridged to
-            return _inner_stop_source.get_token();
-        }
-
-    };
-
-    template<typename T>
+    template<execution::Sender S>
     struct WithDeadlineSender {
         std::chrono::steady_clock::time_point _deadline;
-        coroutine::Future<T> _future;
+        S _sender;
     };
 
-//    template<typename T>
-//    coroutine::Future<std::optional<T>> with_deadline(std::chrono::steady_clock::time_point deadline, coroutine::Future<T>&& future) {
-//        co_return co_await WithDeadlineAwaitable<T>(std::move(deadline), std::move(future));
-//    };
+} // namespace wry
 
-    template<typename T>
-    WithDeadlineSender<T> with_deadline(std::chrono::steady_clock::time_point deadline, coroutine::Future<T>&& future) {
-        return WithDeadlineSender<T>(std::move(deadline), std::move(future));
+namespace wry::execution {
+    template<Sender S>
+    struct SenderTraits<wry::WithDeadlineSender<S>> {
+        // optional<monostate> for a void inner, as stopped_as_optional yields
+        using value_type = std::optional<typename Outcome<SenderValueType<S>>::stored_type>;
     };
+} // namespace wry::execution
+
+namespace wry {
+
+    // The race's receiver: unwraps the winner and propagates the outer's
+    // request (see above)
+    template<typename V, typename R>
+    struct DeadlineReceiver {
+        R _receiver;
+    };
+
+    template<typename V, typename R>
+    void set_value(DeadlineReceiver<V, R>&& receiver, execution::RaceWinner<std::optional<V>>&& winner) {
+        // The race delivers on the last retiree's thread.  The bridge is a
+        // stop_callback on the outer's token, so a request that reached the
+        // entrants happened before their retires, which the race's acq_rel
+        // retire count orders before this delivery: if the outer's request
+        // is why the winner was nullopt, this load sees it
+        if (!winner.value && get_stop_token(receiver._receiver).stop_requested())
+            set_stopped(std::move(receiver._receiver));
+        else
+            set_value(std::move(receiver._receiver), std::move(winner.value));
+    }
+
+    template<typename V, typename R>
+    void set_error(DeadlineReceiver<V, R>&& receiver, std::exception_ptr&& error) {
+        set_error(std::move(receiver._receiver), std::move(error));
+    }
+
+    template<typename V, typename R>
+    void set_stopped(DeadlineReceiver<V, R>&& receiver) {
+        // Only if both entrants stopped; stopped_as_optional never does
+        set_stopped(std::move(receiver._receiver));
+    }
+
+    template<typename V, typename R>
+    std::stop_token get_stop_token(DeadlineReceiver<V, R> const& receiver) {
+        return get_stop_token(receiver._receiver);
+    }
+
+    template<execution::Sender S, typename R>
+    auto connect(WithDeadlineSender<S>&& sender, R&& receiver) {
+        using V = typename execution::Outcome<execution::SenderValueType<S>>::stored_type;
+        return connect(execution::when_any(execution::stopped_as_optional(std::move(sender._sender)),
+                                           deadline_timer<V>(sender._deadline)),
+                       DeadlineReceiver<V, std::remove_cvref_t<R>>{std::forward<R>(receiver)});
+    }
+
+    template<execution::Sender S>
+    WithDeadlineSender<std::remove_cvref_t<S>> with_deadline(std::chrono::steady_clock::time_point deadline, S&& sender) {
+        static_assert(!std::is_lvalue_reference_v<S>, "with_deadline consumes a sender: pass an rvalue");
+        return WithDeadlineSender<std::remove_cvref_t<S>>{deadline, std::forward<S>(sender)};
+    }
 
     // Anything else a coroutine could co_await (a queue's take, a nursery's
     // join) is lifted into a Future first, awaited in place through a
     // pointer: the argument must outlive the await, which a temporary in
-    // the awaiting expression does.  Senders other than Future are not yet
-    // accepted (WithDeadlineSender has no connect)
+    // the awaiting expression does
     template<typename A>
         requires (!execution::Sender<A>)
     auto with_deadline(std::chrono::steady_clock::time_point deadline, A&& awaitable) {
         return with_deadline(deadline, coroutine::lift_awaitable<A>(&awaitable));
-    }
-
-    template<typename U, typename T>
-    auto transform_await(coroutine::Promise<U>* outer_promise, WithDeadlineSender<T>&& s) {
-        return WithDeadlineAwaitable<coroutine::Promise<U>, T>(outer_promise, std::move(s._deadline), std::move(s._future));
     }
 
 

@@ -340,9 +340,9 @@ namespace wry::coroutine {
 
     // co_await x: the promise offers x to transform_await first, a
     // customization point that receives the promise and x in x's own value
-    // category (Future, Outcome, the GetPromise and GetStopToken tags and
-    // WithDeadlineSender customize it; an overload that takes only an
-    // rvalue leaves lvalues to fall through).  Failing that an awaitable is
+    // category (Future, Outcome and the GetPromise and GetStopToken tags
+    // customize it; an overload that takes only an rvalue leaves lvalues to
+    // fall through).  Failing that an awaitable is
     // awaited as itself, and a sender is wrapped in a SenderAwaitable (see
     // Senders below).  Anything else is diagnosed here
     template<typename T, typename A>

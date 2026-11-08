@@ -52,7 +52,7 @@ namespace wry::coroutine {
                 // retire can destroy the joiner frame -- this Nursery, this
                 // functor, and _inner_stop_source with it -- and free the
                 // inner stop state under the iteration.  Pin it on the
-                // native stack for the call (cf. WithDeadlineAwaitable).
+                // native stack for the call (cf. RaceBase::Bridge).
                 std::stop_source keepalive = _inner_stop_source;
                 keepalive.request_stop();
             }

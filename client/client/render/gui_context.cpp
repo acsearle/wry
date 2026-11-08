@@ -555,10 +555,10 @@ namespace wry {
         Inbox* commands = control_socket ? &control_socket->events() : nullptr;
         Inbox* server = world ? world->server_inbox() : nullptr;
         if (commands && server) {
-            (void) coroutine::sync_wait(with_deadline(deadline, wait_either(*commands, *server)));
+            (void) execution::sync_wait(with_deadline(deadline, wait_either(*commands, *server)));
         } else if (commands || server) {
             auto wait = (commands ? commands : server)->wait();
-            (void) coroutine::sync_wait(with_deadline(deadline, wait));
+            (void) execution::sync_wait(with_deadline(deadline, wait));
         } else {
             std::this_thread::sleep_for(timeout);
         }
