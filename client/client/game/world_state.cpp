@@ -127,41 +127,85 @@ namespace wry {
                 for (i32 k = 0; k != 7; ++k)
                     put(-5, -k, term_make_matter((MATTER)(MATTER_WATER + k)));
 
-                // The market: a Ship moored in a little basin south of
-                // the spawner, prow east, its holds at x = 1 .. 4 on
-                // y = -2
-                for (i32 x = -1; x <= 6; ++x)
-                    for (i32 y = -2; y <= -1; ++y)
-                        world->_terrain_for_coordinate.set(Coordinate{x, y}, TERRAIN_WATER);
+                // The market: a Ship moored on the south side of open
+                // water, prow west, alongside a stone pier.  Not placed by
+                // hand but found in the generated terrain: the berth
+                // nearest the spawner, not south of it, whose row holds
+                // the ship with a ship length of water off either end and
+                // water north of it, and whose row to the south (the pier)
+                // touches land.  The pier's cells become rock, whatever
+                // they were.  No such berth, no ship (pre-alpha: fine).
                 {
-                    Ship* ship = new Ship;
-                    ship->_entity_id = world->generate_entity_id();
-                    ship->_location = Coordinate{5, -2};
-                    ship->_heading = HEADING_EAST;
-                    ship->seal();
-                    world->_entity_for_entity_id.set(ship->_entity_id, ship);
-                    world->_waiting_on_time.set({Time{0}, ship->_entity_id});
-                    for (int k = 0; k != Ship::SHIP_LENGTH; ++k) {
-                        Coordinate c = ship->cell(k);
-                        world->_entity_id_for_coordinate.set(c, ship->_entity_id);
-                        EntityIDSet located;
-                        (void) world->_located_for_coordinate.try_get(c, located);
-                        located.set(ship->_entity_id);
-                        world->_located_for_coordinate.set(c, located);
+                    auto water = [&](i32 x, i32 y) {
+                        Terrain t = -1;
+                        return world->_terrain_for_coordinate.try_get(Coordinate{x, y}, t)
+                            && (t == TERRAIN_WATER);
+                    };
+                    constexpr i32 L = Ship::SHIP_LENGTH;
+                    bool found = false;
+                    i32 bx = 0, by = 0;
+                    i64 best = 0;
+                    for (i32 y = 0; y <= 120; ++y) {
+                        for (i32 x0 = -120; x0 <= 120 - 2 * L; ++x0) {
+                            bool fits = true;
+                            for (i32 x = x0 - L; fits && (x < x0 + 2 * L); ++x)
+                                fits = water(x, y);
+                            for (i32 x = x0 - 1; fits && (x <= x0 + L); ++x)
+                                fits = water(x, y + 1);
+                            bool landfall = false;
+                            for (i32 x = x0; fits && (x < x0 + L); ++x)
+                                landfall = landfall || !water(x, y - 1);
+                            if (!fits || !landfall)
+                                continue;
+                            i64 dx = 2 * (i64)x0 + L - 1, dy = 2 * (i64)y;
+                            i64 d = dx * dx + dy * dy;
+                            if (!found || (d < best)) {
+                                found = true;
+                                best = d;
+                                bx = x0;
+                                by = y;
+                            }
+                        }
+                    }
+                    if (found) {
+                        for (i32 x = bx; x < bx + L; ++x)
+                            world->_terrain_for_coordinate.set(Coordinate{x, by - 1}, TERRAIN_ROCK);
+                        Ship* ship = new Ship;
+                        ship->_entity_id = world->generate_entity_id();
+                        ship->_location = Coordinate{bx, by};   // the prow, west end
+                        ship->_heading = HEADING_WEST;
+                        ship->seal();
+                        world->_entity_for_entity_id.set(ship->_entity_id, ship);
+                        world->_waiting_on_time.set({Time{0}, ship->_entity_id});
+                        for (int k = 0; k != Ship::SHIP_LENGTH; ++k) {
+                            Coordinate c = ship->cell(k);
+                            world->_entity_id_for_coordinate.set(c, ship->_entity_id);
+                            EntityIDSet located;
+                            (void) world->_located_for_coordinate.try_get(c, located);
+                            located.set(ship->_entity_id);
+                            world->_located_for_coordinate.set(c, located);
+                        }
+
+                        // A shuttle off the pier, into the second hold:
+                        // southbound, MINE digs what lies under the SKIP;
+                        // northbound, that SKIP steps over the MINE, so a
+                        // round trip digs once.  DUMP on the pier turns
+                        // the machine round and puts its load in the hold
+                        // behind it; TURN_BACK is the landward end.  Laid
+                        // only if the four cells inland are land.
+                        i32 sx = ship->cell(2).x;
+                        bool inland = true;
+                        for (i32 y = by - 5; y <= by - 2; ++y)
+                            inland = inland && !water(sx, y);
+                        if (inland) {
+                            put(sx, by - 1, term_make_opcode(OPCODE_DUMP));
+                            put(sx, by - 2, term_make_opcode(OPCODE_MINE));
+                            put(sx, by - 3, term_make_opcode(OPCODE_SKIP));
+                            put(sx, by - 5, term_make_opcode(OPCODE_TURN_BACK));
+                            machine_at_rest(sx, by - 4, HEADING_NORTH);
+                        }
                     }
                 }
-
-                // A coal shuttle up and down x = 3, into the hold at
-                // (3, -2).  Southbound, MINE digs the coal under the SKIP
-                // at (3, -5); northbound, that SKIP steps over the MINE,
-                // so a round trip digs once.  DUMP at the quay turns the
-                // machine round and puts the coal in the hold behind it;
-                // TURN_BACK at (3, -7) is the other end.
-                put(3, -3, term_make_opcode(OPCODE_DUMP));
-                put(3, -4, term_make_opcode(OPCODE_MINE));
-                put(3, -5, term_make_opcode(OPCODE_SKIP));
-                put(3, -7, term_make_opcode(OPCODE_TURN_BACK));
-                machine_at_rest(3, -6, HEADING_NORTH);
 
                 // A loader: takes three piles from the ground (LOAD
                 // moves matter) and picks up two literals on the way,

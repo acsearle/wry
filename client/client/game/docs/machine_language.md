@@ -497,8 +497,11 @@ Semantics, and the choices in them:
 Shuttle idiom: DUMP at the quay end, and at the far end
 `[MINE] [SKIP] [ ] [TURN_BACK]` laid out away from the quay, over the
 ore: outbound, MINE digs the ore under the SKIP; inbound, the SKIP steps
-over the MINE, so a round trip digs once (the starting world's coal
-shuttle, `world_state.cpp`).
+over the MINE, so a round trip digs once.  The starting world
+(`world_state.cpp`) finds the berth nearest the spawner, not south of it,
+where open water fits the ship (prow west) with a ship length of water
+off either end, makes the row south of it a rock pier, and lays a sand
+shuttle from the pier into the second hold.
 
 ## 6. Idioms
 
