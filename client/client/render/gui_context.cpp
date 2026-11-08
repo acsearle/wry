@@ -611,9 +611,13 @@ namespace wry {
         }
         // Load (or first-run install) settings.json.  The cwd is already
         // the assets directory (main.mm chdir), so the config/ paths in
-        // settings_paths resolve next to saves/.  Any warnings (unknown
-        // ids, malformed combos, unparseable file) surface in the
-        // floating log once a scene is up.
+        // settings_paths resolve next to saves/.  --settings DIR uses
+        // another directory, so a driven run that changes settings (key
+        // bindings, ui-scale) leaves the player's alone.  Any warnings
+        // (unknown ids, malformed combos, unparseable file) surface in
+        // the floating log once a scene is up.
+        if (const char* given = value_after(find("--settings")))
+            settings_paths = wry::settings_paths(given);
         std::vector<String> warnings;
         settings = load_settings(settings_paths, &warnings);
         // Sessions log next to the saves (the cwd is the assets directory)
@@ -1032,6 +1036,35 @@ namespace wry {
                     return Reply::error(String("no window"));
                 c.gui.on_window_size(float2{(float)width, (float)height});
                 return Reply::ok();
+            }));
+
+        // The UI scale (settings.ui_scale), as a percentage so it reads
+        // and types as an Int; saved to settings.json.  With no argument,
+        // reports it.
+        registry.add(make_command<Ctx>(
+            "ui-scale", "Set the size of the interface, in percent of the platform's (50 to 200), saved to the settings", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"percent", "the scale",
+                    [](Ctx& c) -> std::expected<int64_t, String> {
+                        return (int64_t)std::lround(c.gui.settings.ui_scale * 100.0f);
+                    },
+                    "the current scale"},
+            },
+            [](Ctx& c, int64_t percent) {
+                const int64_t lo = (int64_t)std::lround(Settings::min_ui_scale * 100.0f);
+                const int64_t hi = (int64_t)std::lround(Settings::max_ui_scale * 100.0f);
+                if (percent < lo || percent > hi)
+                    return Reply::error(String("the scale must be 50 to 200 percent"));
+                const float scale = (float)percent / 100.0f;
+                if (scale != c.gui.settings.ui_scale) {
+                    c.gui.settings.ui_scale = scale;
+                    if (!save_settings(c.gui.settings, c.gui.settings_paths))
+                        c.gui.append_log("Could not save settings.json");
+                }
+                char buffer[96];
+                std::snprintf(buffer, sizeof(buffer), "%lld%% (%g pixels per point)",
+                              (long long)percent, (double)c.gui.pixels_per_point());
+                return Reply::ok(String(buffer));
             }));
 
         registry.add(make_command<Ctx>(
@@ -1850,6 +1883,37 @@ namespace wry {
         co_await gc.control_socket->shutdown(std::chrono::milliseconds(100));
         (void) co_await serving.join();
         gc.control_socket.reset();
+        co_return;
+    };
+
+    // The ui-scale command: it reports, sets (the UI's pixels per point
+    // follow), persists, and refuses what is out of range.
+    define_test("gui_context_ui_scale") {
+        char pattern[] = "ui-scale-test-XXXXXX";
+        char* dir = mkdtemp(pattern);
+        assert(dir);
+        GuiContext gc;
+        gc.settings_paths = settings_paths(dir);
+        gc.settings = load_settings(gc.settings_paths, nullptr);
+        gc.backing_scale = 2.0f;
+        assert(gc.pixels_per_point() == 2.0f);
+
+        auto o = gc.issue(command::Origin::console, "ui-scale");
+        assert(o.reply.status == command::Reply::OK);
+        assert(o.reply.text == StringView("100% (2 pixels per point)"));
+
+        o = gc.issue(command::Origin::console, "ui-scale 150");
+        assert(o.reply.status == command::Reply::OK);
+        assert(gc.settings.ui_scale == 1.5f);
+        assert(gc.pixels_per_point() == 3.0f);
+        assert(load_settings(gc.settings_paths, nullptr).ui_scale == 1.5f);
+
+        o = gc.issue(command::Origin::console, "ui-scale 20");
+        assert(o.reply.status != command::Reply::OK);
+        assert(gc.settings.ui_scale == 1.5f);
+
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
         co_return;
     };
 

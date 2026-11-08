@@ -113,13 +113,15 @@ namespace wry {
         // Retina Mac's 2, which their view sizes already assume.
         float backing_scale = 2.0f;
 
-        // Drawable pixels per UI point.  The UI is laid out in drawable
-        // pixels (viewport_size; events are promoted to them), but every
-        // UI dimension is defined in points and multiplied by this, or
-        // derived from the font, which is rasterized at it.  So the UI
-        // keeps its physical size across displays and window sizes,
-        // rather than scaling with the drawable.
-        float pixels_per_point() const { return backing_scale; }
+        // Drawable pixels per UI point: the backing scale times the
+        // user's UI scale (settings.ui_scale; the ui-scale command).  The
+        // UI is laid out in drawable pixels (viewport_size; events are
+        // promoted to them), but every UI dimension is defined in points
+        // and multiplied by this, or derived from the font, which is
+        // rasterized at it.  So the UI keeps its physical size across
+        // displays and window sizes, rather than scaling with the
+        // drawable, and the user can make it larger or smaller.
+        float pixels_per_point() const { return backing_scale * settings.ui_scale; }
 
         // User settings.  Constructed as the compiled-in defaults so the
         // keymap is live from the first event; the host replaces them
@@ -239,7 +241,7 @@ namespace wry {
 
         // The launch options every host reads (core/main.mm passes argv):
         // --control-socket [PATH], --host [PORT], --join ADDRESS:PORT,
-        // --skip-splash, and settings.json loaded (or first-run installed) from the
+        // --skip-splash, --settings DIR, and settings.json loaded (or first-run installed) from the
         // settings paths, warnings to the log.  After `scope` is set and
         // the cwd is the assets directory
         void configure_from_arguments(int argc, const char* const* argv);

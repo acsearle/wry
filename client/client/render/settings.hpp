@@ -6,10 +6,9 @@
 //
 //  App-level user settings and their settings.json lifecycle.
 //
-//  Settings currently holds only the key bindings, but the struct and
-//  the file are both shaped for growth: key bindings are one named
-//  group ("key_bindings") inside the root object, so future groups
-//  (audio, video, ...) become siblings, not schema breaks.
+//  Settings holds the key bindings and the interface options, each a
+//  named group ("key_bindings", "interface") inside the root object, so
+//  future groups (audio, video, ...) become siblings, not schema breaks.
 //
 //  On-disk layout, all under one directory (default "config", a
 //  sibling of "saves" under the working directory):
@@ -53,6 +52,16 @@ namespace wry {
 
     struct Settings {
         gui::Keymap keymap;
+
+        // The "interface" group.  ui_scale multiplies the display's
+        // backing scale to give the UI's pixels per point
+        // (GuiContext::pixels_per_point): 1 is the platform's size,
+        // within [min_ui_scale, max_ui_scale]; out-of-range values in the
+        // file are clamped with a warning.
+        float ui_scale = 1.0f;
+        static constexpr float min_ui_scale = 0.5f;
+        static constexpr float max_ui_scale = 2.0f;
+
         // Future setting groups (audio, video, ...) land here.
     };
 

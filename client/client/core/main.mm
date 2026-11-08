@@ -152,7 +152,7 @@ int main(int argc, const char** argv) {
     //       a quicker start.  Ignored with --test-only.
     //
     //   --control-socket [PATH], --host [PORT], --join ADDRESS:PORT,
-    //   --skip-splash
+    //   --skip-splash, --settings DIR
     //       (read by GuiContext::configure_from_arguments)
     //
     // TODO: paths, immediate load savegame, etc.

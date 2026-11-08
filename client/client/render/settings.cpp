@@ -75,6 +75,14 @@ namespace wry {
         String s;
         s.append("{\n");
         s.append("    \"version\": 1,\n");
+        {
+            char buffer[64];
+            std::snprintf(buffer, sizeof buffer,
+                          "    \"interface\": {\n"
+                          "        \"ui_scale\": %g\n"
+                          "    },\n", (double)settings.ui_scale);
+            s.append(buffer);
+        }
         s.append("    \"key_bindings\": {\n");
         for (size_t i = 0; i != gui::action_count; ++i) {
             gui::Action a = (gui::Action)i;
@@ -121,6 +129,31 @@ namespace wry {
         // by a newer binary may carry setting groups this one doesn't
         // know, and that must not warn-spam.  Unknown entries *inside*
         // key_bindings warn, though: there the vocabulary is ours.
+        // Inside interface they are ignored, as a newer binary's options.
+
+        if (root.contains(StringView("interface"))) {
+            Json const& ui = document[StringView("interface")];
+            if (!ui.is_object()) {
+                _warn(warnings,
+                      {"settings.json: 'interface' is not an object; "
+                       "using default interface settings"});
+            } else if (ui.as_object().contains(StringView("ui_scale"))) {
+                Json const& v = ui[StringView("ui_scale")];
+                if (!v.is_number()) {
+                    _warn(warnings,
+                          {"settings.json: 'ui_scale' is not a number; "
+                           "keeping its default"});
+                } else {
+                    const double x = v.as_number();
+                    const double y = std::clamp(x, (double)Settings::min_ui_scale,
+                                                (double)Settings::max_ui_scale);
+                    if (y != x)
+                        _warn(warnings,
+                              {"settings.json: 'ui_scale' out of range; clamped"});
+                    settings.ui_scale = (float)y;
+                }
+            }
+        }
 
         if (!root.contains(StringView("key_bindings")))
             return settings;
@@ -389,6 +422,27 @@ namespace wry {
         json::Json const& kb = document[StringView("key_bindings")];
         assert(kb.is_object());
         assert(kb.size() == action_count);   // every action listed
+
+        // The interface group round-trips.
+        a.ui_scale = 1.25f;
+        Settings c = settings_from_json(json_from_settings(a), &warnings);
+        assert(warnings.empty());
+        assert(c.ui_scale == 1.25f);
+        assert(document[StringView("interface")].is_object());
+
+        // Absent, malformed and out-of-range ui_scale.
+        {
+            std::vector<String> w;
+            Settings d = settings_from_json(StringView("{\"key_bindings\": {}}"), &w);
+            assert(w.empty() && d.ui_scale == 1.0f);
+            d = settings_from_json(
+                StringView("{\"interface\": {\"ui_scale\": \"big\"}}"), &w);
+            assert(w.size() == 1 && d.ui_scale == 1.0f);
+            w.clear();
+            d = settings_from_json(
+                StringView("{\"interface\": {\"ui_scale\": 9}}"), &w);
+            assert(w.size() == 1 && d.ui_scale == Settings::max_ui_scale);
+        }
 
         co_return;
     };
