@@ -81,6 +81,14 @@ namespace wry::coroutine {
             _static_resume(ptr);
         }
 
+        // Ask every child to stop (through the inner stop source their
+        // delegates hand out).  Sticky: a std::stop_source cannot be
+        // reset, so once requested it stays requested.  That is the whole
+        // contract, because a Nursery is single-use: forks, then exactly
+        // one join, then destruction -- join leaves _counter at -1, a fork
+        // after it asserts (count >= 0), and ~Nursery asserts the join
+        // happened.  There is no reuse across which a stop could leak;
+        // a fresh scope is a fresh Nursery.
         bool request_stop() {
             return _inner_stop_source.request_stop();
         }
