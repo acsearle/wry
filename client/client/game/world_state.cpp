@@ -1866,6 +1866,13 @@ namespace wry {
                 return toggle(ws, ws._show_wireframe, "wireframe");
             })));
 
+        registry.add(make_command<Ctx>(
+            "toggle-bloom", "Show or hide screen-space bloom (undecided look option)", Category::local,
+            std::tuple<>{},
+            with_world([](WorldState& ws) {
+                return toggle(ws, ws._show_bloom, "bloom");
+            })));
+
         // Factorio's Q: a full hand is emptied; an empty hand picks up the
         // tile.  (So `pipette Coordinate(3, 4)` replays as a drop if the
         // hand was full -- the hand is part of the state it replays in.)

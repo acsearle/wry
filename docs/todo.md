@@ -31,6 +31,7 @@
 - Investigate radiance cascade as a GTAO alternative.  Can we ditch the shadow map and directional light entirely?
 - Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
 - Bloom is calculated but not used.  Decide.
+  - 2026-11-08: no longer computed unless shown: `toggle-bloom` (off by default) runs the blur and presents light + blur/8.  As built it blurs the HUD too (it runs after the composite-and-GUI pass) and, with no HDR highlights in the scene, reads as a uniform haze (assets/bloom_off_vs_on.png).  DECIDE: delete, or move before the GUI with a threshold
 - Make the palette a GUI widget
 - Make the console a GUI widget
 - Replace Futura Medium Condensed with something we clearly have rights to.   Noto Condensed?
@@ -163,6 +164,7 @@ List of one-line reminders of things to think and do
 - main.mm spawns the full test suite in the GUI unconditionally (4-5 s under ASan with the small world; QUIT waits for it, and must: the runner is shielded from the root token since 2026-10-17, because tests own nurseries across sleeps and a cancelled test frame asserts in ~Nursery -- the crash-on-quit of 2026-10-17): gate it behind a flag
   - NOTE 2026-11-08: a flag exists (--no-tests opts out); what is undecided is the default -- keep running the suite beside the game, or make it opt-in
 - ext/functional.hpp: wry::move_only_function<R(Args...)> (subset: plain signature only, no in_place_type, empty call asserts) -- retire in favor of std::move_only_function when libc++ ships it
+  - CHECKED 2026-11-08: Xcode's libc++ still lacks std::move_only_function under -std=c++23
 - Nits: soon(y, bar(x)) comment says "schedules foo"; test metadata prints interleave with collector logging (flaky counts in log greps, bit again 2026-09-11); co_await of an error Outcome (the rethrow path) has no direct test
   - DONE 2026-11-08: the soon comment already reads "schedules bar"; the rethrow path has a direct test now (nursery_outcome_rethrow: a child's throw rethrows at co_await of its Outcome, which is left empty).  The log-interleaving nit stands
 

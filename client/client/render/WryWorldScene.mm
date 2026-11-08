@@ -3156,8 +3156,10 @@ struct WryNumberGlyph {
 
     }
         
-    {
-        // Screen-space bloom by simple Gaussian blur
+    if (_model->_show_bloom) {
+        // Screen-space bloom by simple Gaussian blur (toggle-bloom; off by
+        // default, and then not computed at all).  NB: it runs after the
+        // composite-and-GUI pass, so it blurs the HUD into itself too
         _gaussianBlur.edgeMode = MPSImageEdgeModeClamp;
         
         [_gaussianBlur encodeToCommandBuffer:command_buffer
@@ -3186,9 +3188,8 @@ struct WryNumberGlyph {
 
     // Hand the host the texture to show.  It blits this into the drawable
     // (acquired as late as possible) and presents + commits the command buffer.
-    // Bloom is rendered into _addedTexture but, as before, we present the raw
-    // light texture; the _addedTexture path stays for when bloom is re-enabled.
-    return _deferredLightColorAttachmentTexture;
+    // With bloom on, present the light plus 1/8 of its blur
+    return _model->_show_bloom ? _addedTexture : _deferredLightColorAttachmentTexture;
 
 }
 

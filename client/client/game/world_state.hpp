@@ -74,6 +74,10 @@ namespace wry {
         bool _show_jacobian = false;
         bool _show_points = false;
         bool _show_wireframe = false;
+        // Screen-space bloom (WryWorldScene: a Gaussian of the lit image,
+        // added at 1/8).  Off: undecided whether we want it at all, and
+        // computed-but-unshown it cost a full-screen blur every frame
+        bool _show_bloom = false;
         // The symbol slabs' ambient-occlusion decals (toggle-symbol-decals)
         bool _show_symbol_decals = true;
         // Screen-space ambient occlusion (the `ssao` command): WRY_SSAO_*
