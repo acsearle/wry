@@ -587,6 +587,8 @@ namespace wry::otf {
 
         cff::Handle cff_;
 
+        span<byte const> svg;
+
         int head_indexToLocFormat;
         int head_unitsPerEm;
         int maxp_numberOfGlyphs;
@@ -716,6 +718,52 @@ namespace wry::otf {
         return _inner->head_unitsPerEm;
     }
 
+    std::string_view svg_document_in_table(span<byte const> table, int glyph_index) {
+        // SVG table header: uint16 version, Offset32 svgDocumentListOffset,
+        // uint32 reserved.  SVGDocumentList: uint16 numEntries, then
+        // records of uint16 startGlyphID, uint16 endGlyphID, Offset32
+        // svgDocOffset (from the list), uint32 svgDocLength, sorted by
+        // glyph ID.  Read bytewise with bounds checks: the table is
+        // untrusted.
+        auto const* p = (unsigned char const*)table.data();
+        std::size_t n = table.size();
+        auto u16 = [&](std::size_t k) -> std::uint32_t {
+            return (std::uint32_t(p[k]) << 8) | p[k + 1];
+        };
+        auto u32 = [&](std::size_t k) -> std::uint32_t {
+            return (u16(k) << 16) | u16(k + 2);
+        };
+        if (n < 10 || glyph_index < 0)
+            return {};
+        std::size_t list = u32(2);
+        if (list + 2 > n)
+            return {};
+        std::size_t count = u16(list);
+        if (list + 2 + 12 * count > n)
+            return {};
+        std::size_t lo = 0, hi = count;
+        while (lo < hi) {
+            std::size_t mid = (lo + hi) / 2;
+            std::size_t r = list + 2 + 12 * mid;
+            if ((std::uint32_t)glyph_index < u16(r)) {
+                hi = mid;
+            } else if ((std::uint32_t)glyph_index > u16(r + 2)) {
+                lo = mid + 1;
+            } else {
+                std::size_t offset = list + (std::size_t)u32(r + 4);
+                std::size_t length = u32(r + 8);
+                if (offset > n || length > n - offset)
+                    return {};
+                return std::string_view((char const*)p + offset, length);
+            }
+        }
+        return {};
+    }
+
+    std::string_view Handle::svg_document_for_glyph_index(int glyph_index) const {
+        return svg_document_in_table(_inner->svg, glyph_index);
+    }
+
     template<typename T>
     T const* span_cast(span<byte const> a) {
         if (a.empty()) {
@@ -758,6 +806,10 @@ namespace wry::otf {
             if (auto s = tableDirectory->find("CFF "))
                 h->cff_ = cff::Handle::parse(s);
         }
+
+        // Table of SVG glyph descriptions
+
+        h->svg = tableDirectory->find("SVG ");
 
         // Derived quantities
 

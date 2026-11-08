@@ -12,6 +12,8 @@
 //
 // https://learn.microsoft.com/en-us/typography/opentype/spec/
 
+#include <string_view>
+
 #include "span.hpp"
 #include "stddef.hpp"
 #include "utility.hpp"
@@ -67,7 +69,17 @@ namespace wry::otf {
         float advance_for_glyph_index(int glyph_index) const;
         float advance_for_character(int c) const;
 
+        // The 'SVG ' table document holding the glyph, or empty if the
+        // font has no such table or the glyph has no SVG.  The bytes may be
+        // gzip-compressed (they start 1F 8B).  svg::parse_otf_glyph turns a
+        // document into Layers of the same curves outline_for_glyph_index
+        // returns, in the same design-unit, y-up frame.
+        std::string_view svg_document_for_glyph_index(int glyph_index) const;
+
     };
+
+    // The same lookup over a raw 'SVG ' table; exposed for testing.
+    std::string_view svg_document_in_table(span<byte const> svg_table, int glyph_index);
 
 } // namespace wry::otf
 

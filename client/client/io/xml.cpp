@@ -7,167 +7,364 @@
 
 #include "xml.hpp"
 
-#include "parse.hpp"
+#include <cassert>
+#include <cstdio>
+
 #include "test.hpp"
 
 namespace wry::xml {
-    
+
+    std::string const* Element::attribute(std::string_view key) const {
+        for (auto const& [k, v] : attributes)
+            if (k == key)
+                return &v;
+        return nullptr;
+    }
+
     namespace {
-        
-        constexpr int isnamehead(int ch) {
-            return isalpha(ch) || __builtin_strchr("_:", ch);
+
+        bool is_space(char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r';
         }
-        
-        constexpr int isnametail(int ch) {
-            return isalnum(ch) || __builtin_strchr("_:.-", ch);
+
+        // ASCII approximation of NameStartChar / NameChar; any byte >= 0x80
+        // is accepted so that non-ASCII UTF-8 names pass through.
+        bool is_name_start(char c) {
+            unsigned char u = (unsigned char)c;
+            return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z')
+                || u == '_' || u == ':' || u >= 0x80;
         }
-        
-        auto match_any() {
-            return [](auto& v) {
-                return !v.empty() && (v.pop_front(), true);
-            };
+
+        bool is_name_char(char c) {
+            unsigned char u = (unsigned char)c;
+            return is_name_start(c) || (u >= '0' && u <= '9')
+                || u == '-' || u == '.';
         }
-        
-        auto match_comment() {
-            return match_and(match_zstr("<!--"),
-                             match_not(match_zstr("--")),
-                             match_zstr("-->"));
+
+        void append_utf8(std::string& s, unsigned long cp) {
+            if (cp < 0x80) {
+                s.push_back((char)cp);
+            } else if (cp < 0x800) {
+                s.push_back((char)(0xC0 | (cp >> 6)));
+                s.push_back((char)(0x80 | (cp & 0x3F)));
+            } else if (cp < 0x10000) {
+                s.push_back((char)(0xE0 | (cp >> 12)));
+                s.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                s.push_back((char)(0x80 | (cp & 0x3F)));
+            } else {
+                s.push_back((char)(0xF0 | (cp >> 18)));
+                s.push_back((char)(0x80 | ((cp >> 12) & 0x3F)));
+                s.push_back((char)(0x80 | ((cp >> 6) & 0x3F)));
+                s.push_back((char)(0x80 | (cp & 0x3F)));
+            }
         }
-        
-        auto match_name() {
-            return match_identifier();
-        }
-        
-        auto match_attribute() {
-            return match_and(match_name(),
-                             match_spaces(),
-                             match_character('='),
-                             match_spaces(),
-                             match_quotation()
-                             );
-        }
-        
-        auto parse_attribute(StringView& key, StringView& value) {
-            return match_and(parse_into(match_name(), key),
-                             match_spaces(),
-                             match_character('='),
-                             match_spaces(),
-                             parse(match_quotation(),
-                                   [&](auto u) {
-                value.reset(u);
-                value.pop_front();
-                value.pop_back();
-            })
-                             );
-        }
-        
-        auto parse_attributes(std::vector<std::pair<StringView, StringView>>& a) {
-            return [&](auto& v) {
-                StringView key{}, value{};
-                while (match_and(match_spaces(),
-                                 parse_attribute(key, value))(v)) {
-                    a.emplace_back(key, value);
+
+        struct Parser {
+
+            std::string_view src;
+            std::size_t pos = 0;
+            Document doc;
+
+            bool at_end() const { return pos >= src.size(); }
+            char peek(std::size_t k = 0) const {
+                return pos + k < src.size() ? src[pos + k] : '\0';
+            }
+            bool starts_with(std::string_view s) const {
+                return src.substr(pos, s.size()) == s;
+            }
+
+            bool fail(std::string what) {
+                if (doc.error.empty()) {
+                    doc.error = std::move(what);
+                    doc.error_offset = pos;
+                }
+                return false;
+            }
+
+            void skip_space() {
+                while (!at_end() && is_space(src[pos]))
+                    ++pos;
+            }
+
+            bool skip_past(std::string_view terminator, char const* what) {
+                std::size_t k = src.find(terminator, pos);
+                if (k == std::string_view::npos) {
+                    pos = src.size();
+                    return fail(std::string("unterminated ") + what);
+                }
+                pos = k + terminator.size();
+                return true;
+            }
+
+            bool name(std::string_view& out) {
+                if (at_end() || !is_name_start(src[pos]))
+                    return fail("expected a name");
+                std::size_t first = pos;
+                while (!at_end() && is_name_char(src[pos]))
+                    ++pos;
+                out = src.substr(first, pos - first);
+                return true;
+            }
+
+            // Decode character data / attribute text up to (not including)
+            // the first byte in `stops`.
+            bool decode_until(std::string& out, std::string_view stops) {
+                while (!at_end()) {
+                    char c = src[pos];
+                    if (stops.find(c) != std::string_view::npos)
+                        return true;
+                    if (c != '&') {
+                        out.push_back(c);
+                        ++pos;
+                        continue;
+                    }
+                    std::size_t semi = src.find(';', pos);
+                    if (semi == std::string_view::npos || semi - pos > 12)
+                        return fail("malformed entity reference");
+                    std::string_view e = src.substr(pos + 1, semi - pos - 1);
+                    if (e == "lt") out.push_back('<');
+                    else if (e == "gt") out.push_back('>');
+                    else if (e == "amp") out.push_back('&');
+                    else if (e == "quot") out.push_back('"');
+                    else if (e == "apos") out.push_back('\'');
+                    else if (e.size() >= 2 && e[0] == '#') {
+                        bool hex = e[1] == 'x' || e[1] == 'X';
+                        std::string digits(e.substr(hex ? 2 : 1));
+                        char* end = nullptr;
+                        unsigned long cp = std::strtoul(digits.c_str(), &end, hex ? 16 : 10);
+                        if (digits.empty() || *end || cp > 0x10FFFF)
+                            return fail("malformed character reference");
+                        append_utf8(out, cp);
+                    } else {
+                        return fail("unknown entity (DTDs are not supported)");
+                    }
+                    pos = semi + 1;
                 }
                 return true;
-            };
-        }
-        
-        // TODO: Separate Y-combinator and curry
-        auto y_combinator(auto&& f, auto&... g) {
-            return [f, &g...](auto&&... args) {
-                return f(f, g..., std::forward<decltype(args)>(args)...);
-            };
-        }
-        
-        auto parse_content(std::vector<Content>& cs) {
-            return y_combinator([](auto& self, std::vector<Content>& cs, auto& v) {
-                auto u{v};
-                Content c;
-                if (match_not(match_character('<'))(u)) {
-                    c.tag = Content::TEXT;
-                    c.text.reset(u / v);
-                } else if (match_and(match_character('<'),
-                                     parse_into(match_name(), c.name),
-                                     parse_attributes(c.attributes),
-                                     match_spaces(),
-                                     match_or(/* empty-tag */
-                                              match_zstr("/>"),
-                                              /* start-tag */
-                                              match_and(match_character('>'),
-                                                        match_until(y_combinator(self, c.content),
-                                                                    /* end-tag */
-                                                                    match_and(match_zstr("</"),
-                                                                              // TODO: this is a nasty
-                                                                              // capture by ref, to see
-                                                                              // result of parse name
-                                                                              // above
-                                                                              match_string_view(c.name),
-                                                                              match_character('>')))))
-                                     )(u)) {
-                    c.tag = Content::ELEMENT;
-                } else {
+            }
+
+            // Misc: comments, processing instructions, doctype, whitespace.
+            // Returns true if it consumed something.
+            bool misc(bool& ok) {
+                if (starts_with("<!--")) {
+                    pos += 4;
+                    ok = skip_past("-->", "comment");
+                    return true;
+                }
+                if (starts_with("<?")) {
+                    pos += 2;
+                    ok = skip_past("?>", "processing instruction");
+                    return true;
+                }
+                if (starts_with("<!DOCTYPE")) {
+                    // Skip, including any bracketed internal subset.
+                    pos += 9;
+                    int depth = 0;
+                    while (!at_end()) {
+                        char c = src[pos++];
+                        if (c == '[') ++depth;
+                        else if (c == ']') --depth;
+                        else if (c == '>' && depth <= 0) { ok = true; return true; }
+                    }
+                    ok = fail("unterminated DOCTYPE");
+                    return true;
+                }
+                return false;
+            }
+
+            bool element(Element& e, int depth) {
+                if (depth > 256)
+                    return fail("elements nested too deeply");
+                assert(peek() == '<');
+                ++pos;
+                if (!name(e.name))
                     return false;
+                for (;;) {
+                    std::size_t before = pos;
+                    skip_space();
+                    if (starts_with("/>")) {
+                        pos += 2;
+                        return true;
+                    }
+                    if (peek() == '>') {
+                        ++pos;
+                        break;
+                    }
+                    if (pos == before)
+                        return fail("expected whitespace before attribute");
+                    std::string_view key;
+                    if (!name(key))
+                        return false;
+                    skip_space();
+                    if (peek() != '=')
+                        return fail("expected '=' after attribute name");
+                    ++pos;
+                    skip_space();
+                    char q = peek();
+                    if (q != '"' && q != '\'')
+                        return fail("expected quoted attribute value");
+                    ++pos;
+                    std::string value;
+                    if (!decode_until(value, q == '"' ? "\"<" : "'<"))
+                        return false;
+                    if (peek() != q)
+                        return fail("unterminated attribute value");
+                    ++pos;
+                    for (auto const& [k, v] : e.attributes)
+                        if (k == key)
+                            return fail("duplicate attribute");
+                    e.attributes.emplace_back(key, std::move(value));
                 }
-                v.reset(u);
-                //print(c);
-                cs.push_back(std::move(c));
-                return true;
-            }, cs);
+                // Content
+                for (;;) {
+                    if (at_end())
+                        return fail("unterminated element");
+                    if (starts_with("</")) {
+                        pos += 2;
+                        std::string_view end_name;
+                        if (!name(end_name))
+                            return false;
+                        if (end_name != e.name)
+                            return fail("mismatched end tag");
+                        skip_space();
+                        if (peek() != '>')
+                            return fail("expected '>' to close end tag");
+                        ++pos;
+                        return true;
+                    }
+                    if (starts_with("<![CDATA[")) {
+                        pos += 9;
+                        std::size_t k = src.find("]]>", pos);
+                        if (k == std::string_view::npos)
+                            return fail("unterminated CDATA section");
+                        e.text.append(src.substr(pos, k - pos));
+                        pos = k + 3;
+                        continue;
+                    }
+                    bool ok = true;
+                    if (misc(ok)) {
+                        if (!ok)
+                            return false;
+                        continue;
+                    }
+                    if (peek() == '<') {
+                        Element child;
+                        bool ok2 = element(child, depth + 1);
+                        e.children.push_back(std::move(child));
+                        if (!ok2)
+                            return false;
+                        continue;
+                    }
+                    if (!decode_until(e.text, "<"))
+                        return false;
+                }
+            }
+
+            void document() {
+                // A UTF-8 byte order mark is permitted.
+                if (starts_with("\xEF\xBB\xBF"))
+                    pos += 3;
+                for (;;) {
+                    skip_space();
+                    if (at_end())
+                        break;
+                    bool ok = true;
+                    if (misc(ok)) {
+                        if (!ok)
+                            return;
+                        continue;
+                    }
+                    if (peek() != '<') {
+                        fail("character data outside the root element");
+                        return;
+                    }
+                    Element e;
+                    bool ok2 = element(e, 0);
+                    doc.root.children.push_back(std::move(e));
+                    if (!ok2)
+                        return;
+                }
+                if (doc.ok() && doc.root.children.empty())
+                    fail("no root element");
+            }
+
+        };
+
+    } // namespace
+
+    Document parse(std::string_view source) {
+        Parser p{source};
+        p.document();
+        return std::move(p.doc);
+    }
+
+    void print(Element const& a, int depth) {
+        printf("%*s<%.*s", 2 * depth, "", (int)a.name.size(), a.name.data());
+        for (auto const& [k, v] : a.attributes)
+            printf(" %.*s=\"%s\"", (int)k.size(), k.data(), v.c_str());
+        if (a.children.empty() && a.text.empty()) {
+            printf("/>\n");
+            return;
         }
-        
+        printf(">%s\n", a.text.c_str());
+        for (auto const& b : a.children)
+            print(b, depth + 1);
+        printf("%*s</%.*s>\n", 2 * depth, "", (int)a.name.size(), a.name.data());
+    }
+
+    namespace {
+
         define_test("xml") {
-            char const* input_circle_svg = R"(<svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="#1f1f1f"><path d="M480-640 280-440l56 56 104-103v407h80v-407l104 103 56-56-200-200ZM146-260q-32-49-49-105T80-480q0-83 31.5-156T197-763q54-54 127-85.5T480-880q83 0 156 31.5T763-763q54 54 85.5 127T880-480q0 59-17 115t-49 105l-58-58q22-37 33-78t11-84q0-134-93-227t-227-93q-134 0-227 93t-93 227q0 43 11 84t33 78l-58 58Z"/></svg>)";
-            
-            StringView v{input_circle_svg};
-            
-            auto cs = parse(v);
-            
-            //for (auto& c : cs) {
-            //    print(c);
-            //}
+
+            // Declaration, comments, nesting, empty elements, both quote
+            // styles, entities, hyphenated and prefixed names.
+            {
+                auto d = parse(R"(<?xml version="1.0" encoding="UTF-8"?>
+<!-- a comment -->
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd" [ <!ENTITY e "x"> ]>
+<svg xmlns:xlink='http://www.w3.org/1999/xlink' viewBox="0 0 10 10">
+  <!-- inner -- comment -->
+  <g fill-rule="evenodd"><path d="M0 0"/><rect width = "1" /></g>
+  <text>a &lt;b&gt; &amp; &#65;&#x42;<![CDATA[<raw>]]></text>
+</svg>
+<!-- trailing -->)");
+                assert(d.ok());
+                assert(d.root.children.size() == 1);
+                auto const& svg = d.root.children[0];
+                assert(svg.name == "svg");
+                assert(svg.attribute("xmlns:xlink"));
+                assert(*svg.attribute("viewBox") == "0 0 10 10");
+                assert(!svg.attribute("width"));
+                assert(svg.children.size() == 2);
+                auto const& g = svg.children[0];
+                assert(*g.attribute("fill-rule") == "evenodd");
+                assert(g.children.size() == 2);
+                assert(g.children[0].name == "path");
+                assert(*g.children[1].attribute("width") == "1");
+                auto const& t = svg.children[1];
+                assert(t.text == "a <b> & AB<raw>");
+            }
+
+            // Errors are reported, not thrown, and keep the partial tree.
+            {
+                auto d = parse("<a><b></a>");
+                assert(!d.ok());
+                assert(d.error == "mismatched end tag");
+                d = parse("<a x=1/>");
+                assert(!d.ok());
+                d = parse("<a x='1' x='2'/>");
+                assert(!d.ok());
+                d = parse("<a>&nbsp;</a>");
+                assert(!d.ok());
+                d = parse("<a><!-- open");
+                assert(!d.ok());
+                d = parse("");
+                assert(!d.ok());
+            }
 
             co_return;
         };
-        
-    } // namespace anonymous
-    
-    std::vector<Content> parse(StringView& v) {
-        std::vector<Content> result;
-        while (parse_content(result)(v))
-            ;
-        return result;
-    }
-    
-    void print(Content const& a) {
-        switch (a.tag) {
-            case Content::TEXT:
-                print(a.text); printf("\n");
-                break;
-            case Content::ELEMENT:
-                printf("<");
-                print(a.name);
-                for (auto& [b, c] : a.attributes) {
-                    printf(" ");
-                    print(b);
-                    printf("=\"");
-                    print(c);
-                    printf("\"");
-                }
-                if (a.content.empty()) {
-                    printf("/>\n");
-                } else {
-                    for (auto& b : a.content) {
-                        print(b);
-                    }
-                    printf("</");
-                    print(a.name);
-                    printf(">\n");
-                }
-                break;
-            default:
-                printf("Content::tag = %d\n", a.tag);
-                break;
-        }
-    }
+
+    } // namespace
 
 } // namespace wry::xml
