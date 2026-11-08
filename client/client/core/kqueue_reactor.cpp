@@ -925,10 +925,80 @@ namespace wry {
 
     }
 
+    // The deadline and the inner's completion coincide: an inner already
+    // past its cancellation point (recv_some after the recv, accept_one
+    // after the accept) completes with its value even though the deadline's
+    // stop request has reached it.  This inner makes the coincidence
+    // deterministic: it parks a stop callback on its token and, when the
+    // deadline requests it, completes with a VALUE instead of stopping.  The
+    // value must reach the caller; nullopt here is a consumed effect lost
+    struct StopToValueSender {
+        int _value;
+    };
+
+} // namespace wry
+
+namespace wry::execution {
+    template<>
+    struct SenderTraits<wry::StopToValueSender> {
+        using value_type = int;
+    };
+} // namespace wry::execution
+
+namespace wry {
+
+    template<typename R>
+    struct StopToValueOperationState {
+        struct Fire {
+            StopToValueOperationState* _op;
+            void operator()() {
+                // Runs inside the deadline's request_stop.  Last touch of the
+                // operation state (and of this functor, which it owns): the
+                // completion may destroy both, which is allowed for a
+                // stop_callback destroyed on the thread running it
+                StopToValueOperationState* op = _op;
+                int value = op->_value;
+                set_value(std::move(op->_receiver), std::move(value));
+            }
+        };
+        int _value;
+        R _receiver;
+        std::optional<std::stop_callback<Fire>> _callback;
+        template<typename R2>
+        StopToValueOperationState(int value, R2&& receiver)
+        : _value(value), _receiver(std::forward<R2>(receiver)) {}
+        StopToValueOperationState(StopToValueOperationState const&) = delete;
+    };
+
+    template<typename R>
+    auto connect(StopToValueSender&& sender, R&& receiver) {
+        return StopToValueOperationState<std::remove_cvref_t<R>>(sender._value, std::forward<R>(receiver));
+    }
+
+    template<typename R>
+    void start(StopToValueOperationState<R>& op) {
+        std::stop_token token = get_stop_token(op._receiver);
+        assert(!token.stop_requested());  // the test's deadline is in the future
+        op._callback.emplace(std::move(token), typename StopToValueOperationState<R>::Fire{&op});
+    }
+
+    define_test("kqueue_with_deadline_value_at_deadline", test_exclusive) {
+        FrameCensus census = co_await FrameCensus::open("kqueue_with_deadline_value_at_deadline");
+        for (int i = 0; i != 4; ++i) {
+            auto t0 = steady_clock::now();
+            auto r = co_await with_deadline(t0 + milliseconds(20), StopToValueSender{42 + i});
+            // Completed at the deadline, and with the inner's value
+            assert(steady_clock::now() - t0 >= milliseconds(15));
+            assert(r.has_value() && (*r == 42 + i));
+        }
+        co_await census.drained();
+        co_return;
+    };
+
     define_test("kqueue_with_deadline_senders", test_exclusive) {
         FrameCensus census = co_await FrameCensus::open("kqueue_with_deadline_senders");
-        // with_deadline is a race (inner, timer) over any sender, not only a
-        // Future; each case must also withdraw its 10 second timer promptly
+        // with_deadline takes any sender, not only a Future; each case must
+        // also withdraw its 10 second timer promptly
         auto t0 = steady_clock::now();
 
         // A sender that completes inside start wins at once; the timer

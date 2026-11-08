@@ -93,34 +93,30 @@ namespace wry {
     cancelable_sleep(double seconds);
 
 
-    // ---- with_deadline: a race of the inner against a timer ---------------
+    // ---- with_deadline: the inner, hastened by a timer -----------------------
     //
     //   optional<T> r = co_await with_deadline(t, sender);
     //
-    // A two-entrant race under one interior stop source: entrant 0 is the
-    // inner under stopped_as_optional, entrant 1 a timer that yields nullopt
-    // at the deadline.  Whichever completes first hastens the other through
-    // the interior source; the outer's token is bridged into it.  So the
-    // inner's value or error wins if it comes first, and nullopt wins when
-    // the deadline passes (the inner is then cancelled) or when the inner
-    // stops of its own accord (the timer is then withdrawn).  The race
-    // delivers once BOTH entrants have retired.
+    // The inner runs under an interior stop source; the outer's token is
+    // bridged into it, and a timer requests it at the deadline.  The timer
+    // is NOT an entrant that can win: it only asks the inner to stop, and
+    // the inner's own completion always decides the result.  So
     //
-    // Unlike a plain stopped_as_optional, the outer's own request is not
-    // absorbed: a nullopt that is delivered while the outer's token is
-    // requested becomes stopped (the bridge cancelled both entrants; the
-    // awaiting frame unwinds).  A value that wins is delivered even if the
-    // outer is requested by then, as for any sender that completes before
-    // it sees the request.
-
-    template<typename U>
-    coroutine::Future<std::optional<U>> deadline_timer(std::chrono::steady_clock::time_point deadline) {
-        // Measured when the race starts this entrant.  A stop request on the
-        // interior token withdraws the sleep and destroys this frame, which
-        // is the timer's stopped completion
-        co_await cancelable_sleep(std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count());
-        co_return std::nullopt;
-    }
+    //   inner value     -> engaged, even if the deadline fired meanwhile (an
+    //                      inner past its cancellation point, which has
+    //                      consumed bytes, an fd or an event batch, completes
+    //                      with them and they reach the caller)
+    //   inner error     -> the error
+    //   inner stopped   -> nullopt (it honoured the deadline, or stopped of
+    //                      its own accord), unless the outer's token is
+    //                      requested, in which case stopped: the outer's own
+    //                      request propagates instead of being absorbed
+    //
+    // The inner's completion requests the interior source before
+    // delivering, which withdraws an unfired timer synchronously; a timer
+    // that has already fired holds only its own copy of the source (shared
+    // stop state), so it outlives this operation state harmlessly and its
+    // late request is idempotent.
 
     template<execution::Sender S>
     struct WithDeadlineSender {
@@ -140,48 +136,130 @@ namespace wry::execution {
 
 namespace wry {
 
-    // The race's receiver: unwraps the winner and propagates the outer's
-    // request (see above)
+    // Everything the inner's receiver touches; independent of the inner's
+    // operation state type
     template<typename V, typename R>
-    struct DeadlineReceiver {
+    struct WithDeadlineBase {
+
+        using U = typename execution::Outcome<V>::stored_type;
+
+        struct Requester {
+            std::stop_source _stop_source;
+            void operator()() {
+                // Local copy: the unwinding this request causes may destroy
+                // the operation state that owns this functor
+                std::stop_source keepalive = _stop_source;
+                keepalive.request_stop();
+            }
+        };
+
         R _receiver;
+        std::chrono::steady_clock::time_point _deadline;
+        std::stop_source _stop_source;                          // interior
+        std::optional<std::stop_callback<Requester>> _bridge;   // outer -> interior
+
+        template<typename R2>
+        WithDeadlineBase(R2&& receiver, std::chrono::steady_clock::time_point deadline)
+        : _receiver(std::forward<R2>(receiver))
+        , _deadline(deadline) {
+        }
+
+        WithDeadlineBase(WithDeadlineBase const&) = delete;
+
+        // Each runs on the inner's completion thread, after the inner's
+        // last touch of itself; each is the last touch of *this
+        void _deliver_value(std::optional<U>&& value) {
+            _stop_source.request_stop();  // withdraw the timer
+            set_value(std::move(_receiver), std::move(value));
+        }
+
+        void _deliver_error(std::exception_ptr&& error) {
+            _stop_source.request_stop();
+            set_error(std::move(_receiver), std::move(error));
+        }
+
+        void _deliver_stopped() {
+            _stop_source.request_stop();
+            // If the outer's request is why the inner stopped, it reached
+            // the inner through the bridge, a callback that request_stop
+            // runs after setting the outer's stop flag; the inner observed
+            // the interior request and its stopped completion is caused by
+            // it, so the flag store happens before this load and it reads
+            // requested.  An outer request that races an inner stopping for
+            // another reason may go either way, which is the same as any
+            // sender that completes before it sees the request
+            if (get_stop_token(_receiver).stop_requested())
+                set_stopped(std::move(_receiver));
+            else
+                set_value(std::move(_receiver), std::optional<U>{});
+        }
+
     };
 
     template<typename V, typename R>
-    void set_value(DeadlineReceiver<V, R>&& receiver, execution::RaceWinner<std::optional<V>>&& winner) {
-        // The race delivers on the last retiree's thread.  The bridge is a
-        // stop_callback on the outer's token, so a request that reached the
-        // entrants happened before their retires, which the race's acq_rel
-        // retire count orders before this delivery: if the outer's request
-        // is why the winner was nullopt, this load sees it
-        if (!winner.value && get_stop_token(receiver._receiver).stop_requested())
-            set_stopped(std::move(receiver._receiver));
-        else
-            set_value(std::move(receiver._receiver), std::move(winner.value));
+    struct WithDeadlineReceiver {
+        WithDeadlineBase<V, R>* _base;
+    };
+
+    template<typename V, typename R>
+    void set_value(WithDeadlineReceiver<V, R>&& receiver, V&& value) {
+        receiver._base->_deliver_value(std::optional<V>{std::move(value)});
+    }
+
+    template<typename R>
+    void set_value(WithDeadlineReceiver<void, R>&& receiver) {
+        receiver._base->_deliver_value(std::optional<std::monostate>{std::in_place});
     }
 
     template<typename V, typename R>
-    void set_error(DeadlineReceiver<V, R>&& receiver, std::exception_ptr&& error) {
-        set_error(std::move(receiver._receiver), std::move(error));
+    void set_error(WithDeadlineReceiver<V, R>&& receiver, std::exception_ptr&& error) {
+        receiver._base->_deliver_error(std::move(error));
     }
 
     template<typename V, typename R>
-    void set_stopped(DeadlineReceiver<V, R>&& receiver) {
-        // Only if both entrants stopped; stopped_as_optional never does
-        set_stopped(std::move(receiver._receiver));
+    void set_stopped(WithDeadlineReceiver<V, R>&& receiver) {
+        receiver._base->_deliver_stopped();
     }
 
     template<typename V, typename R>
-    std::stop_token get_stop_token(DeadlineReceiver<V, R> const& receiver) {
-        return get_stop_token(receiver._receiver);
+    std::stop_token get_stop_token(WithDeadlineReceiver<V, R> const& receiver) {
+        return receiver._base->_stop_source.get_token();
+    }
+
+    template<execution::Sender S, typename R>
+    struct WithDeadlineOperationState : WithDeadlineBase<execution::SenderValueType<S>, R> {
+
+        using V = execution::SenderValueType<S>;
+        using Inner = decltype(connect(std::declval<S&&>(), std::declval<WithDeadlineReceiver<V, R>&&>()));
+
+        Inner _inner;
+
+        template<typename R2>
+        WithDeadlineOperationState(S&& sender, std::chrono::steady_clock::time_point deadline, R2&& receiver)
+        : WithDeadlineBase<V, R>(std::forward<R2>(receiver), deadline)
+        , _inner(connect(std::move(sender), WithDeadlineReceiver<V, R>{this})) {
+        }
+
+    };
+
+    template<execution::Sender S, typename R>
+    void start(WithDeadlineOperationState<S, R>& op) {
+        using Requester = typename WithDeadlineBase<execution::SenderValueType<S>, R>::Requester;
+        // The bridge fires here if the outer is already requested; the timer
+        // is then never armed and the inner starts under a requested token
+        op._bridge.emplace(get_stop_token(op._receiver), Requester{op._stop_source});
+        cancelable_after(op._stop_source.get_token(),
+                         op._deadline - std::chrono::steady_clock::now(),
+                         Requester{op._stop_source});
+        // last touch of op: the inner may complete inside its start
+        start(op._inner);
     }
 
     template<execution::Sender S, typename R>
     auto connect(WithDeadlineSender<S>&& sender, R&& receiver) {
-        using V = typename execution::Outcome<execution::SenderValueType<S>>::stored_type;
-        return connect(execution::when_any(execution::stopped_as_optional(std::move(sender._sender)),
-                                           deadline_timer<V>(sender._deadline)),
-                       DeadlineReceiver<V, std::remove_cvref_t<R>>{std::forward<R>(receiver)});
+        return WithDeadlineOperationState<S, std::remove_cvref_t<R>>(std::move(sender._sender),
+                                                                     sender._deadline,
+                                                                     std::forward<R>(receiver));
     }
 
     template<execution::Sender S>
