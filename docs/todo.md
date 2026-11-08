@@ -17,6 +17,7 @@
 - Decouple the glyphs from the tile SDF.  Draw them all as decals (or, to optimize the common case, combine two textures in the raymarcher)
 - Generalize the 2D interpolated + 1D analytic SDF to support full analytic.  Superellipsoids?
 - Data driven: try to move properties out of the executable and into data files as much as possible.  e.g. prices, opcode \_displayed\_ names, help text etc.
+  - PROPOSAL 2026-11-08: docs/data_driven.md (presentation tables now as JSON; simulation tables stay compiled until a scenario needs them, then become World state; four decisions listed)
 - Context help for item under cursor: hover or side panel like Factorio
 - Command help: show some key suggestions, e.g. depending on symmetry of what is held, show [R], [SHIFT]+[R] or [H],[L]
   - DONE 2026-11-08: a hint line centred over the palette while holding (WorldState::hand_hint): only the reorientations that change the held opcode, by its symmetry class (direction-like: rotate both ways + the one mirror that moves it; axis-like: rotate; handedness-like: one "mirror"), with the live keymap's combos, then [click] place and [Esc] drop.  Test world_state_hand_hint
