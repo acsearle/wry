@@ -138,9 +138,17 @@ namespace wry {
     // The seed of the starting world: elevation 20, deposits 840..842
     inline constexpr uint64_t WORLD_SEED_DEFAULT = 20;
 
-    // The chunk index holding cell coordinate v (floor division)
+    static_assert(TERRAIN_CHUNK == 16, "terrain_chunk_of shifts by log2(TERRAIN_CHUNK)");
+
+    // The chunk index holding cell coordinate v: floor division, as an
+    // arithmetic shift (defined for negatives since C++20), so it holds at
+    // INT32_MIN too.  Coordinates are i32 and wrap, so chunk indices live
+    // in [-2^27, 2^27); terrain_chunk_wrap brings cx +/- 1 back into it.
     constexpr int32_t terrain_chunk_of(int32_t v) {
-        return (v >= 0) ? (v / TERRAIN_CHUNK) : -((-v + TERRAIN_CHUNK - 1) / TERRAIN_CHUNK);
+        return v >> 4;
+    }
+    constexpr int32_t terrain_chunk_wrap(int32_t c) {
+        return (int32_t)(((uint32_t)c + (1u << 27)) & ((1u << 28) - 1u)) - (int32_t)(1u << 27);
     }
 
     // The chunk (cx, cy) of the terrain of `seed`, row-major from its

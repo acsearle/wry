@@ -27,10 +27,16 @@ namespace wry {
         _gui.on_quit = [this] { _done = true; };
         // `new-game` and `load` at the menu (its buttons issue them) built
         // a world: shown from the next frame
+        // The later of the two in one frame wins, as in the windowed host:
+        // a world built after `main-menu` cancels it, and `main-menu` after
+        // a world built drops that world at the end of the frame
         _gui.on_world = [this](std::shared_ptr<WorldState> world) {
             _next_world = std::move(world);
+            _to_menu = false;
         };
         // `main-menu`: the world is dropped at the end of this frame
+        // (nothing is destroyed here: the command may be running on the
+        // very world being dropped; the end of the frame drops it)
         _gui.on_main_menu = [this] { _to_menu = true; };
     }
 
@@ -119,6 +125,7 @@ namespace wry {
         if (_to_menu) {
             _to_menu = false;
             _world.reset();
+            _next_world.reset();   // a world built earlier this frame goes too
         }
 
         // A menu button built a world this frame: show it from the next.

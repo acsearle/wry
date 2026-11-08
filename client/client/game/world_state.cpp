@@ -365,10 +365,13 @@ namespace wry {
         install_displayed_world(*this, world);
     }
 
-    void WorldState::load_from_save(int id) {
+    bool WorldState::load_from_save(int id) {
         World* world = load_game(id);
+        if (!world)
+            return false;
         _start_hosting((uint64_t)world->_time);
         install_displayed_world(*this, world);
+        return true;
     }
 
     // ---- The session --------------------------------------------------
@@ -387,9 +390,13 @@ namespace wry {
             install_displayed_world(*this, make_starting_world());
             return;
         }
-        if (save)
-            load_from_save(*save);
-        else
+        if (save && !load_from_save(*save)) {
+            // the `load` command checks first, so only a file that changed
+            // under us lands here: a new game rather than nothing
+            _gui.append_log(String("That save could not be loaded; a new game instead"));
+            save.reset();
+        }
+        if (!save)
             new_game();
         if (_gui.host_port) {
             auto bound = host_listen(*_gui.host_port);
@@ -1572,9 +1579,16 @@ namespace wry {
                 const std::optional<int> id = save_named(name);
                 if (!id)
                     return Reply::error(widen("no save named " + narrow(name)));
-                if (!c.world)
+                // Refused files (an older save version, a hash the rebuilt
+                // World does not reproduce, damage) are an error here, not
+                // an empty world hosted as if it had loaded
+                if (!c.world) {
+                    if (!load_game(*id))
+                        return Reply::error(widen(narrow(name) + " could not be loaded (an older save version, or damaged)"));
                     return show_new_world(c, id);
-                c.world->load_from_save(*id);
+                }
+                if (!c.world->load_from_save(*id))
+                    return Reply::error(widen(narrow(name) + " could not be loaded (an older save version, or damaged)"));
                 return Reply::ok();
             }));
 

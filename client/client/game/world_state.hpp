@@ -377,7 +377,8 @@ namespace wry {
         // exactly the one displayed world, so draining and refilling it is
         // race-free.  Defined in model.cpp (needs io/save.hpp).
         void new_game();
-        void load_from_save(int id);
+        // False, changing nothing, if the save cannot be loaded
+        bool load_from_save(int id);
 
         // Serialize the displayed world to a new save file, in the
         // background (io/save.hpp): `on_done(id)` runs on a worker thread

@@ -20,8 +20,10 @@
 namespace wry {
 
 World* restart_game();
-World* continue_game();
-World* load_game(int id);
+// Null if there is no such save or this build refuses it (older version,
+// hash mismatch, damage)
+World* _Nullable continue_game();
+World* _Nullable load_game(int id);
 // Synchronous save; returns false on any I/O failure.  On failure the temp file
 // is discarded, so a failed save leaves no file rather than a corrupt one.
 bool save_game(const World* world);

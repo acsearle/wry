@@ -239,7 +239,7 @@ namespace wry {
     World* load_game(int id) {
         auto path = save_path_for_id(id);
         std::ifstream in(path, std::ios::binary | std::ios::ate);
-        if (!in) return new World;
+        if (!in) return nullptr;
         std::streamsize sz = in.tellg();
         in.seekg(0, std::ios::beg);
 
@@ -249,10 +249,11 @@ namespace wry {
         Loader L;
         L._cursor = buf.data();
         L._end    = buf.data() + buf.size();
-        World* w = L.load_and_commission();
-        // Version-rejected (or otherwise unreadable) file: empty world, the
-        // same fallback as an absent file.
-        return w ? w : new World;
+        // Null for a file this build refuses (an older version, a hash the
+        // rebuilt World does not reproduce, damage): the caller reports it.
+        // It used to fall back to an empty, unsealed `new World`, which the
+        // session then hosted as if it had loaded
+        return L.load_and_commission();
     }
 
     World* load_world_from_bytes(std::span<const uint8_t> bytes) {
@@ -272,7 +273,7 @@ namespace wry {
             if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1)
                 best_id = std::max(best_id, id);
         }
-        if (best_id < 0) return new World;
+        if (best_id < 0) return nullptr;
         return load_game(best_id);
     }
 

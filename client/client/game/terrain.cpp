@@ -138,7 +138,12 @@ namespace wry {
 
     bool ensure_terrain_chunk(uint64_t seed, WaitableMap<Coordinate, Terrain>& terrain,
                               int32_t cx, int32_t cy) {
-        const Coordinate corner{cx * TERRAIN_CHUNK, cy * TERRAIN_CHUNK};
+        // the chunk at the coordinate seam is the same chunk however its
+        // index was reached (cx + 1 from the last chunk is the first);
+        // unsigned arithmetic, so nothing here overflows
+        cx = terrain_chunk_wrap(cx);
+        cy = terrain_chunk_wrap(cy);
+        const Coordinate corner{(int32_t)((uint32_t)cx << 4), (int32_t)((uint32_t)cy << 4)};
         Terrain t = -1;
         if (terrain.try_get(corner, t))
             return false;
@@ -146,7 +151,8 @@ namespace wry {
         generate_terrain_chunk(seed, cx, cy, cells);
         for (int32_t j = 0; j != TERRAIN_CHUNK; ++j) {
             for (int32_t i = 0; i != TERRAIN_CHUNK; ++i) {
-                Coordinate xy{corner.x + i, corner.y + j};
+                Coordinate xy{(int32_t)((uint32_t)corner.x + (uint32_t)i),
+                              (int32_t)((uint32_t)corner.y + (uint32_t)j)};
                 // never overwrite: a cell set by hand (a pier, a test)
                 // stands
                 if (!terrain.try_get(xy, t))
@@ -215,6 +221,11 @@ namespace wry {
         static_assert(terrain_chunk_of(16) == 1);
         static_assert(terrain_chunk_of(-1) == -1);
         static_assert(terrain_chunk_of(-16) == -1);
+        static_assert(terrain_chunk_of(INT32_MIN) == -(1 << 27));
+        static_assert(terrain_chunk_of(INT32_MAX) == (1 << 27) - 1);
+        static_assert(terrain_chunk_wrap((1 << 27)) == -(1 << 27));
+        static_assert(terrain_chunk_wrap(-(1 << 27) - 1) == (1 << 27) - 1);
+        static_assert(terrain_chunk_wrap(5) == 5);
         static_assert(terrain_chunk_of(-17) == -2);
         World* w = new World;
         w->_seed = WORLD_SEED_DEFAULT;
@@ -237,6 +248,17 @@ namespace wry {
                 differ += (other[k] != cells[k]);
         }
         assert(differ > 0);
+        // The coordinate seam: making the chunks around the last cell makes
+        // the first chunk too, with its own content
+        {
+            WaitableMap<Coordinate, Terrain> seam;
+            (void) ensure_terrain_around(WORLD_SEED_DEFAULT, seam, Coordinate{INT32_MAX, 0});
+            Terrain c[TERRAIN_CHUNK * TERRAIN_CHUNK];
+            generate_terrain_chunk(WORLD_SEED_DEFAULT, -(1 << 27), 0, c);
+            Terrain t = -1;
+            CHECK(seam.try_get(Coordinate{INT32_MIN + 3, 5}, t));
+            assert(t == c[5 * TERRAIN_CHUNK + 3]);
+        }
         // making an existing chunk is a no-op, and never overwrites
         w->_terrain_for_coordinate.set(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, TERRAIN_ROCK);
         assert(!ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 0, 0));

@@ -6,6 +6,7 @@
 //
 
 // Shared Metal header first for no contamination
+#include <cmath>
 #include "ShaderTypes.h"
 
 #include <algorithm>
@@ -180,10 +181,22 @@
 }
 
 - (void)setFontPixelsPerPoint:(float)pixelsPerPoint {
+    if (!std::isfinite(pixelsPerPoint))
+        return;
     const float clamped = std::clamp(pixelsPerPoint, 0.25f,
                                      wry::Font::max_pixels_per_point);
     if (clamped == _font->pixels_per_point)
         return;
+    // The rebuild rewrites the atlas's font texels in place (replaceRegion),
+    // which frames already committed may still be sampling.  Wait for them:
+    // an empty command buffer on the same queue completes after every
+    // buffer committed before it (Metal runs one queue's buffers in commit
+    // order; the transient arena relies on the same, WryBufferArena.mm).  A blocking wait of a frame or two, once
+    // per scale change.
+    id<MTLCommandBuffer> drain = [_commandQueue commandBuffer];
+    drain.label = @"Drain before font rebuild";
+    [drain commit];
+    [drain waitUntilCompleted];
     *_font = wry::build_font(*_atlas, clamped);
 }
 

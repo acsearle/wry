@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 2026-08-11.
 //
 
+#include <cmath>
 #include <unistd.h>
 
 #include <algorithm>
@@ -142,6 +143,12 @@ namespace wry {
                 if (!v.is_number()) {
                     _warn(warnings,
                           {"settings.json: 'ui_scale' is not a number; "
+                           "keeping its default"});
+                } else if (!std::isfinite(v.as_number())) {
+                    // NaN would pass through the clamp (both comparisons
+                    // false) and reach the font size
+                    _warn(warnings,
+                          {"settings.json: 'ui_scale' is not finite; "
                            "keeping its default"});
                 } else {
                     const double x = v.as_number();
