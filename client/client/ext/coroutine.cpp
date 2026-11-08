@@ -29,7 +29,7 @@ namespace wry {
         global_work_queue_schedule(handle.address());
     }
 
-    inline void global_work_queue_schedule_destroy_by_address(void* ptr) {
+    void global_work_queue_schedule_destroy_by_address(void* ptr) {
         struct DestroyThunk {
             coroutine::Header _header = { &_static_destroy, &_static_destroy };
             void* continuation = nullptr;
