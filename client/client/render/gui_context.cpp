@@ -1148,18 +1148,31 @@ namespace wry {
             }));
 
         registry.add(make_command<Ctx>(
-            "click", "Inject a click (move, button down, button up)", Category::local,
+            "click", "Inject a click (move, button down, button up), or just its down or up half", Category::local,
             std::tuple{
                 Param<Ctx, int64_t>{"x", "points from the left"},
                 Param<Ctx, int64_t>{"y", "points from the top"},
                 Param<Ctx, String>{"button", "left, right or middle", String("left"), nullptr,
                                    {"left", "right", "middle"}},
+                Param<Ctx, String>{"action", "press, down or up", String("press"), nullptr,
+                                   {"press", "down", "up"}},
             },
-            [](Ctx& c, int64_t x, int64_t y, String const& name) {
+            [](Ctx& c, int64_t x, int64_t y, String const& name, String const& action) {
                 auto button = button_from_name(name);
                 if (!button)
                     return Reply::error(button.error());
-                inject_click(c.gui, float2{(float)x, (float)y}, *button);
+                const bool down = action == StringView("press") || action == StringView("down");
+                const bool up = action == StringView("press") || action == StringView("up");
+                if (!down && !up)
+                    return Reply::error(String("action must be press, down or up"));
+                // A drag is a down, mouse-moves, and an up: each half
+                // moves the pointer to where it happens first.
+                const float2 at{(float)x, (float)y};
+                inject_pointer(c.gui, WryEventKindMouseMove, at, *button);
+                if (down)
+                    inject_pointer(c.gui, WryEventKindMouseDown, at, *button);
+                if (up)
+                    inject_pointer(c.gui, WryEventKindMouseUp, at, *button);
                 return Reply::ok();
             }));
 
@@ -1829,7 +1842,7 @@ namespace wry {
         }
         assert(status_by_id["1"] == "ok" && line_by_id["1"] == "help \"help\"");
         assert(status_by_id["two"] == "ok");
-        assert(line_by_id["two"] == "click 3 4 \"right\"");
+        assert(line_by_id["two"] == "click 3 4 \"right\" \"press\"");
         // Two replies have id null: the bare line, and the request too
         // malformed to have an id.
         size_t null_ok = 0, null_error = 0;
@@ -1857,7 +1870,7 @@ namespace wry {
         bool from_socket = false;
         const std::string pid_suffix = " " + std::to_string(::getpid());
         for (auto const& e : gc.history)
-            if (e.line == StringView("click 3 4 \"right\"")) {
+            if (e.line == StringView("click 3 4 \"right\" \"press\"")) {
                 const std::string peer(e.peer.chars.begin(), e.peer.chars.end());
                 from_socket = (e.origin == Origin::socket) && peer.ends_with(pid_suffix);
             }

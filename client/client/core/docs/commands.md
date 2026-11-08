@@ -418,7 +418,8 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
   n times per frame: a measuring aid, see `gpu-time`),
   `pipette [Coordinate]` -- plus `drop`, `hold Term`.
 - **event injection** (local): `key KeyCombo [up|down|press]`,
-  `type String`, `mouse-move x y`, `click x y [button]`,
+  `type String`, `mouse-move x y`, `click x y [button] [press|down|up]`
+  (down, mouse-moves and up make a drag),
   `scroll dx dy`, `press label=String` (click the widget with that
   label).  Positions are in view points, top-left origin -- the
   `gui::Event` convention -- so injected events go through the same
