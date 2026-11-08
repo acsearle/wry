@@ -36,7 +36,8 @@ namespace wry {
 
     // Trigger the shutdown doorbell and join the reactor thread.  No-op if
     // the reactor was never started.  Call after all waits have completed
-    // (the wait group has drained) and before the worker pool is cancelled.
+    // (the root nursery in main has joined) and before the worker pool is
+    // cancelled.
     void global_reactor_stop();
 
 

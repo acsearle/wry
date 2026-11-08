@@ -243,7 +243,7 @@ namespace wry::coroutine {
                 // continuation BEFORE the destroy: the delegate may be parked
                 // inside this very frame (a nursery child's).  The hook only
                 // names the continuation; completion's side effects (a
-                // nursery's retire, the wait group's) belong to that
+                // nursery's retire) belong to that
                 // continuation's resume, which runs after the frame is gone
                 // TODO: should handle.destroy be moved inside delegate::final_await_suspend?
                 Delegate<T>* delegate = take(handle.promise()._delegate);

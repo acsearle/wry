@@ -109,7 +109,7 @@ namespace wry::coroutine {
         // co_await nursery.fork(foo(x)) immediately starts foo on the current
         // thread and schedules the caller to execute soon.  No target: foo's
         // value, if any, is discarded and an unhandled exception aborts (see
-        // BasicReturnChannel)
+        // Nursery::Inner::unhandled_exception)
         [[nodiscard]] auto fork(Future<>&& future) {
             struct Awaitable : std::suspend_always {
                 Nursery* _nursery;
