@@ -52,6 +52,12 @@
 @property (nonatomic, readonly, nonnull) wry::SpriteAtlas* atlas;
 @property (nonatomic, readonly, nonnull) wry::Font* font;
 
+// Environment maps already prefiltered this process, by resource name and
+// kind ("day/specular", "day/irradiance"): the world scene's lighting
+// prefilter costs ~250 ms of GPU per map (docs/async_loading.md), and a
+// new scene for every New Game would otherwise redo it.  Main thread only.
+@property (nonatomic, readonly, nonnull) NSMutableDictionary<NSString*, id<MTLTexture>>* environmentCache;
+
 // Rasterize the font afresh for a UI scale (GuiContext::pixels_per_point)
 // if it was built for another; the Font is replaced in place, so the
 // pointer stays valid.  The host calls this each frame before the scenes

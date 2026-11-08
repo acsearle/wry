@@ -29,6 +29,7 @@
 
 @implementation WryRenderContext
 {
+    NSMutableDictionary<NSString*, id<MTLTexture>>* _environmentCache;
     // C++ ivars for the shared 2D services.  The id<MTL*> / scalar
     // properties auto-synthesize their backing ivars; these don't, so they
     // are declared explicitly.  (_atlas / _font also serve as the backing
@@ -42,6 +43,12 @@
     id<MTLRenderPipelineState> _imageRenderPipelineState;
     // mip::downsample_kernel, made on first use
     id<MTLComputePipelineState> _mipPipelineState;
+}
+
+- (NSMutableDictionary<NSString*, id<MTLTexture>>*)environmentCache {
+    if (!_environmentCache)
+        _environmentCache = [NSMutableDictionary new];
+    return _environmentCache;
 }
 
 - (nonnull instancetype)initWithDevice:(nonnull id<MTLDevice>)device

@@ -296,6 +296,20 @@ struct WryNumberGlyph {
 // newTextureFromResource:) now live on WryRenderContext.  The renderer reaches
 // all of them through _ctx.
 
+// The prefiltered specular cube or the irradiance cube for an environment
+// PNG, made once per process (the render context's environmentCache)
+-(id<MTLTexture>)environmentNamed:(NSString*)name irradiance:(BOOL)irradiance {
+    NSString* key = [name stringByAppendingString:irradiance ? @"/irradiance" : @"/specular"];
+    if (id<MTLTexture> cached = _ctx.environmentCache[key])
+        return cached;
+    id<MTLTexture> t = irradiance
+        ? [self irradianceMapFromResource:name ofType:@"png"]
+        : [self prefilteredEnvironmentMapFromResource:name ofType:@"png"];
+    if (t)
+        _ctx.environmentCache[key] = t;
+    return t;
+}
+
 -(id<MTLTexture>)prefilteredEnvironmentMapFromResource:(NSString*)name ofType:ext {
     
     using namespace simd;
@@ -618,9 +632,9 @@ struct WryNumberGlyph {
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
         // Prefilter the environment map to approximate spectral lobes
-        _deferredLightImageBasedTexture = [self prefilteredEnvironmentMapFromResource:@"day" ofType:@"png"];
+        _deferredLightImageBasedTexture = [self environmentNamed:@"day" irradiance:NO];
         _loaded_environment = "day";
-        _deferredLightIrradianceTexture = [self irradianceMapFromResource:@"day" ofType:@"png"];
+        _deferredLightIrradianceTexture = [self environmentNamed:@"day" irradiance:YES];
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
         
@@ -2950,11 +2964,11 @@ struct WryNumberGlyph {
                 // (a few milliseconds of GPU, once)
                 if (_model->_environment != _loaded_environment) {
                     NSString* name = [NSString stringWithUTF8String:_model->_environment.c_str()];
-                    if (id<MTLTexture> t = [self prefilteredEnvironmentMapFromResource:name ofType:@"png"])
+                    if (id<MTLTexture> t = [self environmentNamed:name irradiance:NO])
                         _deferredLightImageBasedTexture = t;
                     // and the diffuse term's irradiance cube, or the scene
                     // keeps its ambient from the old sky
-                    if (id<MTLTexture> t = [self irradianceMapFromResource:name ofType:@"png"])
+                    if (id<MTLTexture> t = [self environmentNamed:name irradiance:YES])
                         _deferredLightIrradianceTexture = t;
                     _loaded_environment = _model->_environment;
                 }
