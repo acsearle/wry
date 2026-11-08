@@ -20,10 +20,6 @@
 #include "kqueue_reactor.hpp"
 #include "test.hpp"
 
-#if __has_feature(thread_sanitizer)
-#include <sanitizer/tsan_interface.h>
-#endif
-
 namespace wry {
 
     void global_work_queue_schedule(std::coroutine_handle<> handle) {
