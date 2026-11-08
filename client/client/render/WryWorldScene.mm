@@ -208,7 +208,8 @@ struct WryNumberGlyph {
     simd_float4 _false_coordinate;
     simd_float4 _cdot_coordinate;
     simd_float4 _border_coordinate;
-    simd_float4 _token_truck_coordinate;   // the machine's playing piece (atlas row 15)
+    simd_float4 _token_truck_coordinate;
+    std::string _loaded_environment;     // the name _deferredLightImageBasedTexture was made from   // the machine's playing piece (atlas row 15)
     simd_float4 _blank_coordinate;         // the plain tile numbers are printed on
     simd_float4 _dash_coordinate;          // the minus sign's glyph
     // The number tiles' abbreviations (number_caption.hpp): the decimal
@@ -578,6 +579,7 @@ struct WryNumberGlyph {
 
         // Prefilter the environment map to approximate spectral lobes
         _deferredLightImageBasedTexture = [self prefilteredEnvironmentMapFromResource:@"day" ofType:@"png"];
+        _loaded_environment = "day";
         _deferredLightIrradianceTexture = [self irradianceMapFromResource:@"day" ofType:@"png"];
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
@@ -2739,6 +2741,14 @@ struct WryNumberGlyph {
                 // 1 the two give a sunlit surface about equal shares
                 // (day.png's cosine-weighted mean radiance is about 0.2,
                 // the sun's share albedo * 0.8 / pi is 0.25)
+                // `environment NAME` swaps the map: prefilter the new one
+                // (a few milliseconds of GPU, once)
+                if (_model->_environment != _loaded_environment) {
+                    NSString* name = [NSString stringWithUTF8String:_model->_environment.c_str()];
+                    if (id<MTLTexture> t = [self prefilteredEnvironmentMapFromResource:name ofType:@"png"])
+                        _deferredLightImageBasedTexture = t;
+                    _loaded_environment = _model->_environment;
+                }
                 uniforms.ibl_scale = _model->_exposure;
                 uniforms.ibl_transform = matrix_identity_float3x3;
                 // TODO: resurrect blending

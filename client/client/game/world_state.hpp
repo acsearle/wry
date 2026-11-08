@@ -78,6 +78,11 @@ namespace wry {
         // added at 1/8).  Off: undecided whether we want it at all, and
         // computed-but-unshown it cost a full-screen blur every frame
         bool _show_bloom = false;
+        // The image-based light's environment: an equirectangular PNG in
+        // assets, by resource name (day.png, the outdoor default; room.png,
+        // indoors with a window, tools/make_room_env.py).  The renderer
+        // re-prefilters when it changes (`environment NAME`)
+        std::string _environment = "day";
         // The symbol slabs' ambient-occlusion decals (toggle-symbol-decals)
         bool _show_symbol_decals = true;
         // Screen-space ambient occlusion (the `ssao` command): WRY_SSAO_*

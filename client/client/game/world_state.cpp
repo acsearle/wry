@@ -1867,6 +1867,21 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
+            "environment", "Light the scene from an environment map in assets (day, room, ...)", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"name", "the PNG's name without .png: day (outdoors) or room (indoors)"},
+            },
+            with_world([](WorldState& ws, String const& name) {
+                std::string n((const char*)name.chars.data(), name.chars.size());
+                if (n.empty() || n.find_first_of("/\\.") != std::string::npos)
+                    return Reply::error(String("a bare resource name, e.g. day or room"));
+                if (!std::filesystem::exists(n + ".png"))
+                    return Reply::error(String(("no " + n + ".png in assets").c_str()));
+                ws._environment = n;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
             "toggle-bloom", "Show or hide screen-space bloom (undecided look option)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {

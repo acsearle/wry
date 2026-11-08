@@ -37,6 +37,7 @@
 - Investigate radiance cascade as a GTAO alternative.  Can we ditch the shadow map and directional light entirely?
   - INVESTIGATED 2026-11-08 -> docs/radiance_cascades.md
 - Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
+  - TRIED 2026-11-08: assets/room.png, a procedural room with a four-pane window (assets/tools/make_room_env.py: box room, window form factor lighting walls and floor), selectable live with `environment room` / `environment day` (re-prefiltered on change).  Effect is mild while the sun dominates: neutral instead of blue shadows (assets/environment_day_vs_room.png).  DECIDE: also move the sun to the window's direction and drop its strength indoors, or an HDR window (LDR caps the window at 1)
 - Bloom is calculated but not used.  Decide.
   - 2026-11-08: no longer computed unless shown: `toggle-bloom` (off by default) runs the blur and presents light + blur/8.  As built it blurs the HUD too (it runs after the composite-and-GUI pass) and, with no HDR highlights in the scene, reads as a uniform haze (assets/bloom_off_vs_on.png).  DECIDE: delete, or move before the GUI with a threshold
 - Make the palette a GUI widget
