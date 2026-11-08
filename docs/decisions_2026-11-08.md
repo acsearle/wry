@@ -60,9 +60,13 @@ roughly by how much they unblock.
     would take the scroll wheel from world panning while the console is open.
 14. **Named saves** (`save NAME`): saves are named only by file today, and
     names would need a format change.
-15. **Preload memory**: about 174 MiB of decoded assets is held from launch
-    until New Game. A follow-up (reusing decoded assets for later New Games)
-    is in progress.
+15. **Asset cache memory**: decoded assets and the Metal objects made from
+    them are now kept for the whole process (WryRenderContext.assetCache).
+    That makes a second New Game's scene setup 10 ms instead of 1.3 s
+    (Debug), and an `atlas` switch no longer stalls frames. The cache holds
+    about 237 MiB after the first world, plus about 101 MiB for each other
+    atlas shown, held even at the main menu, with no eviction. Is that
+    acceptable, or should it be evicted when you return to the menu?
 16. **GUI test suite default**: `--no-tests` opts out today. Keep running the
     suite beside the game, or make it opt-in?
 17. **UI scale**: add a control on the settings screen? The 32 pt cursor
