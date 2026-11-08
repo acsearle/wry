@@ -619,13 +619,77 @@ namespace wry::coroutine {
     // AwaitableBase holds everything the receiver touches and nothing that
     // depends on the operation state type, which breaks the awaitable ->
     // operation state -> receiver -> awaitable type cycle without virtuals.
-    // Completions are delivered on a pinned mutator thread and continue
-    // inline, like every other leaf.
+    //
+    // Who continues the awaiting frame.  Two parties finish with the
+    // awaitable: the receiver (one completion, from inside start or later on
+    // any pinned thread) and await_suspend (once start has returned).  Each
+    // performs one exchange_acq_rel(true) on _arrived; the one that reads
+    // true arrived SECOND and continues the frame -- resumes it for a value
+    // or an error, destroys it for stopped -- and the one that reads false
+    // arrived first and touches nothing of the awaitable afterwards (the
+    // second may destroy it at once).
+    //
+    //   inline (Just, a race of Justs, a Future that never parks): the
+    //   receiver runs inside start, records the outcome, reads false and
+    //   returns; start returns; await_suspend reads true and returns the
+    //   awaiting handle, a symmetric transfer back into the frame that is
+    //   already on this stack.  A loop over inline senders runs in constant
+    //   native stack (test coroutine_sender_inline_stack).
+    //
+    //   async (a leaf parks): start returns; await_suspend reads false and
+    //   returns noop_coroutine, suspending the frame; later the receiver
+    //   reads true and resumes the frame inside its own call, one nested
+    //   level, which unwinds when the frame next suspends.
+    //
+    //   async racing start: the completion arrives on another thread while
+    //   start is still running here.  Whichever exchange comes second in
+    //   _arrived's modification order continues; the other has already made
+    //   its last touch.  Both orders reduce to the two cases above.
+    //
+    // Orderings.  There are exactly two RMWs on _arrived, so the second
+    // reads the value written by the first.  The first is a release and the
+    // second an acquire (neither party knows in advance which it is, hence
+    // acq_rel for both), so the first synchronizes-with the second:
+    //   - receiver first: its plain writes of _outcome (and everything the
+    //     operation did before completing) happen before await_suspend reads
+    //     the outcome kind and the frame's await_resume takes it;
+    //   - await_suspend first: everything the awaiting thread did before
+    //     and during start happens before the receiver continues the frame
+    //     on its own thread (the frame's spilled state is usually published
+    //     already by whatever start used to hand the operation off, but this
+    //     edge does not rely on it).
+    // _outer_promise is read by get_stop_token while the operation runs and
+    // taken only by the second party, after the edge above, so neither the
+    // operation's reads nor the first party's assert race with the take.
+    //
+    // Completions are delivered on a pinned mutator thread, and an async
+    // completion continues the frame there, like every other leaf.
 
     template<typename OuterPromise, typename T>
     struct AwaitableBase {
         OuterPromise* _outer_promise;
         execution::Outcome<T> _outcome;
+        Atomic<bool> _arrived{false};
+
+        // The second party continues the frame: resume for a value or an
+        // error, destroy for stopped (the cancellation continues through
+        // the frame's ~Promise).  Last touch of *this on every path
+        void _continue_as_second() noexcept {
+            auto handle = handle_from_promise(take(_outer_promise));
+            if (_outcome.is_stopped())
+                handle.destroy();
+            else
+                handle.resume();
+        }
+
+        // The receiver's half: called after the outcome is recorded.  Last
+        // touch of *this on every path
+        void _receiver_arrives() noexcept {
+            if (_arrived.exchange_acq_rel(true))
+                _continue_as_second();
+            // else: await_suspend has not finished with start yet and will
+            // continue the frame; *this may already be gone
+        }
     };
 
     template<typename OuterPromise, typename T>
@@ -635,26 +699,30 @@ namespace wry::coroutine {
 
     template<typename OuterPromise, typename T>
     void set_value(AwaitableReceiver<OuterPromise, T>&& receiver, T&& value) {
-        set_value(receiver._base->_outcome, std::move(value));
-        handle_from_promise(take(receiver._base->_outer_promise)).resume();
-
+        AwaitableBase<OuterPromise, T>* base = receiver._base;
+        set_value(base->_outcome, std::move(value));
+        base->_receiver_arrives();  // last touch
     }
+
     template<typename OuterPromise>
     void set_value(AwaitableReceiver<OuterPromise, void>&& receiver) {
-        set_value(receiver._base->_outcome);
-        handle_from_promise(take(receiver._base->_outer_promise)).resume();
+        AwaitableBase<OuterPromise, void>* base = receiver._base;
+        set_value(base->_outcome);
+        base->_receiver_arrives();  // last touch
     }
 
     template<typename OuterPromise, typename T>
     void set_error(AwaitableReceiver<OuterPromise, T>&& receiver, std::exception_ptr&& error) {
-        set_error(receiver._base->_outcome, std::move(error));
-        handle_from_promise(take(receiver._base->_outer_promise)).resume();
+        AwaitableBase<OuterPromise, T>* base = receiver._base;
+        set_error(base->_outcome, std::move(error));
+        base->_receiver_arrives();  // last touch
     }
 
     template<typename OuterPromise, typename T>
     void set_stopped(AwaitableReceiver<OuterPromise, T>&& receiver) {
-        set_stopped(receiver._base->_outcome);
-        handle_from_promise(take(receiver._base->_outer_promise)).destroy();
+        AwaitableBase<OuterPromise, T>* base = receiver._base;
+        set_stopped(base->_outcome);
+        base->_receiver_arrives();  // last touch
     }
 
     template<typename OuterPromise, typename T>
@@ -683,11 +751,26 @@ namespace wry::coroutine {
 
         constexpr bool await_ready() const noexcept { return false; }
 
-        void await_suspend(std::coroutine_handle<OuterPromise> continuation) {
+        // The awaiting thread's half of the protocol above
+        std::coroutine_handle<> await_suspend(std::coroutine_handle<OuterPromise> continuation) {
             assert(this->_outer_promise == &continuation.promise());
             start(_operation_state);
-            // No *this past here: the operation may have completed inline,
-            // resuming (and perhaps finishing) the coroutine that owns *this
+            if (!this->_arrived.exchange_acq_rel(true)) {
+                // First: the receiver continues the frame.  No *this past
+                // the exchange
+                return std::noop_coroutine();
+            }
+            // Second: the operation completed inside start (or raced it
+            // and lost), so the frame is ours to continue
+            this->_outer_promise = nullptr;
+            if (this->_outcome.is_stopped()) {
+                // The cancellation continues through the frame's ~Promise;
+                // *this dies with the frame
+                continuation.destroy();
+                return std::noop_coroutine();
+            }
+            // Symmetric transfer back into the awaiting frame
+            return continuation;
         }
 
         auto await_resume() {

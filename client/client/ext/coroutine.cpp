@@ -5,9 +5,12 @@
 //  Created by Antony Searle on 13/8/2025.
 //
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -293,6 +296,181 @@ namespace wry::coroutine {
             assert(done.load(std::memory_order_acquire) == 1);
             assert(outcome._variant.index() == 1);
             assert(ran.load(std::memory_order_relaxed) == 1);
+        }
+
+        co_return;
+    };
+
+    namespace {
+
+        // Native stack extent seen by a coroutine body across many awaits of
+        // senders that complete inside their start.  __builtin_frame_address
+        // in a coroutine body is the native frame of the resume function the
+        // body is running in, so if each await nests a resume inside the
+        // previous one, the frame address walks down the stack once per
+        // iteration
+        struct StackExtent {
+            std::uintptr_t lo = UINTPTR_MAX;
+            std::uintptr_t hi = 0;
+            void sample(void* frame) {
+                std::uintptr_t a = (std::uintptr_t)frame;
+                lo = std::min(lo, a);
+                hi = std::max(hi, a);
+            }
+            std::uintptr_t spread() const { return hi - lo; }
+        };
+
+        Future<int> sr_inline_loop(int n, StackExtent* extent) {
+            int sum = 0;
+            for (int i = 0; i != n; ++i) {
+                sum += co_await execution::just(1);
+                extent->sample(__builtin_frame_address(0));
+                auto r = co_await execution::when_any(execution::just(1), execution::just(2));
+                sum += (r.index == 0) && (r.value == 1);
+                extent->sample(__builtin_frame_address(0));
+                auto o = co_await execution::stopped_as_optional(execution::just(1));
+                sum += *o;
+                extent->sample(__builtin_frame_address(0));
+            }
+            co_return sum;
+        }
+
+    }
+
+    define_test("coroutine_sender_inline_stack") {
+
+        // A loop over senders that complete inline (Just, a race of Justs,
+        // an adaptor over a Just) must run in constant native stack: each
+        // completion inside start records the outcome, and await_suspend
+        // transfers back to the awaiting frame instead of the receiver
+        // resuming it from inside start.  Were the receiver to resume
+        // inline, every iteration would nest three resumes and the spread
+        // would grow linearly in n
+        constexpr int n = 256;
+        execution::Outcome<int> outcome;
+        std::atomic<int> done{0};
+        StackExtent extent;
+        auto op = connect(sr_inline_loop(n, &extent), OutcomeReceiver<int>{&outcome, &done, {}});
+        start(op);
+        assert(done.load(std::memory_order_acquire) == 1);
+        assert(outcome._variant.index() == 1);
+        assert(std::get<1>(outcome._variant) == 3 * n);
+        printf("coroutine_sender_inline_stack: %d awaits, native stack spread %zu bytes\n",
+               3 * n, (std::size_t) extent.spread());
+        assert(extent.spread() < 4096);
+
+        co_return;
+    };
+
+    // A sender that completes with value or stopped, either inside start
+    // (inline) or on a pool worker that start schedules, after which start
+    // idles for a while without touching the operation: the worker's
+    // completion then races start's return, and so the awaiting thread's
+    // exchange, in either order
+    struct ArrivalSender {
+        int _value;
+        bool _stop;
+        bool _inline;
+        int _spin;
+    };
+
+} namespace wry::execution {
+    template<>
+    struct SenderTraits<coroutine::ArrivalSender> {
+        using value_type = int;
+    };
+} namespace wry::coroutine {
+
+    template<typename R>
+    struct ArrivalOperationState {
+        // A two-word thunk for the pool, as sync_wait's Starter
+        void (*_resume)(void*) = &_static_resume;
+        void (*_destroy)(void*) = &_static_destroy;
+        ArrivalSender _sender;
+        R _receiver;
+        static void _static_resume(void* ptr) {
+            auto self = (ArrivalOperationState*)ptr;
+            // last touch of self on every path
+            if (self->_sender._stop) {
+                set_stopped(std::move(self->_receiver));
+            } else {
+                int value = self->_sender._value;
+                set_value(std::move(self->_receiver), std::move(value));
+            }
+        }
+        static void _static_destroy(void*) {
+            abort();
+        }
+        template<typename R2>
+        ArrivalOperationState(ArrivalSender sender, R2&& receiver)
+        : _sender(sender), _receiver(std::forward<R2>(receiver)) {
+        }
+        ArrivalOperationState(ArrivalOperationState const&) = delete;
+    };
+
+    template<typename R>
+    auto connect(ArrivalSender&& sender, R&& receiver) {
+        return ArrivalOperationState<std::remove_cvref_t<R>>(sender, std::forward<R>(receiver));
+    }
+
+    template<typename R>
+    void start(ArrivalOperationState<R>& op) {
+        if (op._sender._inline)
+            return ArrivalOperationState<R>::_static_resume(&op);  // last touch
+        int spin = op._sender._spin;
+        global_work_queue_schedule((void*)&op);  // last touch of op
+        for (volatile int k = 0; k < spin; k = k + 1)
+            ;
+    }
+
+    namespace {
+
+        Future<int> sr_arrival_loop(int n) {
+            int sum = 0;
+            for (int i = 0; i != n; ++i)
+                sum += co_await ArrivalSender{1, false, (i % 3) == 0, (i * 37) % 2000};
+            co_return sum;
+        }
+
+        Future<int> sr_arrival_stopped(bool is_inline, int spin, std::atomic<int>* destroyed) {
+            UnwindProbe probe{destroyed};
+            (void) co_await ArrivalSender{0, true, is_inline, spin};
+            abort();  // a stopped completion destroys this frame
+            co_return 0;
+        }
+
+    }
+
+    define_test("coroutine_sender_arrival") {
+
+        // Value completions inline and on a worker, the worker's racing the
+        // return of start: every await continues exactly once, with the
+        // value the completion recorded
+        {
+            constexpr int n = 4000;
+            execution::Outcome<int> outcome;
+            std::atomic<int> done{0};
+            auto op = connect(sr_arrival_loop(n), OutcomeReceiver<int>{&outcome, &done, {}});
+            start(op);
+            while (done.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
+            assert(outcome._variant.index() == 1);
+            assert(std::get<1>(outcome._variant) == n);
+        }
+
+        // Stopped completions: whichever party arrives second destroys the
+        // awaiting frame, exactly once, and the cancellation reaches the
+        // terminal receiver
+        for (int i = 0; i != 400; ++i) {
+            execution::Outcome<int> outcome;
+            std::atomic<int> done{0}, destroyed{0};
+            auto op = connect(sr_arrival_stopped((i % 4) == 0, (i * 37) % 2000, &destroyed),
+                              OutcomeReceiver<int>{&outcome, &done, {}});
+            start(op);
+            while (done.load(std::memory_order_acquire) == 0)
+                co_await TransferToPoolExecutor{};
+            assert(outcome._variant.index() == 3);
+            assert(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         co_return;

@@ -50,8 +50,10 @@ namespace wry::execution {
     // token fires it immediately) and belongs in start.
     //
     // co_await accepts a sender: Promise::await_transform wraps it in a
-    // SenderAwaitable whose receiver resumes (value, error) or destroys
-    // (stopped) the awaiting frame.  transform_await (see Promise) is
+    // SenderAwaitable: whichever of the receiver and await_suspend finishes
+    // second resumes (value, error) or destroys (stopped) the awaiting
+    // frame, so a completion inside start transfers back symmetrically
+    // instead of nesting a resume.  transform_await (see Promise) is
     // consulted first, which is how Future keeps its symmetric-transfer path.
 
     template<typename S> struct SenderTraits;
