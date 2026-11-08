@@ -5,6 +5,7 @@
 //  Created by Antony Searle on 2026-10-29.
 //
 
+#include <unistd.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -380,7 +381,19 @@ namespace wry {
         matrix<RGBA8Unorm_sRGB> png(result.image.minor(), result.image.major());
         for (std::size_t y = 0; y != png.minor(); ++y)
             std::memcpy(&png[(ptrdiff_t)y, 0], &result.image[(ptrdiff_t)y, 0], png.major() * sizeof(SymbolSDFTexel));
-        to_png(png, StringView(cache_path.string().c_str()));
+        // Written beside the cache and renamed over it (atomic on one
+        // volume): a reader never sees a torn file, and a process killed
+        // mid-write leaves only the temporary (from_png aborts on a torn
+        // PNG, so a torn cache with a fresh mtime would abort every launch)
+        {
+            std::filesystem::path temporary = cache_path;
+            temporary += ".partial-" + std::to_string((unsigned long)getpid());
+            to_png(png, StringView(temporary.string().c_str()));
+            std::error_code ec;
+            std::filesystem::rename(temporary, cache_path, ec);
+            if (ec)
+                std::filesystem::remove(temporary, ec);
+        }
         co_return result;
     }
 

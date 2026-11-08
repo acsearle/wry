@@ -360,6 +360,9 @@ namespace wry {
                     break;
                 case close:
                     _active = false;
+                    // a press still held on the input line: its release is
+                    // still ours, or it would land on the palette below
+                    _swallow_release = _view->input().pressed();
                     _view->input().cancel_drag();
                     if (_log) _log->append("[ESC] Hide console");
                     break;
@@ -526,7 +529,17 @@ namespace wry {
         // or drag that moves the cursor changes what is suggested.
         bool ConsoleOverlay::_on_mouse(Event const& e) {
             if (!_active) {
+                // Closed while a press on the input line was held (by
+                // Escape, which set _swallow_release, or by a toggle, which
+                // left the field pressed): that press's release is still
+                // the console's, not the palette's below the line
+                const bool claimed = _swallow_release || _view->input().pressed();
                 _view->input().cancel_drag();
+                if (claimed && (e.kind == WryEventKindMouseUp)) {
+                    _swallow_release = false;
+                    return true;
+                }
+                _swallow_release = claimed;
                 return false;
             }
             const bool consumed = _view->on_event(e);

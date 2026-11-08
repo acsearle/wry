@@ -469,6 +469,9 @@ namespace wry {
             std::unique_ptr<ConsoleView> _view;
 
             bool _active = false;
+            // the console closed with a press on its input line held: the
+            // release that follows is swallowed (see _on_mouse)
+            bool _swallow_release = false;
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;
             Clipboard const* _clipboard = nullptr;

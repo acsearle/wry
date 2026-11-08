@@ -618,6 +618,7 @@ namespace wry::gui {
         // Forget a press or drag in progress (the owner is closing).
         void cancel_drag() { _dragging = false; _pressed = false; }
         bool dragging() const { return _dragging; }
+        bool pressed() const { return _pressed; }
 
         // Fallback height (points) if measured without a font.
         static constexpr float kFallbackHeightPt = 24.0f;

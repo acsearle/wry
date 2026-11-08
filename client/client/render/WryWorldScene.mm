@@ -2799,6 +2799,10 @@ struct WryNumberGlyph {
                     NSString* name = [NSString stringWithUTF8String:_model->_environment.c_str()];
                     if (id<MTLTexture> t = [self prefilteredEnvironmentMapFromResource:name ofType:@"png"])
                         _deferredLightImageBasedTexture = t;
+                    // and the diffuse term's irradiance cube, or the scene
+                    // keeps its ambient from the old sky
+                    if (id<MTLTexture> t = [self irradianceMapFromResource:name ofType:@"png"])
+                        _deferredLightIrradianceTexture = t;
                     _loaded_environment = _model->_environment;
                 }
                 uniforms.ibl_scale = _model->_exposure;
