@@ -2106,6 +2106,12 @@ struct WryNumberGlyph {
         // number_caption.hpp) printed on its face as decals
         // (WryDecalInstance) from the cutout atlas's glyphs
         // (-numberGlyphs:)
+        // The digits' relief: the glyph's coverage as a height over the
+        // face (negative presses it in), world units at full size (it
+        // shrinks with the row), and the bevel's half-width, glyph-atlas
+        // texels (a cell is 256 across)
+        const float kNumberEmboss = 0.012f;
+        const float kNumberEmbossTexels = 3.0f;
         auto emit_number = [&](simd_float4 location, simd_float3 across, simd_float3 up, int64_t value) {
             emit_symbol(location, _blank_coordinate, across, up);
             simd_float3 normal = simd_cross(across, up);
@@ -2123,6 +2129,8 @@ struct WryNumberGlyph {
                 d.tint = g.tint;
                 d.material = make<float4>(0.5f, 0.0f, 0.0f, 0.0f);   // the ink keeps the tile's finish
                 d.normal_cutoff = 0.5f;
+                d.emboss = kNumberEmboss * g.h;   // g.h is the row's shrink
+                d.emboss_radius = kNumberEmbossTexels / (float)wry::SymbolSDF::kCells / 256.0f;
                 prints.push_back(d);
             }
         };

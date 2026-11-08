@@ -9,7 +9,7 @@
 - SVG loading for OTF and standalone files.  Only partial support needed.  Should produce geometry, not a rasterization, and use the same on-CPU and on-GPU rasterization code as the font engine.
 - An extra clear-coat term in the render: a smooth specular reflection, but mostly transmits to lower layer.
 - Define UI in points not pixels, consider the device's magnification factor, and provide a user scaling factor.  We are a desktop game not a TV game, so we don't scale to the drawable size, and we do support weird aspect ratios and being in a window
-- Decal shader does not yet apply emissive, normal, material, etc.
+- DONE 2026-11-08: the decal shader applies emissive (light attachment toward WryDecalInstance.emissive by coverage), occlusion (material.r *= 1 - occlusion * coverage) and embossed normals (coverage as a height field, four central-difference taps at the mip of emboss_radius, tilting the stored normal in the frame's tangent basis); zero fields are pixel-identical to before; numbers are raised kNumberEmboss = 0.012 world units over a 3-texel bevel (WryWorldScene.mm emit_number).  Still no normal-map image per decal
 -  Use decals to draw general strings, not just decimal number.  Needs more characters in the same texture, that's fine.
 - Decouple the glyphs from the tile SDF.  Draw them all as decals (or, to optimize the common case, combine two textures in the raymarcher)
 - Generalize the 2D interpolated + 1D analytic SDF to support full analytic.  Superellipsoids?
@@ -69,7 +69,7 @@ List of one-line reminders of things to think and do
 -
 - FEEDBACK (2026-11-01): U-turn is prominent and unhelpful.  Tile captions too small (zoom?).  Hexadecimal is very confusing, modulus numbers are confusing (multi-digit with decals in Factorio 4-character style "2.1M"?).
   - DONE 2026-11-08 (numbers half): number tiles and the held-value cursor print render/number_caption.hpp's decimal, at most 4 characters plus a minus ("9999", "12k", "1.2M", "9.9M" for 9999999, truncated, SI k..E); the '.' and k M G T P glyphs are assets.png row 15 cols 1-6 (make_assets.py; 'E' is the hex row's).  OPEN: U-turn prominence, caption size
-- - TODO: Decal shader (with normal perturbation for embossing), point light shader.
+- - DONE 2026-11-08: decal shader with normal perturbation for embossing (see the decal entry at the top).  TODO: point light shader.
 - TODO: Draw tiles in one pass and symbols as decals, because: we need combinatorial numbers, strings.
 - TODO (2026-11-01): build the symbol field cache during asset loading, under the splash and main menu, not at New Game.  Today a cache miss (any atlas change; ~49 s in Debug, single-threaded) happens when WryWorldScene loads the atlas, which stalls the new game's self-host handshake, the client is kicked and the world has no machines (frames identical before and after `resume`).  The atlas name is known at startup (WorldState::_symbol_atlas), so build or validate the cache there, and rebuild on a worker when `atlas NAME` switches at runtime
 - TODO (2026-11-01): the look-iteration console commands are debugging aids to retire once the look is decided: `board`, `exposure`, `atlas`, `token`, `toggle-decals` (world_state.cpp) and their WorldState fields (_board_*, _exposure, _symbol_atlas, _token_*, _symbol_decals); fold the chosen values into constants.  The runtime opcode-label stamping in WryWorldScene -loadSymbolAtlasNamed: writes into the cell margin the slabs never show and is superseded by the captions tools/make_tile_atlas.py prints on the tiles; remove it with them
