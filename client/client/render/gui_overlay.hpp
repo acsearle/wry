@@ -505,6 +505,17 @@ namespace wry {
             wry::Palette<wry::Term>& controls()             { return _controls; }
             wry::Palette<wry::Term> const& controls() const { return _controls; }
 
+            // Layout, shared by the hit test and the renderer: the grid
+            // of kCellPt-point cells (smaller only if the viewport is too
+            // narrow for them: cell_size), i across and j down, centered
+            // on the bottom edge of the viewport.  The rect of cell (i, j), in
+            // drawable pixels; (i0, j0, i1, j1) spans cells i0 <= i < i1,
+            // j0 <= j < j1.
+            static constexpr float kCellPt = 30.0f;
+            float cell_size(float2 viewport_px, float pixels_per_point) const;
+            rect<float> cells_rect(float i0, float j0, float i1, float j1,
+                                   float2 viewport_px, float pixels_per_point) const;
+
             // Renderer reads these to draw the highlights.  -1 means none.
             int selected_i() const { return _selected_i; }
             int selected_j() const { return _selected_j; }

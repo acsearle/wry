@@ -966,10 +966,9 @@ struct WryNumberGlyph {
                     }
                 }
 
-                controls._transform
-                =
-                simd_matrix_scale(1.0f / 16.0f)
-                * simd_matrix_translate(simd_make_float3(nn*-0.5f, -2.0f, 0.0f));
+                // Laid out in screen space by the overlay
+                // (PaletteOverlay::cells_rect); controls._transform is
+                // unused.
             }
             
             {
@@ -1491,9 +1490,9 @@ struct WryNumberGlyph {
     // ----- Palette paint pass (reads PaletteOverlay state for hover /
     // selected highlights).  Hidden in map mode.
     //
-    // The palette's cells are laid out by its projective _transform, which
-    // the hit test also uses; map the cell corners through it to drawable
-    // pixels, then draw in screen space with the GUI quad pipeline: a Panel-
+    // The palette's cells are laid out in points by
+    // PaletteOverlay::cells_rect, which the hit test also uses; draw them in
+    // screen space with the GUI quad pipeline: a Panel-
     // style plate docked to the bottom edge (it extends off-screen, so only
     // its top corners show and its shadow reads as that of a plate running
     // on below the edge), and on it a rounded square per opcode, one gap
@@ -1505,26 +1504,10 @@ struct WryNumberGlyph {
         const float vw = _model->_gui.viewport_size.x;
         const float vh = _model->_gui.viewport_size.y;
 
-        // Same composition as PaletteOverlay::on_event's hit test.
-        const simd_float4x4 palette_to_ndc = simd_mul(matrix_float4x4{{
-            {1.0f, 0.0f, 0.0f},
-            {0.0f, -vw / vh, 0.0f, 0.0f},
-            { 0.0f, 0.0f, 1.0f, 0.0f },
-            {0.0f, -1.0f, 0.0f, 1.0f},
-        }}, palette.controls()._transform);
-        auto to_px = [&](float i, float j) {
-            const simd_float4 q = simd_mul(palette_to_ndc, simd_make_float4(i, j, 0.0f, 1.0f));
-            const float2 ndc = q.xy / q.w;
-            return simd_make_float2((ndc.x + 1.0f) * 0.5f * vw,
-                                    (1.0f - ndc.y) * 0.5f * vh);
-        };
+        // PaletteOverlay's layout, which its hit test also uses.
+        const float ppp = _model->_gui.pixels_per_point();
         auto px_rect = [&](float i0, float j0, float i1, float j1) {
-            const float2 a = to_px(i0, j0);
-            const float2 b = to_px(i1, j1);
-            return wry::rect<float>{
-                std::min(a.x, b.x), std::min(a.y, b.y),
-                std::max(a.x, b.x), std::max(a.y, b.y),
-            };
+            return palette.cells_rect(i0, j0, i1, j1, simd_make_float2(vw, vh), ppp);
         };
 
         using wry::gui::Button;
@@ -1533,7 +1516,7 @@ struct WryNumberGlyph {
         const float gap = Panel::gap(_ctx.font);
         const float cell_radius = Button::default_corner_radius(_ctx.font);
         Painter scale;
-        scale.pixels_per_point = _model->_gui.pixels_per_point();
+        scale.pixels_per_point = ppp;
         const float shadow_sigma = scale.shadow_sigma();
         const float2 shadow_offset = scale.shadow_offset();
         const float panel_radius = cell_radius + gap;
@@ -1650,8 +1633,10 @@ struct WryNumberGlyph {
     if (!_model->show_map()) {
         using wry::WorldMap;
 
-        const float SIZE = 512.0f;    // drawable px; 2 px per map texel
-        const float MARGIN = 24.0f;
+        // 256 pt, one point per map texel; 12 pt in from the corner
+        const float ppp = _model->_gui.pixels_per_point();
+        const float SIZE = 256.0f * ppp;
+        const float MARGIN = 12.0f * ppp;
         float2 vp = _model->_gui.viewport_size;
         const float bx0 = vp.x - MARGIN - SIZE;   // box, screen px, y-down
         // below the money line (drawn with the GUI, below)
@@ -1740,7 +1725,7 @@ struct WryNumberGlyph {
         // The money (World::_money), right-justified above the minimap:
         // "$1234"
         if (!_model->show_map() && painter.font) {
-            const float MARGIN = 24.0f;
+            const float MARGIN = painter.pt(12.0f);
             char text[32];
             snprintf(text, sizeof(text), "$%lld",
                      (long long)_model->_world_to_render._ptr->_money);
@@ -1767,7 +1752,7 @@ struct WryNumberGlyph {
                     width += g->second.advance;
             }
             const float top = _model->_palette_overlay.top_pixels();
-            const float baseline = top - 12.0f + painter.font->descender;
+            const float baseline = top - 6.0f * _model->_gui.pixels_per_point() + painter.font->descender;   // 6 pt clear of the palette
             painter.draw_text_run(simd_make_float2((_model->_gui.viewport_size.x - width) * 0.5f, baseline),
                                   wry::StringView(hint.c_str()),
                                   RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, 1.0f));
@@ -1783,7 +1768,8 @@ struct WryNumberGlyph {
 // The height of the money line above the minimap: one line of the GUI
 // font
 -(float)moneyLineHeight {
-    return _ctx.font ? (_ctx.font->ascender - _ctx.font->descender) : 32.0f;
+    return _ctx.font ? (_ctx.font->ascender - _ctx.font->descender)
+                     : 16.0f * _model->_gui.pixels_per_point();
 }
 
 -(void)resetCursor {

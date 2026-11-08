@@ -608,15 +608,29 @@ namespace wry {
         // PaletteOverlay
         // ================================================================
         //
-        // Currently the renderer still draws the palette (it uses a
-        // projective transform and binds the `_symbols` texture, neither of
-        // which Painter abstracts yet).  The overlay's job in phase 2 is to
-        // own the input -- it hit-tests clicks against the same projective
-        // transform the renderer uses, updates hover, and signals selection.
-        //
-        // Phase 3+ will move the palette into screen space and let
-        // PaletteOverlay::paint() draw itself through the atlas like
-        // everything else.
+        // The renderer still draws the palette (it binds the `_symbols`
+        // texture, which Painter does not abstract yet); the overlay owns
+        // the input and the layout both use.
+
+        rect<float> PaletteOverlay::cells_rect(float i0, float j0, float i1, float j1,
+                                               float2 viewport_px,
+                                               float pixels_per_point) const {
+            auto const& m = _controls._payload;
+            const float cell = cell_size(viewport_px, pixels_per_point);
+            const float left = (viewport_px.x - (float)m.minor() * cell) * 0.5f;
+            const float top = viewport_px.y - (float)m.major() * cell;
+            return rect<float>{
+                left + i0 * cell, top + j0 * cell,
+                left + i1 * cell, top + j1 * cell,
+            };
+        }
+
+        float PaletteOverlay::cell_size(float2 viewport_px, float pixels_per_point) const {
+            // kCellPt, unless the window is too narrow for the row and half
+            // a cell's margin each side: then as wide as fits.
+            const float columns = (float)_controls._payload.minor() + 1.0f;
+            return std::min(kCellPt * pixels_per_point, viewport_px.x / columns);
+        }
 
         bool PaletteOverlay::on_event(Event const& e) {
             if (!_model) return false;
@@ -625,38 +639,14 @@ namespace wry {
                 e.kind != WryEventKindMouseUp)
                 return false;
 
-            const float vw = _model->_gui.viewport_size.x;
-            const float vh = _model->_gui.viewport_size.y;
-            if (vw <= 0.0f || vh <= 0.0f) return false;
+            const float2 viewport = _model->_gui.viewport_size;
+            if (viewport.x <= 0.0f || viewport.y <= 0.0f) return false;
 
-            // Same composition as WryRenderer's drawOverlay: aspect-correct
-            // NDC view + the palette's own _transform.  Note we use only
-            // the aspect ratio vw/vh from _viewport_size, which is in
-            // drawable pixels -- aspect-from-pixels equals aspect-from-
-            // logical-points, so no unit conversion is needed here.
-            // Keeping this in sync with the renderer's matrix is a known
-            // fragility; phase 3 collapses it when the palette moves to
-            // screen space.
-            simd_float4x4 screen_to_palette = simd_mul(
-                matrix_float4x4{{
-                    {1.0f,        0.0f,           0.0f, 0.0f},
-                    {0.0f, -vw / vh,              0.0f, 0.0f},
-                    {0.0f,        0.0f,           1.0f, 0.0f},
-                    {0.0f,       -1.0f,           0.0f, 1.0f},
-                }},
-                _controls._transform);
-
-            // _model->_mouse is the NDC cursor position.  The pump keeps
-            // it in lockstep with the event currently being dispatched
-            // (see pump() below), so reading it here gives us the correct
-            // cursor for this exact event without the overlay having to
-            // plumb a screen-pt-to-NDC conversion of its own (which would
-            // need a view-size-in-logical-points value -- different from
-            // _viewport_size, which is in drawable pixels).
-            simd_float4 ray = simd_make_float4(_model->_mouse.x,
-                                               _model->_mouse.y,
-                                               0.0f, 1.0f);
-            float2 mmm = project_screen_ray(screen_to_palette, ray);
+            // The cell under the event (drawable pixels, as the pump
+            // promoted it).
+            const float ppp = _model->_gui.pixels_per_point();
+            const rect<float> origin = cells_rect(0.0f, 0.0f, 0.0f, 0.0f, viewport, ppp);
+            const float2 mmm = (e.location - origin.a) / cell_size(viewport, ppp);
 
             auto& m = _controls._payload;
             const auto i = (difference_type)std::floor(mmm.x);
