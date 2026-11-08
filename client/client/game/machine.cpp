@@ -1758,4 +1758,51 @@ namespace wry {
         co_return;
     };
 
+    // A Spawner that loses its cell to a truck in the very tick it spawns
+    // must spawn again later.  The spawn writes the cell (exclusive), so
+    // losing that conflict aborts the whole transaction, its commit-only
+    // waits with it; without a retry on abort nothing would ever wake the
+    // Spawner again.  A truck drives into the Spawner's cell at tick 0,
+    // racing its first spawn; which of them wins depends on priorities,
+    // so the race is run with the ids shifted several ways, and in every
+    // run the Spawner must go on spawning.
+    define_test("machine_spawner_survives_lost_spawn") {
+        int lost_somewhere = 0;
+        for (int burn = 0; burn != 8; ++burn) {
+            World* w = new World;
+            for (int i = 0; i != burn; ++i)
+                (void) w->generate_entity_id();
+            Spawner* sp = new Spawner;
+            sp->_entity_id = w->generate_entity_id();
+            sp->_free_entity_id = w->generate_entity_id();
+            sp->_location = Coordinate{0, 0};
+            sp->seal();
+            w->_entity_for_entity_id.set(sp->_entity_id, sp);
+            { EntityIDSet s; s.set(sp->_entity_id);
+              w->_located_for_coordinate.set(Coordinate{0, 0}, s); }
+            w->_waiting_on_time.set({Time{0}, sp->_entity_id});
+            // the racer: from the south, through the Spawner's cell, and
+            // away east at (0, 2)
+            (void) test_machine_at_rest(w, 0, -1, HEADING_NORTH);
+            test_put(w, 0, 2, term_make_opcode(OPCODE_TURN_RIGHT));
+            w->hack_repair_invariant();
+            Root<World*> world{w};
+            co_await test_step_until(world, Time{2});
+            // did the first spawn lose? (no machine minted with the ticket)
+            const Entity* first = nullptr;
+            if (!world._ptr->_entity_for_entity_id.try_get(sp->_free_entity_id, first))
+                ++lost_somewhere;
+            co_await test_step_until(world, Time{1500});
+            int machines = 0;
+            world._ptr->_entity_for_entity_id.kv.for_each([&](EntityID, const Entity* e) {
+                machines += (dynamic_cast<const Machine*>(e) != nullptr);
+            });
+            // the racer plus at least two spawned
+            assert(machines >= 3);
+        }
+        printf("machine_spawner_survives_lost_spawn: the first spawn lost in %d of 8 runs\n",
+               lost_somewhere);
+        co_return;
+    };
+
 } // namespace wry::sim

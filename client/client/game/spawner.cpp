@@ -73,6 +73,9 @@ namespace wry {
             Spawner* next_this = make_mutable_clone();
             tx->write_entity_for_entity_id(this->_entity_id, next_this);
             tx->wait_on_time(context->next_now());
+            // the waits above are commit-only: if this transaction loses
+            // a conflict, nothing else would ever wake the Spawner
+            tx->on_abort_retry();
             return 1;
         }
 
@@ -108,6 +111,11 @@ namespace wry {
             next_this->_free_entity_id.data = 0;
             tx->write_entity_for_entity_id(this->_entity_id, next_this);
             tx->wait_on_time(context->next_now());
+            // The cell writes are exclusive: a truck claiming this cell in
+            // the same tick can win it, aborting the whole spawn, commit-
+            // only waits included.  Retry next tick rather than fall
+            // silent forever (machine_spawner_survives_lost_spawn).
+            tx->on_abort_retry();
             return 1;
         }
 
