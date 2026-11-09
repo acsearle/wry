@@ -1787,6 +1787,21 @@ namespace wry {
 
             col->add(std::make_unique<Label>("Settings"));
 
+            // The interface's size (settings.ui_scale) in steps, through
+            // the `ui-scale` command, which saves it; the label follows
+            // the setting however it changes (paint)
+            {
+                auto row = std::make_unique<Row>();
+                row->set_spacing_gap();
+                row->add(std::make_unique<Label>("Interface size"));
+                row->add(std::make_unique<Button>("-", [this] { _step_ui_scale(-10); }));
+                auto value = std::make_unique<Label>("100%");
+                _ui_scale_label = value.get();
+                row->add(std::move(value));
+                row->add(std::make_unique<Button>("+", [this] { _step_ui_scale(+10); }));
+                col->add(std::move(row));
+            }
+
             auto buttons = std::make_unique<ButtonPanel>();
 
             // Key bindings: mark the rows stale and push the overlay
@@ -1819,10 +1834,29 @@ namespace wry {
             }));
 
             col->add(std::move(buttons));
-            _root = std::move(col);
+            // On a plate, so the menu it was opened from does not show
+            // through the title and the size row
+            _root = std::make_unique<Panel>(std::move(col));
         }
 
         SettingsOverlay::~SettingsOverlay() = default;
+
+        void SettingsOverlay::_step_ui_scale(int delta) {
+            if (!_gui)
+                return;
+            const int lo = (int)std::lround(Settings::min_ui_scale * 100.0f);
+            const int hi = (int)std::lround(Settings::max_ui_scale * 100.0f);
+            const int now = (int)std::lround(_gui->settings.ui_scale * 100.0f);
+            // Snap to the step's grid, then step
+            const int step = std::abs(delta);
+            int next = (delta > 0) ? (now / step + 1) * step : ((now + step - 1) / step - 1) * step;
+            next = std::clamp(next, lo, hi);
+            if (next == now)
+                return;
+            char line[32];
+            std::snprintf(line, sizeof(line), "ui-scale %d", next);
+            (void) _gui->issue(command::Origin::gui, line);
+        }
 
         bool SettingsOverlay::on_event(Event const& e) {
             if (e.kind == WryEventKindKeyDown && e.key == key::Escape) {
@@ -1840,6 +1874,11 @@ namespace wry {
                                     p.viewport_size_px.y},
                         RGBA8Unorm_sRGB(0.0f, 0.0f, 0.0f, 0.5f));
             if (!_root) return;
+            if (_ui_scale_label && _gui) {
+                char text[16];
+                std::snprintf(text, sizeof(text), "%d%%", (int)std::lround(_gui->settings.ui_scale * 100.0f));
+                _ui_scale_label->set_text(StringView(text));
+            }
 
             MeasureContext mctx{ p.font, p.pixels_per_point };
             SizeConstraints c = SizeConstraints::loose(p.viewport_size_px);

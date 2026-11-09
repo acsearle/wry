@@ -436,6 +436,9 @@ namespace wry::gui {
     public:
         explicit Label(StringView text) : _text(text) {}
 
+        // Replace the text; the next measure sizes to it
+        void set_text(StringView text) { _text = String(text); }
+
         const char* kind() const override { return "Label"; }
         StringView label() const override { return _text; }
         rect<float> bounds() const override { return _rect; }

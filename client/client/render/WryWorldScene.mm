@@ -259,6 +259,7 @@ struct WryNumberGlyph {
     // _model->_palette_overlay; the renderer reads it for painting only.
 
     NSCursor* _cursor;
+    float _cursorPoints;   // the held tile cursor's size, screen points (0: the arrow)
     
 }
 
@@ -1502,10 +1503,21 @@ struct WryNumberGlyph {
     // If the palette overlay selected a new opcode this frame, swap the
     // platform cursor to its icon.  The overlay flagged this from its
     // on_event during pump; we consume the flag here.
+    // The held tile's cursor is drawn the size of a palette tile, so it
+    // follows the UI scale and the window (PaletteOverlay::cell_size, in
+    // screen points); remade when that changes.  Capped: AppKit draws a
+    // large cursor fine (it is composited late, in hardware, as one image
+    // whatever its size), but past this it hides the board under it
+    const float cursorPoints = std::min(_model->_palette_overlay.cell_size(_model->_gui.viewport_size,
+                                                                           _model->_gui.pixels_per_point())
+                                        / std::max(_model->_gui.backing_scale, 1.0f), 128.0f);
+    if (_model->is_holding() && _cursorPoints > 0.0f && std::abs(cursorPoints - _cursorPoints) > 0.5f)
+        _model->_palette_overlay.request_cursor_refresh();
     if (_model->_palette_overlay.cursor_needs_refresh() && !_model->is_holding()) {
         // The hand was dropped (Escape): back to the platform arrow.
         _cursor = [NSCursor arrowCursor];
         [_cursor set];
+        _cursorPoints = 0.0f;
         _model->_palette_overlay.clear_cursor_refresh();
     }
     if (_model->_palette_overlay.cursor_needs_refresh()) {
@@ -1523,8 +1535,8 @@ struct WryNumberGlyph {
             coordinate = _cdot_coordinate;
         // The glyph's frame, the central half of its atlas cell (the rest
         // is the field's margin), cut out at its native resolution; the
-        // NSImage below is still 32 points, so a higher-resolution atlas
-        // just makes a sharper cursor.
+        // NSImage below is cursorPoints across, so a higher-resolution
+        // atlas just makes a sharper cursor.
         id<MTLTexture> symbols = [self paletteSymbols];
         const NSUInteger cell = symbols.width / wry::SymbolSDF::kCells / 2;
         matrix<RGBA8Unorm_sRGB> tile(cell, cell);
@@ -1606,12 +1618,13 @@ struct WryNumberGlyph {
                                           bitmapFormat:NSBitmapFormatAlphaNonpremultiplied
                                            bytesPerRow:tile.stride_bytes()
                                           bitsPerPixel:32];
-        NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(32.0, 32.0)];
+        NSImage* b = [[NSImage alloc] initWithSize:NSMakeSize(cursorPoints, cursorPoints)];
         [b addRepresentation:a];
         NSCursor* c = [[NSCursor alloc] initWithImage:b
                                               hotSpot:NSMakePoint(0.0f, 0.0f)];
         [c set];
         _cursor = c;
+        _cursorPoints = cursorPoints;
         _model->_palette_overlay.clear_cursor_refresh();
     }
 

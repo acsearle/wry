@@ -679,8 +679,12 @@ namespace wry {
             void set_context(GuiContext* g) { _gui = g; }
 
         private:
+            // Issue `ui-scale` stepped by `delta` percent (clamped)
+            void _step_ui_scale(int delta);
+
             std::unique_ptr<Widget> _root;
             GuiContext* _gui = nullptr;
+            class Label* _ui_scale_label = nullptr;   // in _root; shows the current scale
         };
 
         // ----------------------------------------------------------------
