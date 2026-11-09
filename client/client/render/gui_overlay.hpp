@@ -67,6 +67,8 @@ namespace wry {
     namespace gui {
         class Widget;
         class ConsoleView;
+        class TextLog;
+        struct MeasureContext;
     }
 
     namespace gui {
@@ -357,8 +359,11 @@ namespace wry {
         };
 
         // Quake-style drop-down console: toggled by the toggle-console
-        // binding (backtick by default), captures all keyboard input
-        // while active.  Enter issues the input line as a command
+        // binding (backtick by default).  Modal while active: every key
+        // and every mouse event (click, drag, scroll, hover, pinch) is
+        // the console's, whatever the keymap binds and whatever is
+        // under the pointer; nothing reaches the world or the widgets
+        // below.  Enter issues the input line as a command
         // (core/docs/commands.md).  The line is a LineEditor with a
         // LineHistory behind it; the conventions for all of it are in
         // render/docs/line_editing.md.  Beyond the editor's own keys:
@@ -374,6 +379,10 @@ namespace wry {
         //   Escape, the toggle key   close
         //   click / drag / double    place the cursor / select / select a
         //   click on the input line  word
+        //   scroll, PageUp / Down    scroll the output back and forth
+        //                            (gui_widget.hpp TextLog: new output
+        //                            moves the view only at the bottom;
+        //                            Enter goes back to the bottom)
         //
         // The overlay is the controller and owns the model: the output
         // lines, the line editor, the history and the suggestion.  What
@@ -421,11 +430,17 @@ namespace wry {
                 _input.set_clipboard(c);
             }
 
-            // While active, the console eats keyboard but lets clicks
-            // through to whatever is behind it, except those on its
-            // input line.
+            // While active, the console is modal: no key and no mouse
+            // event gets past it, whether it uses it or not.
             bool modal_keyboard() const override { return _active; }
-            bool modal_mouse()    const override { return false; }
+            bool modal_mouse()    const override { return _active; }
+
+            // Lay the widget tree out over a viewport (drawable pixels);
+            // paint does this every frame, before painting.
+            void layout(float2 viewport_px, MeasureContext const&);
+
+            // The output's view: its scroll position.
+            TextLog const& output_view() const;
 
             // The output lines, oldest first.
             ContiguousDeque<String>& lines() { return _lines; }
@@ -469,9 +484,10 @@ namespace wry {
             std::unique_ptr<ConsoleView> _view;
 
             bool _active = false;
-            // the console closed with a press on its input line held: the
-            // release that follows is swallowed (see _on_mouse)
-            bool _swallow_release = false;
+            // The buttons pressed while the console was open and not yet
+            // released (bit 1 << MouseButton): their releases are the
+            // console's even once it has closed (see _on_mouse).
+            unsigned _held_buttons = 0;
             LogOverlay* _log = nullptr;
             Keymap const* _keymap = nullptr;
             Clipboard const* _clipboard = nullptr;

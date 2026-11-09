@@ -29,6 +29,7 @@
 #include "load_timing.hpp"
 #include "ctype.hpp"
 #include "garbage_collected.hpp"
+#include "gui_widget.hpp"
 #include "machine.hpp"
 #include "matter.hpp"
 #include "save.hpp"
@@ -2191,7 +2192,11 @@ namespace wry {
             if (is_positional) {
                 e.location.x *= scale_x;
                 e.location.y *= scale_y;
-                // Keep _mouse (NDC, y-up) in lockstep with the dispatched event.
+                // Keep _mouse (NDC, y-up) in lockstep with the dispatched
+                // event, even one a modal overlay (the console) stops: it
+                // is where the pointer is, which the keys that act at the
+                // cursor tile need the moment the overlay closes.  What
+                // the world shows of it is the renderer's to suppress.
                 _mouse.x = 2.0f * e.location.x / _gui.viewport_size.x - 1.0f;
                 _mouse.y = 1.0f - 2.0f * e.location.y / _gui.viewport_size.y;
             }
@@ -2285,6 +2290,62 @@ namespace wry {
         require(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
         ws.set_zoom(WorldState::ZOOM_DEFAULT);
 
+        co_await ws.end_session(std::chrono::milliseconds(200));
+        (void) co_await scope.join();
+        co_return;
+    };
+
+    // While the console is open the world sees none of the input
+    // (decisions 2026-11-08 item 13): a swipe, a pinch, a click and a key
+    // the keymap binds to a world action all stop at the console, and
+    // only the pointer's position is tracked.  Closed, the same swipe
+    // pans.
+    define_test("world_state_console_modal") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        gc.viewport_size = float2{1280.0f, 800.0f};
+        const float2 view_pt{640.0f, 400.0f};
+        WorldState ws(gc);
+        auto event = [](WryEventKind kind) {
+            gui::Event e{};
+            e.kind = kind;
+            e.location = float2{100.0f, 100.0f};
+            return e;
+        };
+        gui::Event swipe = event(WryEventKindScroll);
+        swipe.scroll_delta = float2{1024.0f, 0.0f};
+        gui::Event pinch = event(WryEventKindMagnify);
+        pinch.magnification = 0.5f;
+        gui::Event tab{};
+        tab.kind = WryEventKindKeyDown;
+        tab.key = gui::key::Tab;
+
+        (void) gc.issue(command::Origin::binding, StringView("toggle-console"));
+        require(gc.console_overlay.active());
+        const std::size_t issued = gc.history.size();
+        gc.events.push(swipe);
+        gc.events.push(pinch);
+        gc.events.push(event(WryEventKindMouseDown));
+        gc.events.push(event(WryEventKindMouseUp));
+        gc.events.push(tab);
+        ws.handle_events(view_pt);
+        require((ws._focus_tile == Coordinate{0, 0}));
+        require(ws._zoom == WorldState::ZOOM_DEFAULT);
+        require(gc.history.size() == issued);
+        // The pointer is tracked all the same: (100, 100) of (640, 400)
+        // points is NDC (-0.6875, 0.5)
+        require(std::abs(ws._mouse.x + 0.6875f) < 1e-6f && std::abs(ws._mouse.y - 0.5f) < 1e-6f);
+        // The scroll went to the console's output
+        require(gc.console_overlay.output_view().following());
+
+        (void) gc.issue(command::Origin::binding, StringView("toggle-console"));
+        require(!gc.console_overlay.active());
+        gc.events.push(swipe);
+        ws.handle_events(view_pt);
+        require((ws._focus_tile == Coordinate{-1, 0}));
+
+        (void) issued;
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
         co_return;

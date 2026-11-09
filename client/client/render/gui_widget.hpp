@@ -559,6 +559,22 @@ namespace wry::gui {
     // line, clipped to the rect.  Free text (outlined), for drawing over
     // the world.  Borrows the lines; their owner keeps them alive.  Fills
     // whatever it is given: measure() takes the constraint's maximum.
+    //
+    // Scrollback.  The lines stack into a column of content, line i
+    // spanning [i, i + 1) line heights down from the content's top.  The
+    // view shows the band of it that ends at `bottom`.  Following (the
+    // default), the bottom is the content's own, so the newest line sits
+    // on the bottom edge and new lines push the old ones up.  Scrolled
+    // back, the bottom is held as a distance from the content's TOP, so
+    // lines added below leave the view where it is.  Scrolling clamps at
+    // the oldest line (the view's top edge on the content's top, or the
+    // content's top on the view's top edge if the content is shorter)
+    // and at the newest, and reaching the newest follows again.  Pixels,
+    // not lines, so a trackpad scrolls smoothly.
+    //
+    // Events.  A scroll anywhere is the log's, wherever the pointer is:
+    // its owner decides what reaches it.  A delta's sign is ScrollView's
+    // (positive y drags the content down, revealing older lines).
 
     class TextLog : public Widget {
     public:
@@ -566,16 +582,42 @@ namespace wry::gui {
 
         const char* kind() const override { return "TextLog"; }
         rect<float> bounds() const override { return _rect; }
-        // "lines N": how many lines it holds (not how many fit).
+        // "lines N": how many lines it holds (not how many fit); then,
+        // scrolled back, "back B/MAX": pixels above the newest line, and
+        // the most there could be.
         String state() const override;
 
         Size measure(SizeConstraints, MeasureContext const&) override;
-        void arrange(rect<float> r) override { _rect = r; }
+        void arrange(rect<float> r) override;
+        bool on_event(Event const&) override;
         void paint(Painter&) override;
+
+        // The scroll model, in pixels.  The line height is the font's, as
+        // of the last measure (kFallbackHeightPt without a font).
+        float line_height() const { return _line_h; }
+        float content_height() const;
+        float view_height() const { return std::max(_rect.b.y - _rect.a.y, 0.0f); }
+        // Showing the newest line, as new lines arrive.
+        bool following() const { return !_bottom || back() < 0.5f; }
+        // Where the view's bottom edge is, down from the content's top.
+        float bottom() const;
+        // How far the view is above the newest line; 0 when following.
+        float back() const { return content_height() - bottom(); }
+        // The most back() can be: the content above a full view.
+        float max_back() const { return std::max(content_height() - view_height(), 0.0f); }
+        // Drag the content down by dy (up if negative), clamped; reaching
+        // the newest line follows.
+        void scroll_by(float dy);
+        void follow() { _bottom.reset(); }
+
+        static constexpr float kFallbackHeightPt = 24.0f;
 
     private:
         ContiguousDeque<String> const* _lines;
         rect<float> _rect = {0, 0, 0, 0};
+        float _line_h = 2.0f * kFallbackHeightPt;
+        // Scrolled back: the view's bottom, down from the content's top.
+        std::optional<float> _bottom;
     };
 
     // ----------------------------------------------------------------
@@ -660,8 +702,8 @@ namespace wry::gui {
     // ----------------------------------------------------------------
     // ConsoleView: the console's widget tree, filling what it is given:
     // a LineField half a line above the bottom edge and a TextLog over
-    // all the rest, its text aligned with the field's prompt.  Events go
-    // to the field (the log takes none).
+    // all the rest, its text aligned with the field's prompt.  Scrolls go
+    // to the log, wherever the pointer is; every other event to the field.
 
     class ConsoleView : public Widget {
     public:
@@ -669,6 +711,7 @@ namespace wry::gui {
         : _output(std::move(output)), _input(std::move(input)) {}
 
         TextLog& output() { return *_output; }
+        TextLog const& output() const { return *_output; }
         LineField& input() { return *_input; }
 
         const char* kind() const override { return "ConsoleView"; }
@@ -680,7 +723,10 @@ namespace wry::gui {
 
         Size measure(SizeConstraints, MeasureContext const&) override;
         void arrange(rect<float>) override;
-        bool on_event(Event const& e) override { return _input->on_event(e); }
+        bool on_event(Event const& e) override {
+            return (e.kind == WryEventKindScroll) ? _output->on_event(e)
+                                                  : _input->on_event(e);
+        }
         void paint(Painter&) override;
 
     private:

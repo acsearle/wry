@@ -254,8 +254,12 @@ namespace wry {
                 case WryEventKindMouseDown:
                 case WryEventKindMouseMove:
                 case WryEventKindMouseUp:
+                case WryEventKindScroll:
                     return _on_mouse(e);
                 default:
+                    // Key ups, pinches, the pointer entering and leaving:
+                    // nothing of the console's, and while it is open
+                    // modality stops them anyway
                     return false;
             }
         }
@@ -316,7 +320,7 @@ namespace wry {
 
             // The keys that are the console's rather than the editor's.
             enum { none, cancel, paste, complete, submit, close, older, newer,
-                   accept, accept_word } what = none;
+                   accept, accept_word, page_up, page_down } what = none;
 
             // A motion to the right at the end of the line has nowhere
             // to go: it takes the suggestion instead.
@@ -333,6 +337,8 @@ namespace wry {
                 case key::Escape:    what = close;                   break;
                 case key::ArrowUp:   what = older;                   break;
                 case key::ArrowDown: what = newer;                   break;
+                case key::PageUp:    what = page_up;                 break;
+                case key::PageDown:  what = page_down;               break;
                 case key::ArrowRight:
                     if (at_end)
                         what = (alt || ctrl) ? accept_word : accept;
@@ -360,9 +366,8 @@ namespace wry {
                     break;
                 case close:
                     _active = false;
-                    // a press still held on the input line: its release is
-                    // still ours, or it would land on the palette below
-                    _swallow_release = _view->input().pressed();
+                    // a press still held is forgotten by the field, but its
+                    // release is still ours (_held_buttons, _on_mouse)
                     _view->input().cancel_drag();
                     if (_log) _log->append("[ESC] Hide console");
                     break;
@@ -382,6 +387,16 @@ namespace wry {
                 case accept_word:
                     _accept_suggestion(false);
                     break;
+                case page_up:
+                case page_down: {
+                    // A page is the view less a line, so a line of the
+                    // last page is still in sight.
+                    TextLog& log = _view->output();
+                    const float page = std::max(log.view_height() - log.line_height(),
+                                                log.line_height());
+                    log.scroll_by(what == page_up ? page : -page);
+                    break;
+                }
                 case none:
                     // Everything else is line editing: cursor motion,
                     // selection, erasure, insertion, undo, copy and cut
@@ -393,7 +408,10 @@ namespace wry {
             return true;
         }
 
+        // Submitting goes back to the newest output, to see what the line
+        // does.
         void ConsoleOverlay::_submit() {
+            _view->output().follow();
             String input = _input.take();
             if (!_issue) {
                 // Unwired: the line just joins the output.
@@ -525,37 +543,52 @@ namespace wry {
                                                 agreed.chars.end()));
         }
 
-        // The mouse is the field's, while the console is open; a press
-        // or drag that moves the cursor changes what is suggested.
+        // The mouse is the console's while it is open, wherever the
+        // pointer is: scrolls go to the log, the rest to the field (a
+        // press or drag that moves the cursor changes what is
+        // suggested), and what neither takes is stopped by modality.
         bool ConsoleOverlay::_on_mouse(Event const& e) {
+            const unsigned bit = 1u << (unsigned)e.button;
             if (!_active) {
-                // Closed while a press on the input line was held (by
-                // Escape, which set _swallow_release, or by a toggle, which
-                // left the field pressed): that press's release is still
-                // the console's, not the palette's below the line
-                const bool claimed = _swallow_release || _view->input().pressed();
+                // Closed (by Escape or the toggle) with a press made
+                // while it was open still held: the field forgets the
+                // drag, and that press's release is still the console's,
+                // not the palette's or the world's below.  A press made
+                // after closing is theirs, release and all.
                 _view->input().cancel_drag();
-                if (claimed && (e.kind == WryEventKindMouseUp)) {
-                    _swallow_release = false;
+                if (e.kind == WryEventKindMouseDown)
+                    _held_buttons &= ~bit;
+                if (e.kind == WryEventKindMouseUp && (_held_buttons & bit)) {
+                    _held_buttons &= ~bit;
                     return true;
                 }
-                _swallow_release = claimed;
                 return false;
             }
+            if (e.kind == WryEventKindMouseDown)
+                _held_buttons |= bit;
+            else if (e.kind == WryEventKindMouseUp)
+                _held_buttons &= ~bit;
             const bool consumed = _view->on_event(e);
-            if (consumed)
+            if (consumed && e.kind != WryEventKindScroll)
                 _update_suggestion();
             return consumed;
         }
 
         // The tree fills the viewport; layout is redone every frame (the
         // viewport, the UI scale and the font may all have changed).
+        void ConsoleOverlay::layout(float2 viewport_px, MeasureContext const& mctx) {
+            const Size size = _view->measure(SizeConstraints::tight(viewport_px), mctx);
+            _view->arrange(rect<float>{0.0f, 0.0f, size.w, size.h});
+        }
+
+        TextLog const& ConsoleOverlay::output_view() const {
+            return static_cast<ConsoleView const&>(*_view).output();
+        }
+
         void ConsoleOverlay::paint(Painter& p) {
             if (!_active) return;
             if (!p.font || !p.atlas) return;
-            const MeasureContext mctx{ p.font, p.pixels_per_point };
-            const Size size = _view->measure(SizeConstraints::tight(p.viewport_size_px), mctx);
-            _view->arrange(rect<float>{0.0f, 0.0f, size.w, size.h});
+            layout(p.viewport_size_px, MeasureContext{ p.font, p.pixels_per_point });
             _view->paint(p);
         }
 
@@ -1221,7 +1254,8 @@ namespace wry {
         // TextLog
         // ================================================================
 
-        Size TextLog::measure(SizeConstraints c, MeasureContext const&) {
+        Size TextLog::measure(SizeConstraints c, MeasureContext const& ctx) {
+            _line_h = ctx.font ? ctx.font->height : ctx.pt(kFallbackHeightPt);
             // Fill: as large as allowed (as small as required if the
             // maximum is unbounded).
             const Size s{
@@ -1232,28 +1266,80 @@ namespace wry {
             return _last_measured_size;
         }
 
+        float TextLog::content_height() const {
+            return _lines ? (float)_lines->size() * _line_h : 0.0f;
+        }
+
+        // The held bottom, clamped to what the content and the view allow
+        // now (the view may have grown since, or the font changed).
+        float TextLog::bottom() const {
+            const float content = content_height();
+            if (!_bottom)
+                return content;
+            return std::clamp(*_bottom, std::min(view_height(), content), content);
+        }
+
+        void TextLog::scroll_by(float dy) {
+            if (!std::isfinite(dy) || dy == 0.0f)
+                return;
+            const float content = content_height();
+            const float b = std::clamp(bottom() - dy, std::min(view_height(), content), content);
+            // Within half a pixel of the newest line is at it.
+            if (b >= content - 0.5f)
+                _bottom.reset();
+            else
+                _bottom = b;
+        }
+
+        // A view that has come to show the newest line (it grew, or the
+        // lines it was held over went) follows from here on.
+        void TextLog::arrange(rect<float> r) {
+            _rect = r;
+            if (_bottom && bottom() >= content_height() - 0.5f)
+                _bottom.reset();
+        }
+
+        bool TextLog::on_event(Event const& e) {
+            if (e.kind != WryEventKindScroll)
+                return false;
+            scroll_by(e.scroll_delta.y);
+            return true;
+        }
+
         String TextLog::state() const {
-            char buffer[32];
+            char buffer[96];
             std::snprintf(buffer, sizeof(buffer), "lines %zu",
                           _lines ? (std::size_t)_lines->size() : (std::size_t)0);
-            return String(StringView(buffer));
+            String s(StringView{buffer});
+            if (!following()) {
+                std::snprintf(buffer, sizeof(buffer), " back %g/%g",
+                              (double)back(), (double)max_back());
+                s.append(StringView(buffer));
+            }
+            return s;
         }
 
         void TextLog::paint(Painter& p) {
-            if (!_lines || !p.font || !p.atlas) return;
+            if (!_lines || !p.font || !p.atlas || _line_h <= 0.0f) return;
             const RGBA8Unorm_sRGB color(1.0f, 1.0f, 1.0f, 1.0f);
-            // Each line's glyph cell is centered in a slot one font line
-            // high; the newest slot sits on the bottom edge, and the walk
-            // up stops at the first slot wholly above the top edge.
-            const float slot_h = p.font->height;
+            // Each line's glyph cell is centered in a slot one line high;
+            // the slots stack down from the content's top, which sits
+            // bottom() above the bottom edge.  Only the slots that reach
+            // into the rect are drawn.
+            const float slot_h = _line_h;
             const float centre = slot_h * 0.5f
                 + (p.font->ascender + p.font->descender) * 0.5f;
+            const float top = _rect.b.y - bottom();
+            const std::size_t n = _lines->size();
+            const float first = std::floor((_rect.a.y - top) / slot_h);
+            const float last = std::ceil((_rect.b.y - top) / slot_h);
+            const std::size_t i0 = (first > 0.0f) ? (std::size_t)first : 0;
+            const std::size_t i1 = (last > 0.0f) ? std::min((std::size_t)last, n) : 0;
             const rect<float> previous = p.push_clip(_rect);
-            float slot_top = _rect.b.y;
-            for (auto it = _lines->end(); slot_top >= _rect.a.y && it != _lines->begin(); ) {
-                --it;
-                slot_top -= slot_h;
-                p.draw_text_run(simd_make_float2(_rect.a.x, slot_top + centre), *it, color);
+            for (std::size_t i = i0; i < i1; ++i) {
+                const float slot_top = top + (float)i * slot_h;
+                p.draw_text_run(simd_make_float2(_rect.a.x, slot_top + centre),
+                                (*_lines)[i], color);
             }
             p.pop_clip(previous);
         }
@@ -2192,6 +2278,92 @@ namespace wry {
 
             std::error_code ec;
             std::filesystem::remove_all(gc.settings_paths.directory, ec);
+
+            co_return;
+        };
+
+        // The TextLog's scrollback (gui_widget.hpp): following by default,
+        // scrolled back it holds still while lines arrive, clamps at both
+        // ends, and follows again at the bottom.  Measured without a font,
+        // so a line is kFallbackHeightPt at 2 pixels to the point.
+        define_test("gui_text_log_scroll")
+        {
+            ContiguousDeque<String> lines;
+            TextLog log(&lines);
+            auto lay_out = [&](float h) {
+                (void) log.measure(SizeConstraints::tight(float2{800.0f, h}),
+                                   MeasureContext{nullptr, 2.0f});
+                log.arrange(rect<float>{0.0f, 0.0f, 800.0f, h});
+            };
+            auto scroll = [&](float dy) {
+                Event e{};
+                e.kind = WryEventKindScroll;
+                e.scroll_delta = float2{0.0f, dy};
+                const bool consumed = log.on_event(e);
+                require(consumed);
+                (void) consumed;
+            };
+            auto add = [&](int n) {
+                for (int i = 0; i < n; ++i)
+                    lines.emplace_back("line");
+            };
+            lay_out(480.0f);
+            const float h = log.line_height();
+            require(h == 48.0f);
+
+            // Shorter than the view: nothing to scroll.
+            add(5);
+            scroll(100.0f);
+            require(log.following() && log.back() == 0.0f && log.max_back() == 0.0f);
+
+            // 100 lines, 10 to the view.
+            add(95);
+            lay_out(480.0f);
+            require(log.following() && log.bottom() == 100.0f * h);
+            require(log.max_back() == 90.0f * h);
+            // Back three lines: the view stays on the same lines as more
+            // arrive, and is that much further back from the newest.
+            scroll(3.0f * h);
+            require(!log.following() && log.back() == 3.0f * h);
+            add(4);
+            lay_out(480.0f);
+            require(!log.following() && log.bottom() == 97.0f * h);
+            require(log.back() == 7.0f * h);
+            require(log.state() == StringView("lines 104 back 336/4512"));
+            // Clamped at the oldest line: the view's top on the content's.
+            scroll(1e6f);
+            require(log.bottom() == log.view_height() && log.back() == log.max_back());
+            // A key-up-sized nudge back down, then past the newest:
+            // clamped there, and following again.
+            scroll(-0.25f * h);
+            require(!log.following() && log.bottom() == 10.25f * h);
+            scroll(-1e6f);
+            require(log.following() && log.back() == 0.0f);
+            require(log.state() == StringView("lines 104"));
+            add(1);
+            require(log.following() && log.bottom() == 105.0f * h);
+            // Within half a pixel of the newest line is at it.
+            scroll(h);
+            scroll(-(h - 0.25f));
+            require(log.following());
+
+            // A view that grows to show the newest line follows; one that
+            // grows past the oldest shows them all from the top.
+            scroll(2.0f * h);
+            lay_out(480.0f);
+            require(!log.following());
+            lay_out(10000.0f);
+            require(log.following() && log.bottom() == log.content_height());
+            lay_out(480.0f);
+            scroll(5.0f * h);
+            require(log.back() == 5.0f * h);
+            log.follow();
+            require(log.following());
+
+            // Only scrolls are the log's.
+            Event click{};
+            click.kind = WryEventKindMouseDown;
+            require(!log.on_event(click));
 
             co_return;
         };

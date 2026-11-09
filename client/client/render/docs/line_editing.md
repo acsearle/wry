@@ -85,10 +85,12 @@ The console's (`ConsoleOverlay`):
 | Escape, the toggle-console key | close the console |
 | click, Shift-click, drag on the input line | place the cursor, extend, select |
 | double click, triple click | select the word, the line |
+| scroll (wheel, trackpad), anywhere | scroll the output back and forth |
+| PageUp, PageDown | scroll the output a view less a line |
 
-(The mouse rows are `LineField`'s, which also consumes the release of
+(The click rows are `LineField`'s, which also consumes the release of
 any press it took, so a double click on the line does not fall through
-to the palette under it.)
+to the palette under it.  The scroll rows are `TextLog`'s.)
 
 Alt is Option on macOS.  Ctrl-arrows and Ctrl-Backspace are the Windows
 and Linux spellings of word motion; on macOS the system usually takes
@@ -162,10 +164,22 @@ they land on the same cursor position within 400 ms.
 glyph puts the cursor before it and the right half after it.  The
 positions are those of the last painted frame.
 
-**The mouse and what is behind the console.**  The console still lets
-clicks through to the world, except those that start on its input line;
-a drag begun there is the console's until release, wherever the pointer
-goes.
+**The console is modal.**  While it is open every key and every mouse
+event is the console's, wherever the pointer is and whatever the keymap
+binds the key to: nothing reaches the world, the palette or any other
+widget below (decisions 2026-11-08, item 13).  A drag begun on the input
+line is the console's until release, wherever the pointer goes, and the
+release of any press made while it was open is still the console's if
+Escape or the toggle closes it first.  The world keeps track of where
+the pointer is (so the keys that act at the cursor tile are right the
+moment the console closes) but does not show its hover.
+
+**Scrolling the output.**  The scroll wheel, a trackpad swipe or
+PageUp / PageDown move the output log through its history, in pixels,
+clamped at the oldest and the newest line.  At the bottom the log
+follows new output; scrolled back it stays on the lines it shows as new
+ones arrive, and scrolling back down to the newest line follows again.
+Enter goes back to the newest output.
 
 ### 3.3 Kill, yank and undo
 
@@ -307,7 +321,11 @@ blinks at rest.
    of its use.
 5. **A candidate popup** (3.6).
 6. **A kill ring** (3.3).
-7. **Scrolling the output** with the wheel or PageUp.
+7. **A wheel mouse's notches** (untried).  The delegate passes
+   `scrollingDeltaY` on as pixels whether or not the device has precise
+   deltas (`hasPreciseScrollingDeltas`), so a notched wheel, which
+   reports about a line per notch, likely moves the log a few pixels a
+   notch, as it would barely pan the world.
 8. **Windows and Linux key spellings** for copy, paste, undo and
    select-all (section 2).
 
@@ -317,7 +335,9 @@ Unit tests: `gui_line_editor*` (including a randomized differential
 test against a vector-of-code-points model with cursor and anchor),
 `gui_line_history*` (the file in a temporary directory),
 `command_completion`, `gui_context_console_editing` (the console end to
-end: Tab, the suggestion, walks, paste).
+end: Tab, the suggestion, walks, paste), `gui_text_log_scroll` (the
+scrollback), `gui_context_console_modal` and `world_state_console_modal`
+(nothing gets past the open console; scrolls scroll it).
 
 By eye: an offscreen instance driven through the socket,
 

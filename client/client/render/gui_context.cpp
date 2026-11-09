@@ -1566,6 +1566,136 @@ namespace wry {
         co_return;
     };
 
+    // The console is modal (decisions 2026-11-08 item 13): while it is
+    // open no key and no mouse event gets past the app-tier overlays, so
+    // the scene's stack and the world (which see only what dispatch
+    // leaves) never do; scrolls scroll its output.  Closed, it takes
+    // nothing but its toggle and the releases of presses it took.
+    define_test("gui_context_console_modal") {
+        GuiContext gc;
+        auto& console = gc.console_overlay;
+        using gui::Event;
+        using gui::MouseButton;
+        auto event = [](WryEventKind kind, float x = 640.0f, float y = 300.0f) {
+            Event e{};
+            e.kind = kind;
+            e.location = float2{x, y};
+            return e;
+        };
+        auto key = [](WryEventKind kind, uint32_t k, const char* text = "") {
+            Event e{};
+            e.kind = kind;
+            e.key = k;
+            std::strncpy(e.text, text, sizeof(e.text) - 1);
+            return e;
+        };
+        auto button = [&](WryEventKind kind, MouseButton b, float y = 300.0f) {
+            Event e = event(kind, 640.0f, y);
+            e.button = b;
+            return e;
+        };
+        auto scroll = [&](float dy) {
+            Event e = event(WryEventKindScroll);
+            e.scroll_delta = float2{0.0f, dy};
+            return e;
+        };
+        const WryEventKind mouse_kinds[] = {
+            WryEventKindMouseMove, WryEventKindMouseDown, WryEventKindMouseUp,
+            WryEventKindMouseEnter, WryEventKindMouseExit, WryEventKindScroll,
+            WryEventKindMagnify,
+        };
+
+        // Closed: the mouse and the world's keys pass.
+        require(!console.active());
+        for (WryEventKind kind : mouse_kinds)
+            require(!gc.overlays.dispatch(event(kind)));
+        require(!gc.overlays.dispatch(key(WryEventKindKeyDown, 'r', "r")));
+        require(!gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::Tab)));
+
+        // Open, laid out over 1280 x 800 pixels without a font, with a
+        // hundred lines of output: 1 + 100 lines of 48 pixels under a
+        // 728-pixel log.
+        gc.issue(Origin::binding, "toggle-console");
+        require(console.active());
+        for (int i = 0; i != 100; ++i)
+            console.print("output");
+        console.layout(float2{1280.0f, 800.0f}, gui::MeasureContext{nullptr, 2.0f});
+        auto const& log = console.output_view();
+        require(log.line_height() == 48.0f && log.view_height() == 728.0f);
+        require(log.following());
+
+        // Every mouse event stops at the console, over the log or the
+        // field, whether it uses it or not.
+        for (WryEventKind kind : mouse_kinds) {
+            require(gc.overlays.dispatch(event(kind)));
+            require(gc.overlays.dispatch(event(kind, 640.0f, 760.0f)));
+        }
+        (void) gc.overlays.dispatch(scroll(-1e6f));
+        require(log.following());
+
+        // Every key too, the ones the keymap binds to world actions
+        // (R rotates, Tab toggles the map) included: they are the line's.
+        const std::size_t issued = gc.history.size();
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, 'r', "r")));
+        require(gc.overlays.dispatch(key(WryEventKindKeyUp, 'r')));
+        require(console.input().text() == StringView("r"));
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::Tab)));
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::F1 + 4)));
+        require(gc.history.size() == issued);
+
+        // A scroll, wherever the pointer is, scrolls the output back;
+        // new output leaves a scrolled-back view where it is ...
+        require(gc.overlays.dispatch(scroll(96.0f)));
+        require(!log.following() && log.back() == 96.0f);
+        const float bottom = log.bottom();
+        console.print("more");
+        require(log.bottom() == bottom && log.back() == 144.0f);
+        // ... PageUp and PageDown go a view less a line ...
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::PageUp)));
+        require(log.back() == 144.0f + 680.0f);
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::PageDown)));
+        require(log.back() == 144.0f);
+        // ... and back at the bottom it follows again.
+        require(gc.overlays.dispatch(scroll(-144.0f)));
+        require(log.following());
+        console.print("more");
+        require(log.following() && log.back() == 0.0f);
+        // Enter takes a scrolled-back view to the newest output.
+        (void) gc.overlays.dispatch(scroll(500.0f));
+        require(!log.following());
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::Enter)));
+        require(log.following());
+
+        // A press made while open keeps its release once Escape (or the
+        // toggle) has closed the console, wherever it was; the next
+        // press is the world's again, release and all.
+        require(gc.overlays.dispatch(button(WryEventKindMouseDown, MouseButton::Right)));
+        require(gc.overlays.dispatch(key(WryEventKindKeyDown, gui::key::Escape)));
+        require(!console.active());
+        require(!gc.overlays.dispatch(event(WryEventKindMouseMove)));
+        require(gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Right)));
+        require(!gc.overlays.dispatch(button(WryEventKindMouseDown, MouseButton::Right)));
+        require(!gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Right)));
+        // A press on the input line, closed by the toggle.
+        gc.issue(Origin::binding, "toggle-console");
+        require(console.active());
+        require(gc.overlays.dispatch(button(WryEventKindMouseDown, MouseButton::Left, 760.0f)));
+        gc.issue(Origin::binding, "toggle-console");
+        require(!console.active());
+        require(gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Left, 760.0f)));
+        require(!gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Left, 760.0f)));
+        // A press from before the console opened has its release stopped
+        // by modality (the world, which acts on releases, sees neither).
+        require(!gc.overlays.dispatch(button(WryEventKindMouseDown, MouseButton::Left)));
+        gc.issue(Origin::binding, "toggle-console");
+        require(gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Left)));
+        gc.issue(Origin::binding, "toggle-console");
+        require(!gc.overlays.dispatch(button(WryEventKindMouseUp, MouseButton::Left)));
+
+        (void) issued; (void) bottom;
+        co_return;
+    };
+
     // Sequencing, coalescing, injection, widget queries and screenshots
     // (commands.md sections 7 and 8), with the host's per-frame duties
     // played by hand.

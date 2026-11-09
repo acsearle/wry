@@ -2785,8 +2785,11 @@ struct WryNumberGlyph {
 
         }
 
-        {
-            // The cursor's tile (render space, like _mouse4)
+        // The cursor's tile (render space, like _mouse4).  Not while the
+        // console is open: it is modal, and the world shows no hover.
+        // (WorldState::handle_events still tracks the pointer, so the
+        // tile is right again the moment the console closes.)
+        if (!_model->_gui.console_overlay.active()) {
             simd_float4 location = _model->_mouse4;
             location.x = round(location.x);
             location.y = round(location.y);
