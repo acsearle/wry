@@ -43,6 +43,7 @@
 - Optical weight of the UI font: Noto Sans Medium is kept (decided 2026-11-09, decisions_2026-11-08.md item 7), but the Light / Regular / Medium comparison (assets/ui_font_weights.png) shows the importance of *optical* weight; antony will think more about that
 
 ## Bugs
+- Release `--test-only` traps (SIGTRAP, exit 133) in an svg.cpp test coroutine (`svg::$_6` resume + 220, a `brk #1` after only Subpath-vector destructors: at -Os with NDEBUG the compiler reduced the test body to unreachable, i.e. it proved UB on that path; likely svg_arc or svg_rasterize, whose bodies are mostly asserts).  Already present at 28e331f (found 2026-11-09; the Release suite was last seen passing before the SVG merge).  Debug passes
 - GTAO scale is specified in pixels?  (Why does it even have a scale, should be scale-free exponentially spaced samples?)
   - Not pixels: a world-space falloff (analysis 2026-11-08; see done.md).  DECIDE: a scale-free variant (exponentially spaced taps out to the screen edge through the depth pyramid, no falloff) is a design choice, not a bug fix
 
