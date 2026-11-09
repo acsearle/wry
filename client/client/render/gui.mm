@@ -760,9 +760,12 @@ namespace wry {
 
                 case WryEventKindMouseDown:
                     if (e.button != MouseButton::Left) return false;
-                    if (!inside) return false;
-                    _pressed = true;
-                    return true;
+                    // A new left press ends any earlier one, even if we never
+                    // saw its release (a modal overlay, such as the open
+                    // console, can stop it): a press made elsewhere must not
+                    // become a click when dragged onto us.
+                    _pressed = inside;
+                    return inside;
 
                 case WryEventKindMouseUp: {
                     if (e.button != MouseButton::Left) return false;
@@ -1255,7 +1258,13 @@ namespace wry {
         // ================================================================
 
         Size TextLog::measure(SizeConstraints c, MeasureContext const& ctx) {
-            _line_h = ctx.font ? ctx.font->height : ctx.pt(kFallbackHeightPt);
+            const float line_h = ctx.font ? ctx.font->height : ctx.pt(kFallbackHeightPt);
+            // A held position is pixels from the content's top: when the
+            // line height changes (UI scale, font), rescale it so the view
+            // stays on the same lines rather than jumping.
+            if (_bottom && _line_h > 0.0f && line_h != _line_h)
+                *_bottom *= line_h / _line_h;
+            _line_h = line_h;
             // Fill: as large as allowed (as small as required if the
             // maximum is unbounded).
             const Size s{
@@ -2359,6 +2368,19 @@ namespace wry {
             require(log.back() == 5.0f * h);
             log.follow();
             require(log.following());
+
+            // A line-height change (UI scale) keeps a held view on the
+            // same lines: 20 lines back at 48 px is 20 lines back at 24 px.
+            scroll(20.0f * h);
+            require(log.bottom() == 85.0f * h);
+            (void) log.measure(SizeConstraints::tight(float2{800.0f, 480.0f}),
+                               MeasureContext{nullptr, 1.0f});
+            log.arrange(rect<float>{0.0f, 0.0f, 800.0f, 480.0f});
+            require(log.line_height() == 0.5f * h);
+            require(!log.following() && log.bottom() == 85.0f * (0.5f * h));
+            lay_out(480.0f);
+            require(log.bottom() == 85.0f * h);
+            log.follow();
 
             // Only scrolls are the log's.
             Event click{};

@@ -1,5 +1,5 @@
 {
-  "_comment": "Terrain presentation: display name and map tint per kind, keyed by the terrain.hpp name minus TERRAIN_ (never the numeric code). 'color_srgb' is #rrggbb (or #rrggbbaa), sRGB: the board's pastel tint and the world map's pixel. Presentation only and per client; dig times and yields (TERRAIN_MINING) are simulation rules and stay compiled in. A missing file or key falls back to the compiled-in TERRAIN_COLOR_SRGB with a warning; unknown keys warn.",
+  "_comment": "Terrain presentation: display name and map tint per kind, keyed by the terrain.hpp name minus TERRAIN_ (never the numeric code). 'color_srgb' is #rrggbb, sRGB: the board's pastel tint and the world map's pixel. Presentation only and per client; dig times and yields (TERRAIN_MINING) are simulation rules and stay compiled in. A missing file or key falls back to the compiled-in TERRAIN_COLOR_SRGB with a warning; unknown keys warn.",
   "WATER": {
     "name": "Water",
     "color_srgb": "#d8e2ea"

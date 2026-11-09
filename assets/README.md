@@ -12,7 +12,7 @@ the files survive renumbering.
 | `matter.json` | display name and pile colour per matter kind; `price_compiled_in` is a read-only reference | `game/presentation.cpp`, at startup |
 | `opcodes.json` | DRAFT display name, one-line summary, help text and stack effect per opcode, for antony to edit | `game/presentation.cpp`, at startup; no UI shows it yet |
 
-Colours are `"#rrggbb"` (or `"#rrggbbaa"`) in sRGB. A `_comment` key in any
+Colours are `"#rrggbb"` in sRGB. A `_comment` key in any
 object is ignored.
 
 ## Presentation only, for now

@@ -212,16 +212,29 @@ if(APPLE)
         MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
-# The text assets (assets/README.md): every assets/*.json is a bundle
-# resource, copied to Contents/Resources/data, where game/presentation.cpp
-# finds it at startup.  CMake's bundle-copy rule re-copies a file whenever
-# it changes, so editing one and rebuilding is enough; the glob re-runs at
-# the next build when files are added or removed.
+# The text assets (assets/README.md): every assets/*.json is copied to the
+# bundle's Contents/Resources/data, where game/presentation.cpp finds it at
+# startup.  The copy is a sync: data/ is emptied first, so a deleted or
+# renamed file does not linger in the bundle (the loader prefers the bundle
+# to the source tree).  The command line names every file, so adding or
+# removing one (the glob re-runs at the next build) reruns it, as does
+# editing one (DEPENDS).
 file(GLOB WRY_TEXT_ASSETS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/*.json)
 if(APPLE)
-    target_sources(client PRIVATE ${WRY_TEXT_ASSETS})
-    set_source_files_properties(${WRY_TEXT_ASSETS} PROPERTIES
-        MACOSX_PACKAGE_LOCATION Resources/data)
+    set(WRY_TEXT_ASSETS_STAMP ${CMAKE_CURRENT_BINARY_DIR}/text_assets.stamp)
+    set(WRY_TEXT_ASSETS_DIR $<TARGET_BUNDLE_CONTENT_DIR:client>/Resources/data)
+    add_custom_command(
+        OUTPUT ${WRY_TEXT_ASSETS_STAMP}
+        COMMAND ${CMAKE_COMMAND} -E rm -rf ${WRY_TEXT_ASSETS_DIR}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${WRY_TEXT_ASSETS_DIR}
+        COMMAND ${CMAKE_COMMAND} -E copy ${WRY_TEXT_ASSETS} ${WRY_TEXT_ASSETS_DIR}
+        COMMAND ${CMAKE_COMMAND} -E touch ${WRY_TEXT_ASSETS_STAMP}
+        DEPENDS ${WRY_TEXT_ASSETS}
+        COMMENT "Syncing assets/*.json into the bundle"
+        VERBATIM)
+    add_custom_target(text_assets ALL DEPENDS ${WRY_TEXT_ASSETS_STAMP})
+    # After the bundle exists (linking creates Contents/).
+    add_dependencies(text_assets client)
 endif()
 
 # The suite: the binary's own headless test runner

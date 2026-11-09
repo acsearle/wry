@@ -90,11 +90,14 @@ namespace wry {
             return -1;
         }
 
-        // "#rrggbb" or "#rrggbbaa"
+        // "#rrggbb", opaque.  No alpha form: the consumers disagree about
+        // alpha (the board's tint and pile colour ignore it, the world map
+        // copies it into a texture whose fragment shader discards below
+        // 0.5), so a translucent tint could only be wrong somewhere.
         std::optional<Rgba8> _color_from_string(StringView v) {
             const char* p = v.chars.data();
             const std::size_t n = v.chars.size();
-            if ((n != 7 && n != 9) || p[0] != '#')
+            if (n != 7 || p[0] != '#')
                 return std::nullopt;
             Rgba8 c = { 0, 0, 0, 255 };
             for (std::size_t i = 0; i != (n - 1) / 2; ++i) {
@@ -175,7 +178,7 @@ namespace wry {
                 c = _color_from_string(v.as_string());
             if (!c) {
                 _warn(warnings, {file, ": ", key,
-                                 ": 'color_srgb' is not \"#rrggbb\" or \"#rrggbbaa\"; "
+                                 ": 'color_srgb' is not \"#rrggbb\"; "
                                  "keeping the compiled-in colour"});
                 return;
             }
@@ -410,12 +413,24 @@ namespace wry {
     define_test("presentation_overlay") {
         Presentation const d = default_presentation();
         {
+            // No alpha form: "#rrggbbaa" is a bad colour (warns, kept)
+            Presentation p = d;
+            std::vector<String> w;
+            terrain_presentation_from_json(p, StringView(
+                "{ \"WATER\": { \"color_srgb\": \"#01020380\" },"
+                "  \"SAND\": {}, \"GRASS\": {}, \"ROCK\": {}, \"COAL\": {},"
+                "  \"IRON_ORE\": {}, \"LIMESTONE\": {} }"),
+                &w);
+            require(w.size() == 1);
+            require(p.terrain[TERRAIN_WATER].color == d.terrain[TERRAIN_WATER].color);
+        }
+        {
             Presentation p = d;
             std::vector<String> w;
             terrain_presentation_from_json(p, StringView(
                 "{ \"_comment\": \"x\","
                 "  \"WATER\": { \"name\": \"Sea\", \"color_srgb\": \"#010203\" },"
-                "  \"SAND\":  { \"color_srgb\": \"#0a0B0c80\", \"_comment\": \"y\" },"
+                "  \"SAND\":  { \"color_srgb\": \"#0a0B0c\", \"_comment\": \"y\" },"
                 "  \"GRASS\": { \"name\": \"Lawn\" },"
                 "  \"ROCK\": {}, \"COAL\": {}, \"IRON_ORE\": {}, \"LIMESTONE\": {} }"),
                 &w);
@@ -423,7 +438,7 @@ namespace wry {
             require(p.terrain[TERRAIN_WATER].name == StringView("Sea"));
             require(p.terrain[TERRAIN_WATER].color == (Rgba8{1, 2, 3, 255}));
             require(p.terrain[TERRAIN_SAND].name == d.terrain[TERRAIN_SAND].name);
-            require(p.terrain[TERRAIN_SAND].color == (Rgba8{10, 11, 12, 128}));
+            require(p.terrain[TERRAIN_SAND].color == (Rgba8{10, 11, 12, 255}));
             require(p.terrain[TERRAIN_GRASS].name == StringView("Lawn"));
             require(p.terrain[TERRAIN_GRASS].color == d.terrain[TERRAIN_GRASS].color);
             require(p.terrain[TERRAIN_ROCK].color == d.terrain[TERRAIN_ROCK].color);

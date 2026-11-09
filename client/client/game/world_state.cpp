@@ -2315,6 +2315,10 @@ namespace wry {
         };
         gui::Event swipe = event(WryEventKindScroll);
         swipe.scroll_delta = float2{1024.0f, 0.0f};
+        // A vertical scroll, which the console's log takes when it has
+        // more lines than fit (and the world would pan by, if it leaked).
+        gui::Event roll = event(WryEventKindScroll);
+        roll.scroll_delta = float2{0.0f, 200.0f};
         gui::Event pinch = event(WryEventKindMagnify);
         pinch.magnification = 0.5f;
         gui::Event tab{};
@@ -2323,8 +2327,18 @@ namespace wry {
 
         (void) gc.issue(command::Origin::binding, StringView("toggle-console"));
         require(gc.console_overlay.active());
+        // Enough output that the log can scroll, laid out as paint would.
+        for (int i = 0; i != 3; ++i)
+            (void) gc.issue(command::Origin::console, StringView("help"));
+        gc.console_overlay.layout(float2{1280.0f, 800.0f}, gui::MeasureContext{nullptr, 2.0f});
+        require(gc.console_overlay.output_view().following());
+        require(gc.console_overlay.output_view().max_back() > 200.0f);
+        // Holding a tile, so a click that leaked to the world would write
+        // it (a command), not merely clear the follow.
+        ws.hold(Term(OPCODE_FLIP_FLOP));
         const std::size_t issued = gc.history.size();
         gc.events.push(swipe);
+        gc.events.push(roll);
         gc.events.push(pinch);
         gc.events.push(event(WryEventKindMouseDown));
         gc.events.push(event(WryEventKindMouseUp));
@@ -2336,14 +2350,21 @@ namespace wry {
         // The pointer is tracked all the same: (100, 100) of (640, 400)
         // points is NDC (-0.6875, 0.5)
         require(std::abs(ws._mouse.x + 0.6875f) < 1e-6f && std::abs(ws._mouse.y - 0.5f) < 1e-6f);
-        // The scroll went to the console's output
-        require(gc.console_overlay.output_view().following());
+        // The vertical scroll went to the console's output
+        require(!gc.console_overlay.output_view().following());
 
         (void) gc.issue(command::Origin::binding, StringView("toggle-console"));
         require(!gc.console_overlay.active());
         gc.events.push(swipe);
         ws.handle_events(view_pt);
         require((ws._focus_tile == Coordinate{-1, 0}));
+        // Control: the same click with the console closed does reach the
+        // world and issues a command, so the check above can fail.
+        const std::size_t closed = gc.history.size();
+        gc.events.push(event(WryEventKindMouseDown));
+        gc.events.push(event(WryEventKindMouseUp));
+        ws.handle_events(view_pt);
+        require(gc.history.size() > closed);
 
         (void) issued;
         co_await ws.end_session(std::chrono::milliseconds(200));

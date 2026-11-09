@@ -1708,7 +1708,10 @@ struct WryNumberGlyph {
                 const wry::rect<float> cell = px_rect((float)i, (float)j,
                                                       (float)(i + 1), (float)(j + 1));
 
-                const bool hover = (palette.hover_i() == (int)i)
+                // No hover while the modal console is open: the palette
+                // sees no mouse moves then, so its hover cell is stale.
+                const bool hover = !_model->_gui.console_overlay.active()
+                    && (palette.hover_i() == (int)i)
                     && (palette.hover_j() == (int)j);
                 const bool selected = (palette.selected_i() == (int)i)
                     && (palette.selected_j() == (int)j);

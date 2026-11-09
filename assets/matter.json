@@ -1,5 +1,5 @@
 {
-  "_comment": "Matter presentation: display name and pile colour per kind, keyed by the matter.hpp name minus MATTER_ (never the numeric code). 'color_srgb' is #rrggbb (or #rrggbbaa), sRGB; the shipping container is drawn as its mesh, so its colour is unused. 'price_compiled_in' is READ-ONLY reference: the price is a simulation rule (lockstep peers must agree), compiled in as MATTER_PRICE; editing it here changes nothing, and a unit test fails if it drifts from the compiled value. A missing file or key falls back to the compiled-in MATTER_COLOR_SRGB with a warning; unknown keys warn.",
+  "_comment": "Matter presentation: display name and pile colour per kind, keyed by the matter.hpp name minus MATTER_ (never the numeric code). 'color_srgb' is #rrggbb, sRGB; the shipping container is drawn as its mesh, so its colour is unused. 'price_compiled_in' is READ-ONLY reference: the price is a simulation rule (lockstep peers must agree), compiled in as MATTER_PRICE; editing it here changes nothing, and a unit test fails if it drifts from the compiled value. A missing file or key falls back to the compiled-in MATTER_COLOR_SRGB with a warning; unknown keys warn.",
   "SHIPPING_CONTAINER": {
     "name": "Shipping Container",
     "color_srgb": "#c8c8c8",
