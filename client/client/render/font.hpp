@@ -79,9 +79,6 @@ namespace wry {
     };
     
     Font2 build_font2();
-
-    
-    std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t);
     
     
 

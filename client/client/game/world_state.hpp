@@ -129,8 +129,9 @@ namespace wry {
         // The tile captions printed as decals (`caption-decals`), at this
         // percent of the baked captions' size, on the caption-free tile
         // faces (assets_tile_nocaption.png in place of assets_tile.png);
-        // 0 keeps the captions baked into the atlas
-        int _caption_decals = 0;
+        // 0 shows the same captions baked into the atlas (the palette and
+        // the cursor always show those)
+        int _caption_decals = 100;
 
 
         // user interface state

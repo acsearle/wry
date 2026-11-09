@@ -1872,7 +1872,7 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "caption-decals", "Print the tiles' captions as decals in Noto Sans Condensed, at PERCENT of the baked size, on caption-free tile faces (assets_tile_nocaption.png); 0 goes back to the Futura captions baked into assets_tile.png", Category::local,
+            "caption-decals", "Print the tiles' captions as decals in Noto Sans Condensed, at PERCENT of the baked size, on caption-free tile faces (assets_tile_nocaption.png); 0 shows the same captions baked into assets_tile.png, as the palette and cursor do", Category::local,
             std::tuple{
                 Param<Ctx, int64_t>{"percent", "the captions' size against the baked ones; 0 for the baked captions", 100},
             },

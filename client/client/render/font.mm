@@ -7,9 +7,6 @@
 
 // .mm - Infected by SpriteAtlas?
 
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include FT_OUTLINE_H
 
 #include <algorithm>
 #include <iostream>
@@ -263,7 +260,6 @@ namespace wry {
 
         // Load the font file and parse with our bespoke OTF/CFF stack.
         // TTF/OTF is binary; go through bytes_from_file.
-        // ContiguousDeque<byte> bytes = bytes_from_file("Futura Medium Condensed.otf");
         ContiguousDeque<byte> bytes = bytes_from_file("OpenSans_Condensed-Light.ttf");
         // ContiguousDeque<byte> bytes = bytes_from_file("OpenSans-VariableFont_wdth,wght.ttf");
         auto handle = otf::Handle::parse({
@@ -339,82 +335,6 @@ namespace wry {
 
 
 
-namespace wry {
-    
-    // source of glyph coverage maps or signed distance fields
-    
-    struct Font3 {
-        
-        FT_Library library;
-        FT_Face face;
-                
-        Font3() {
-            
-            FT_Error e;
-            
-            {
-                FT_Init_FreeType(&library);
-                e = FT_Init_FreeType(&library);
-                assert(!e);
-            }
-            
-            {
-                const char* filepathname
-                = "Futura Medium Condensed.otf";
-                FT_Long face_index = 0;
-                e = FT_New_Face(library,
-                                filepathname,
-                                face_index,
-                                &face);
-                assert(!e);
-            }
-            
-            {
-                FT_UInt pixel_width = 24;
-                FT_UInt pixel_height = 0;
-                FT_Set_Pixel_Sizes(face, pixel_width, pixel_height);
-            }
-            
-        }
-        
-        ~Font3() {
-            FT_Done_FreeType(library);
-        }
-        
-        std::tuple<float2,
-        matrix_view<R8Unorm>,
-        float2> operator[](char32_t charcode) const {
-            
-            FT_UInt glyph_index = FT_Get_Char_Index(face, charcode);
-            assert(glyph_index);
-            
-            FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER);
-            
-            auto& glyph = *face->glyph;
 
-            float2 origin = make<float2>(-glyph.bitmap_left, glyph.bitmap_top);
-            
-            auto& bitmap = glyph.bitmap;
-            R8Unorm* pointer = reinterpret_cast<R8Unorm*>(bitmap.buffer);
-            stride_iterator row_iterator(pointer, bitmap.pitch);
-            matrix_view<R8Unorm> view(row_iterator, bitmap.rows, bitmap.width);
-
-            float advance = glyph.advance.x / 64.0f;
-            float height = face->height / 64.0f;
-
-            return { origin, view, make<float2>(advance, height) };
-            
-        }
-        
-    }; // struct Font2
-    
-    std::tuple<float2, matrix_view<R8Unorm>, float2> get_glyph(char32_t charcode) {
-        static auto* f = new Font3();
-        
-        return (*f)[charcode];
-        
-    }
-
-} // namespace wry
 
 

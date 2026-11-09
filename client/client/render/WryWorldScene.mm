@@ -6,6 +6,7 @@
 //
 
 // Shared Metal header first for no contamination
+#include "metal_event.hpp"
 #include "ShaderTypes.h"
 
 #include <algorithm>
@@ -152,6 +153,10 @@ struct WryNumberGlyph {
     // and shadow passes
     id<MTLTexture> _symbolField;
     std::string _symbolAtlasName;      // loaded; the model's _symbol_atlas asks for another
+    // The captioned tiles (assets_tile), kept for the palette and the
+    // cursor while the board shows the caption-free ones under printed
+    // captions (-paletteSymbols)
+    id<MTLTexture> _captionedSymbols;
     std::string _symbolAtlasMissing;   // the last name that had no png, so it is not retried every frame
     // The `atlas` switch in flight (-requestSymbolAtlasNamed:): its name
     // and its decode's slot, shared only with the task publishing it
@@ -277,6 +282,7 @@ struct WryNumberGlyph {
         return;
     // Longest first: the pool starts them in order
     preload->symbol_atlas(wry::path_for_resource("assets_tile", "png"));
+    preload->symbol_atlas(wry::path_for_resource("assets_tile_nocaption", "png"));
     preload->image(wry::path_for_resource("assets", "png"), false);
     for (const char* name : {"terrain/Terrain_Albedo", "terrain/Terrain_NormalGL", "terrain/Terrain_ORM",
                              "day", "sandbox_photo", "Container20_AO", "Container20_Normal", "testpattern"})
@@ -391,6 +397,7 @@ struct WryNumberGlyph {
                 vertexCount:4
               instanceCount:6];
     [encoder endEncoding];
+    wry::abort_on_command_buffer_error(commandBuffer);
     [commandBuffer commit];
 
     return output;
@@ -429,6 +436,7 @@ struct WryNumberGlyph {
     [command_encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     [command_encoder endEncoding];
     
+    wry::abort_on_command_buffer_error(command_buffer);
     [command_buffer commit];
     
 }
@@ -877,6 +885,13 @@ struct WryNumberGlyph {
             {
                 wry::LoadTimer timer("loadSymbolAtlasNamed assets_tile");
                 [self loadSymbolAtlasNamed:@"assets_tile"];
+                _captionedSymbols = _symbols;
+                // The board prints its captions as decals by default
+                // (`caption-decals`), on the caption-free tiles
+                if (_model->_caption_decals > 0) {
+                    [self loadSymbolAtlasNamed:@"assets_tile_nocaption"];
+                    [self loadDecalFont];
+                }
             }
 
             {
@@ -943,11 +958,10 @@ struct WryNumberGlyph {
 
 // The symbol atlas NAME.png (the assets folder; "assets" is the cutout
 // glyphs, "assets_tile" the same glyphs printed on tiles, from
-// tools/make_tile_atlas.py) and the field beside it, then the opcode
-// labels stamped into the uppercase opcode cells and the mip chain.
+// tools/make_tile_atlas.py) and the field beside it, then the mip chain.
 //
 // Made once per process per atlas (and per assets.json, which names the
-// cells the labels go on): the finished textures and stroke widths go in
+// cells): the finished textures and stroke widths go in
 // the render context's assetCache, and nothing writes them after (the
 // stamping and the mips come before they are cached; an `atlas` switch
 // swaps the scene's references, it does not edit the textures), so later
@@ -977,8 +991,17 @@ struct WryNumberGlyph {
     [self installSymbolAtlasNamed:name decoded:std::move(*decoded)];
 }
 
+// The atlas the palette and the cursor show: the board's, unless the
+// board shows the caption-free tiles (its captions printed as decals),
+// when they show the same tiles with the captions baked in.  Same layout
+- (id<MTLTexture>)paletteSymbols {
+    if (_symbolAtlasName == "assets_tile_nocaption" && _captionedSymbols)
+        return _captionedSymbols;
+    return _symbols;
+}
+
 - (NSString*)symbolAtlasKeyNamed:(NSString*)name {
-    // assets.json: the labels stamped depend on it
+    // assets.json: the layout tables read with it depend on it
     NSString* layout = [_ctx assetKeyForResource:@"assets" ofType:@"json" recipe:@""];
     return [_ctx assetKeyForResource:name ofType:@"png"
                               recipe:[@"symbol atlas/" stringByAppendingString:layout]];
@@ -1006,7 +1029,7 @@ struct WryNumberGlyph {
 }
 
 // The atlas NAME as made before this process, if it was: swapped in at
-// once (the layout read again for this scene's tables, nothing stamped)
+// once (the layout read again for this scene's tables)
 - (BOOL)installCachedSymbolAtlasNamed:(NSString*)name {
     NSArray* cached = _ctx.assetCache[[self symbolAtlasKeyNamed:name]];
     if (!cached)
@@ -1019,7 +1042,7 @@ struct WryNumberGlyph {
     _symbolStrokeWidth.assign(w, w + widths.length / sizeof(float));
     if (!_glyphs)
         [self loadGlyphs];
-    [self readSymbolAtlasLayoutStamping:NO];
+    [self readSymbolAtlasLayout];
     _symbolAtlasName = name.UTF8String;
     NSLog(@"symbol atlas: %@ (made earlier this process)", name);
     return YES;
@@ -1030,8 +1053,7 @@ struct WryNumberGlyph {
 - (void)installSymbolAtlasNamed:(NSString*)name decoded:(wry::AssetPreload::SymbolAtlas&&)decoded
 {
     wry::LoadTimer installTimer("  install symbol atlas ", name.UTF8String);
-    // Mip levels allocated now, generated below once the opcode
-    // labels have been stamped into level 0.  Straight alpha (see
+    // Mip levels allocated now, generated below.  Straight alpha (see
     // -newTextureWithMipStorageFromResource:)
     id<MTLTexture> symbols = [_ctx newTextureWithImage:decoded.image
                                            pixelFormat:MTLPixelFormatRGBA8Unorm_sRGB
@@ -1074,10 +1096,9 @@ struct WryNumberGlyph {
     _symbols = symbols;
     _symbolField = field;
     _symbolStrokeWidth = strokeWidth;
-    [self readSymbolAtlasLayoutStamping:YES];
+    [self readSymbolAtlasLayout];
 
-    // Level 0 is final (label stamping above is its last edit), so
-    // fill the mip chain.  Blocking; nothing has sampled it yet.  The
+    // Level 0 is final, so fill the mip chain.  Blocking; nothing has sampled it yet.  The
     // kernel stays inside each kCells x kCells cell
     {
         wry::LoadTimer timer("  symbol atlas mipmaps");
@@ -1133,7 +1154,7 @@ struct WryNumberGlyph {
 }
 
 // The request's decode, if it has landed: installed (main thread, a few
-// tens of ms: the texture uploads, the stamping and the mip kernel).  The
+// tens of ms: the texture uploads and the mip kernel).  The
 // slot's ready() and take() lock the mutex the task published under, so
 // the task's writes to the decode happen-before the reads here; take()
 // cannot block once ready() said true.  A failed decode (published empty)
@@ -1152,9 +1173,10 @@ struct WryNumberGlyph {
 }
 
 // The cell coordinates and captions of assets.json, for the atlas just
-// made current; with `stamp`, the opcode labels stamped into its level 0
-// as well (before its mips and before it is shared: only when making it)
-- (void)readSymbolAtlasLayoutStamping:(BOOL)stamp
+// made current.  (Until 2026-11-09 this also stamped the opcode names, in
+// Futura, into the uppercase opcode cells' margins; the tile atlas prints
+// the captions itself, tools/make_tile_atlas.py.)
+- (void)readSymbolAtlasLayout
 {
     using namespace ::simd;
     using namespace ::wry;
@@ -1249,9 +1271,8 @@ struct WryNumberGlyph {
                     }
                     // Lowercase opcode-art names: wired into the
                     // opcode coordinate table like any glyph, but
-                    // routed through this branch so the art is
-                    // NOT overstamped with label text the way the
-                    // uppercase opcode path stamps its cells
+                    // routed through this branch (they are not
+                    // OPCODE names)
                     else if (sv == "valve_north_south")
                         _opcode_to_coordinate[OPCODE_VALVE_NORTH_SOUTH] = coordinate;
                     else if (sv == "valve_east_west")
@@ -1260,52 +1281,6 @@ struct WryNumberGlyph {
                 else /* if (p != name_to_opcode.end()) */ {
                     // printf("p is not equal to end\n");
                     _opcode_to_coordinate[p->second] = coordinate;
-                    // Stamped once, when the atlas is made; a cached
-                    // atlas has its labels already
-                    if (!stamp) {
-                        ++j;
-                        continue;
-                    }
-
-                    // One atlas cell.  The atlas is a kCells x
-                    // kCells grid at whatever resolution it ships
-                    // in (assets.png is 4096 px, so 256 px cells);
-                    // the label glyphs are stamped at their
-                    // native pixel size regardless.
-                    const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells;
-                    matrix<RGBA8Unorm_sRGB> tile(cell, cell);
-                    MTLRegion region = MTLRegionMake2D(j*cell, i*cell, cell, cell);
-                    [_symbols getBytes:tile.data()
-                           bytesPerRow:tile.stride_bytes()
-                            fromRegion:region
-                           mipmapLevel:0];
-                    
-                    float2 cursor{0.0f, 8.0f};
-                    for (char32_t charcode : z) {
-                        auto [offset, view, advance] = get_glyph(charcode);
-                        cursor.y += advance.y;
-                        if (charcode == U'_') {
-                            cursor.x = 0;
-                            cursor.y += 4;
-                            continue;
-                        }
-                        if (cursor.x + advance.x >= (float) cell) {
-                            cursor.x = 0;
-                            cursor.y += advance.y + 4;
-                        }
-                        if ((view.major() < 3) || (view.minor() < 3))
-                            continue;
-                        compose(tile, view, (cursor - offset).yx);
-                        cursor.x += advance.x;
-                        cursor.y -= advance.y;
-                    }
-                    
-                    [_symbols replaceRegion:region
-                                mipmapLevel:0
-                                  withBytes:tile.data()
-                                bytesPerRow:tile.stride_bytes()];
-
-                    
                 }
                 ++j;
             }
@@ -1550,12 +1525,13 @@ struct WryNumberGlyph {
         // is the field's margin), cut out at its native resolution; the
         // NSImage below is still 32 points, so a higher-resolution atlas
         // just makes a sharper cursor.
-        const NSUInteger cell = _symbols.width / wry::SymbolSDF::kCells / 2;
+        id<MTLTexture> symbols = [self paletteSymbols];
+        const NSUInteger cell = symbols.width / wry::SymbolSDF::kCells / 2;
         matrix<RGBA8Unorm_sRGB> tile(cell, cell);
-        MTLRegion region = MTLRegionMake2D(coordinate.x * _symbols.width + cell / 2,
-                                           coordinate.y * _symbols.height + cell / 2,
+        MTLRegion region = MTLRegionMake2D(coordinate.x * symbols.width + cell / 2,
+                                           coordinate.y * symbols.height + cell / 2,
                                            cell, cell);
-        [_symbols getBytes:tile.data()
+        [symbols getBytes:tile.data()
                bytesPerRow:tile.stride_bytes()
                 fromRegion:region
                mipmapLevel:0];
@@ -1653,8 +1629,8 @@ struct WryNumberGlyph {
     // style plate docked to the bottom edge (it extends off-screen, so only
     // its top corners show and its shadow reads as that of a plate running
     // on below the edge), and on it a rounded square per opcode, one gap
-    // apart, each under its glyph from _symbols.  One instanced draw with
-    // _symbols bound; the untextured quads ignore it.
+    // apart, each under its glyph from -paletteSymbols.  One instanced
+    // draw with it bound; the untextured quads ignore it.
     if (!_model->show_map()) {
         auto& palette = _model->_palette_overlay;
         auto& m = palette.controls()._payload;
@@ -1754,7 +1730,7 @@ struct WryNumberGlyph {
         [encoder setVertexBuffer:qb.buffer
                           offset:qb.offset
                          atIndex:AAPLBufferIndexVertices];
-        [encoder setFragmentTexture:_symbols
+        [encoder setFragmentTexture:[self paletteSymbols]
                             atIndex:AAPLTextureIndexColor];
         [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                     vertexStart:0
