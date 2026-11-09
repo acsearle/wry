@@ -13,6 +13,7 @@ roughly by how much they unblock.
    `git fsck` is clean. Move the repo off the synced Desktop, or rename its
    folder to end in `.nosync`? (The conflict copies are kept under the
    session scratchpad, not deleted.)
+   **Decided 2026-11-09:** rename the repo folder to `wry.nosync` (Claude is doing this).
 2. **Agent worktrees.** `~/Desktop/wry-wt-*` hold one branch each (all merged
    or recorded below) plus uncommitted comparison screenshots in their
    `docs/` folders. Their `build/` folders are already deleted. Remove them
@@ -25,26 +26,32 @@ roughly by how much they unblock.
    Make it the default and drop Futura? Comparison:
    `wry-wt-strings/docs/captions_zoom{100,200}.png`. That needs the palette
    and cursor captions done the same way first, and Noto is about 40% wider.
+   **Decided 2026-11-09:** make the Noto decal captions the default and drop Futura (Claude is doing this now).
 4. **Bloom.** It is no longer computed unless shown (`toggle-bloom`). As built
    it blurs the HUD too and, with no HDR highlights, reads as a haze
    (`assets/bloom_off_vs_on.png`). Delete it, or move it before the GUI with
    a threshold?
+   **Decided 2026-11-09:** delete bloom (Claude is doing this now).
 5. **Indoor lighting.** `environment room` uses a procedural room
    (`assets/tools/make_room_env.py`). The effect is mild while the sun
    dominates (`assets/environment_day_vs_room.png`). Move the sun to the
    window's direction and dim it indoors? Use an HDR window?
 6. **Clear coat** defaults to 50% on tiles and tokens (`coat TILES TOKEN`), at
    roughness 1/8. Keep it?
+   **Decided 2026-11-09:** keep it.
 7. **UI font** is now Noto Sans Medium (`assets/ui_font_weights.png`
    compares Light, Regular and Medium). Keep it?
+   **Decided 2026-11-09:** keep it. The weights comparison shows the importance of *optical* weight; Antony will think more about that (todo note added).
 8. **Ambient occlusion: pick one** (the existing DECIDE): GTAO, Luft, or the
    symbol decals. Radiance cascades are a fourth candidate
    (`docs/radiance_cascades.md`: ambient yes, sun no; it lists 7 sub-decisions).
    A scale-free GTAO variant is also possible: the radius turned out to be
    world-space, not pixels.
+   **Decided 2026-11-09:** GTAO; delete the others (Luft, symbol-decal AO) (Claude is doing this now). Later, in an interactive turn: implement radiance cascades to compare against GTAO, with an environment map that suits them (indoors, a large-solid-angle window, relatively high up, relatively close to the view direction, giving soft short shadows) and no directional sun or shadow map at all. Screen-space limits are fine. Height field: not yet, since the experiment has no sun (todo item added).
 9. **Feedback item "U-turn is prominent and unhelpful"**: which U-turn? The
    TURN BACK tile's place in the palette, the U-turn in the DUMP glyph, or
    something else?
+   **Decided 2026-11-09:** the TURN BACK tile. Left as a REMINDER item in todo.md for much later.
 
 ## Design
 
@@ -54,6 +61,7 @@ roughly by how much they unblock.
     Context help on hover depends on these.
 11. **"Explode the stack" when following a truck**: what should it look
     like? (Click-to-follow is built.)
+    **Decided 2026-11-09:** the stack's tiles are stacked tightly; explode means draw them vertically with enough spacing to read their faces, probably spaced as if they were cubes. Animating into and out of the state is a stretch goal (Claude is doing this now).
 12. **Player write lost on a same-cell conflict**: retry by peek-then-pop,
     re-propose on abort, or accept the drop?
 13. **Console output scrolling**: the log fills the screen, so scrolling it
@@ -67,10 +75,12 @@ roughly by how much they unblock.
     about 237 MiB after the first world, plus about 101 MiB for each other
     atlas shown, held even at the main menu, with no eviction. Is that
     acceptable, or should it be evicted when you return to the menu?
+    **Decided 2026-11-09:** the memory is completely fine. New todo item: load all static assets as early as possible, before opening a world (splash first, then main-menu resources, then the rest; the first world render waits on loading), an aspiration to do later in stages.
 16. **GUI test suite default**: `--no-tests` opts out today. Keep running the
     suite beside the game, or make it opt-in?
 17. **UI scale**: add a control on the settings screen? The 32 pt cursor
     ignores `ui_scale`.
+    **Decided 2026-11-09:** yes, add a UI scale control on the settings screen; the cursor must be bigger regardless, matching the displayed tile size in the palette (Claude is doing this now; open question: the performance of a large hardware cursor).
 
 ## Concurrency and correctness (needs your judgement on the contracts)
 
@@ -89,11 +99,13 @@ roughly by how much they unblock.
     `g_reactor_tsan_helper` is broader than the kernel's per-knote ordering,
     so it can hide races. Switch to per-knote `__tsan_release(this)` /
     `__tsan_acquire(udata)`? (That also ran clean.)
+    **Decided 2026-11-09:** switch to per-knote release/acquire (Claude is doing this now).
 21. **`shared_event_wait`** (`render/metal_event.mm`): a stopped wait on a
     value that is never reached leaks a small state, because Metal cannot
     withdraw a notification. Should event owners signal `UINT64_MAX` when
     abandoning? It is also unverified whether a failed command buffer still
     signals its events.
+    **Decided 2026-11-09:** yes, event owners signal `UINT64_MAX` on abandonment. Leaking on a failed command buffer is fine; abort on a failed command buffer if we can detect it (Claude is doing this now).
 22. **`with_deadline`**: when an outer stop request races an inner that stops
     for another reason, the result can be nullopt or stopped; this is
     deliberate. OK?
