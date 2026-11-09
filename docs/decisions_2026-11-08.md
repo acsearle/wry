@@ -103,7 +103,7 @@ roughly by how much they unblock.
 19. **Model checker** ([`core/kqueue_reactor_model.cpp`](../client/client/core/kqueue_reactor_model.cpp)): spawn's
     `fetch_or(STARTED, release)` and the Callback's acquire garnish are not
     load-bearing in the model. Relax them, or keep them as belt-and-braces?
-    **Decided 2026-11-10:** relax all the things. Done: 37c1e1b (both relaxed; the old orders kept as passing model variants).
+    **Decided 2026-11-10:** relax all the things. Done: 37c1e1b + 2fc134e (both relaxed; the relaxed baseline passes the model, and the old protocol is checked too, as M_OLD_PROTOCOL).
 20. **TSan reactor hook**: the global release/acquire on
     `g_reactor_tsan_helper` is broader than the kernel's per-knote ordering,
     so it can hide races. Switch to per-knote `__tsan_release(this)` /
