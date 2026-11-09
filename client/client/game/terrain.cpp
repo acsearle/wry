@@ -261,8 +261,8 @@ namespace wry {
         }
         // making an existing chunk is a no-op, and never overwrites
         w->_terrain_for_coordinate.set(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, TERRAIN_ROCK);
-        assert(!ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 0, 0));
-        assert(ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 20, 0));
+        CHECK(!ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 0, 0));
+        CHECK(ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 20, 0));
         Terrain t = -1;
         CHECK(w->_terrain_for_coordinate.try_get(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, t));
         assert(t == TERRAIN_ROCK);

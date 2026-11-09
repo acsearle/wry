@@ -2140,7 +2140,7 @@ namespace wry {
             KeyCombo f5 = *combo_from_string(StringView("F5"));
             overlay.begin_capture(Action::toggle_points);
             assert(overlay.is_capturing());
-            assert(overlay.on_event(key_event(key::F1 + 4, 0)));   // F5
+            CHECK(overlay.on_event(key_event(key::F1 + 4, 0)));   // F5
             assert(!overlay.is_capturing());
             assert(keymap.action_from_combo(f5) == Action::toggle_points);
 
@@ -2154,14 +2154,14 @@ namespace wry {
 
             // Escape cancels without binding.
             overlay.begin_capture(Action::toggle_points);
-            assert(overlay.on_event(key_event(key::Escape, 0)));
+            CHECK(overlay.on_event(key_event(key::Escape, 0)));
             assert(!overlay.is_capturing());
             KeyCombo f6 = *combo_from_string(StringView("F6"));
             assert(!keymap.action_from_combo(f6));
 
             // A key auto-repeat while armed is swallowed but does not bind.
             overlay.begin_capture(Action::toggle_points);
-            assert(overlay.on_event(key_event(key::F1 + 5, 0, /*repeat*/true)));
+            CHECK(overlay.on_event(key_event(key::F1 + 5, 0, /*repeat*/true)));
             assert(overlay.is_capturing());   // still waiting for a real press
             assert(!keymap.action_from_combo(f6));
             overlay.on_event(key_event(key::Escape, 0));
@@ -2171,7 +2171,7 @@ namespace wry {
             KeyCombo r = *combo_from_string(StringView("R"));
             assert(keymap.action_from_combo(r) == Action::rotate);
             overlay.begin_capture(Action::flip_vertical);
-            assert(overlay.on_event(key_event('r', 0)));
+            CHECK(overlay.on_event(key_event('r', 0)));
             assert(keymap.action_from_combo(r) == Action::flip_vertical);
             assert(keymap.combos_from_action(Action::rotate).empty());
 
@@ -2180,13 +2180,13 @@ namespace wry {
             Event click{};
             click.kind = WryEventKindMouseDown;
             click.button = MouseButton::Left;
-            assert(overlay.on_event(click));
+            CHECK(overlay.on_event(click));
             assert(!overlay.is_capturing());
 
             // Reserved key (Escape is handled as cancel; try a truly
             // unmapped key): capture stays armed, nothing bound.
             overlay.begin_capture(Action::rotate);
-            assert(overlay.on_event(key_event(key::Unknown, 0)));
+            CHECK(overlay.on_event(key_event(key::Unknown, 0)));
             assert(overlay.is_capturing());
             overlay.on_event(key_event(key::Escape, 0));
 

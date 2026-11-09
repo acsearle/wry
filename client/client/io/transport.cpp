@@ -1183,7 +1183,7 @@ namespace wry {
         };
         {
             std::string over = codec.frame(tagged(1, std::string(70, 'x')));
-            assert(violation_of(over) == "frame too long");
+            CHECK(violation_of(over) == "frame too long");
             assert(violation_of(over.substr(0, 6)) == "frame too long");     // before the body
             assert(violation_of(over.substr(0, 5)).empty());                 // not yet
             std::string unknown = codec.frame(tagged(7, "?"));
@@ -1213,17 +1213,17 @@ namespace wry {
         auto held = [&]() { return std::string(pending.data(), pending.size()); };
         set("one\r\ntwo\nthr");
         std::vector<std::string> out;
-        assert(codec.split(pending, out).empty());
+        CHECK(codec.split(pending, out).empty());
         assert(out.size() == 2 && out[0] == "one" && out[1] == "two");
         assert(held() == "thr");
         append_bytes(pending, "ee\n", 3);
-        assert(codec.split(pending, out).empty());
+        CHECK(codec.split(pending, out).empty());
         assert(out.size() == 3 && out[2] == "three" && pending.empty());
         // A partial line over the cap, and a complete one
         set("123456789");
-        assert(codec.split(pending, out) == "line too long");
+        CHECK(codec.split(pending, out) == "line too long");
         set("ok\n123456789\n");
-        assert(codec.split(pending, out) == "line too long");
+        CHECK(codec.split(pending, out) == "line too long");
         assert(out.size() == 4 && out[3] == "ok");
         assert(codec.frame("x") == "x\n");
         assert(codec.farewell("why") == "why");

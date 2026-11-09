@@ -195,7 +195,7 @@ namespace wry {
                 return std::string_view(text.data(), text.chars.size()).starts_with("host joined");
             };
             co_await frames_until(joined);
-            assert(joined());
+            CHECK(joined());
 
             // A write, stepped in: `step` is pending until that many more
             // steps have arrived and been applied.  Which step carries the

@@ -117,3 +117,19 @@ roughly by how much they unblock.
 - `std::move_only_function`: Xcode's libc++ still lacks it.
 - GenMC / relacy for the relaxed-memory checks: neither is installed, and
   installing needs the network.
+
+## Raised 2026-11-09
+
+24. **assert policy**: the svg Release trap was the fourth round of
+    side-effects-in-assert, all of them in tests (2,288 of the ~3,000 asserts
+    are inside define_test bodies; every one of the 35 found today was in a
+    test).  Recommendation, all three together: (a) never put side effects in
+    assert, anywhere (now in CLAUDE.md); (b) keep running the suite in Release,
+    since that is where the optimizer turns UB into traps (it found this one);
+    (c) tests do not use assert at all: they use an always-evaluated check
+    that prints expression/file/line before aborting, enforced by a lint that
+    fails the build on `assert(` inside a define_test body.  (c) makes (a)
+    moot where it has actually gone wrong, and means a Release run checks
+    the same things as Debug.  Cost: a scripted rename of ~2,300 asserts,
+    plus fixing whatever real Release-only failures the newly live checks
+    turn up.

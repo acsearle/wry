@@ -2561,18 +2561,18 @@ namespace wry {
         WorldState ws(gc);
 
         // An empty tile: nothing happens.
-        assert(!ws.pipette_at(Coordinate{50, 50}));
+        CHECK(!ws.pipette_at(Coordinate{50, 50}));
         assert(!ws.is_holding());
 
         // A number, then an opcode, are copied into the hand.
-        assert(ws.pipette_at(Coordinate{-2, -2}));
+        CHECK(ws.pipette_at(Coordinate{-2, -2}));
         assert(ws._holding_value._value._data == term_make_integer_with(7)._data);
-        assert(ws.pipette_at(Coordinate{0, 4}));
+        CHECK(ws.pipette_at(Coordinate{0, 4}));
         assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
         assert(ws._palette_overlay.cursor_needs_refresh());
 
         // Matter is not: the hand keeps what it had.
-        assert(!ws.pipette_at(Coordinate{-2, 2}));
+        CHECK(!ws.pipette_at(Coordinate{-2, 2}));
         assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
 
         // The command: a full hand drops, an empty hand picks up at the
@@ -2774,8 +2774,8 @@ namespace wry {
             h0 = w._ptr->content_hash();
             ws._worlds.push_front(std::move(w));
         }
-        assert(reply_hash() == (Hash{h0}));
-        assert(reply_hash() == (Hash{h0}));
+        CHECK(reply_hash() == (Hash{h0}));
+        CHECK(reply_hash() == (Hash{h0}));
         // Step the displayed world as update() does.
         {
             Root<World const*> old_world;
@@ -2788,7 +2788,7 @@ namespace wry {
             unpin_global_epoch(pin);
             ws._worlds.emplace_back(next);
         }
-        assert(reply_hash() != (Hash{h0}));
+        CHECK(reply_hash() != (Hash{h0}));
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
         co_return;

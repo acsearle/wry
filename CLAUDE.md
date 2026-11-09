@@ -14,6 +14,10 @@
 - Distinguish carefully between debug-only assertions/instrumentation and production memory-ordering choices; do not generalize seq_cst usage from one to the other.
 - When uncertain, say so explicitly rather than asserting a finding.
 
+## Assertions
+
+- Never put a side effect inside `assert(...)` (or `precondition_debug` / `postcondition_debug`): NDEBUG removes the whole expression, and the Release build runs the unit tests. Hoist the call (`bool ok = parse(x, p); assert(ok);`) or use `CHECK(...)` from ext/assert.hpp, which always evaluates. This includes calls that fill out-parameters (parse_*, try_get), issue commands, deliver events, or save/write. Grepping for known mutator names has missed new ones three times.
+
 ## Plan Mode
 
 While in plan mode, do not call Edit/Write/Bash-with-side-effects under any circumstances. If the user appears to have already applied fixes, confirm before suggesting further edits and remain in plan mode until explicitly exited.

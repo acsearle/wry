@@ -657,7 +657,7 @@ namespace wry {
             A::SortedBuilder b2;
             if (built)
                 built->for_each([&b2](uint64_t k, int v) { b2.push(k, v); });
-            assert(A::same_shape(b2.finish(), built));
+            CHECK(A::same_shape(b2.finish(), built));
         };
 
         // Edges: empty, singleton, one block, sibling leaves, divergence at

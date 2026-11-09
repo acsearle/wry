@@ -1582,6 +1582,7 @@ namespace wry::svg {
 #include "image.hpp"
 #include "otf.hpp"
 #include "test.hpp"
+#include "assert.hpp"
 
 namespace wry::svg {
 
@@ -1617,98 +1618,98 @@ namespace wry::svg {
             // Packed signs and decimals.
             {
                 Path p;
-                assert(parse_path_data("M10-20L.5.5", p));
-                assert(p.size() == 1 && p[0].segments.size() == 1);
-                assert(near(p[0].start, P(10, -20), 0));
-                assert(near(p[0].segments[0].p[3], P(0.5, 0.5), 0));
-                assert(p[0].segments[0].line);
+                CHECK(parse_path_data("M10-20L.5.5", p));
+                CHECK(p.size() == 1 && p[0].segments.size() == 1);
+                CHECK(near(p[0].start, P(10, -20), 0));
+                CHECK(near(p[0].segments[0].p[3], P(0.5, 0.5), 0));
+                CHECK(p[0].segments[0].line);
             }
             // Exponents; an 'e' with no digits is not an exponent.
             {
                 Path p;
-                assert(parse_path_data("M1e2,1E-1l1.5e+1-2", p));
-                assert(near(p[0].start, P(100, 0.1), 1e-12));
-                assert(near(p[0].segments[0].p[3], P(115, -1.9), 1e-12));
+                CHECK(parse_path_data("M1e2,1E-1l1.5e+1-2", p));
+                CHECK(near(p[0].start, P(100, 0.1), 1e-12));
+                CHECK(near(p[0].segments[0].p[3], P(115, -1.9), 1e-12));
             }
             // Implicit repeats: lineto after moveto, relative after m.
             {
                 Path p;
-                assert(parse_path_data("M0 0 10 0 10 10z", p));
-                assert(p.size() == 1 && p[0].closed && p[0].segments.size() == 3);
+                CHECK(parse_path_data("M0 0 10 0 10 10z", p));
+                CHECK(p.size() == 1 && p[0].closed && p[0].segments.size() == 3);
                 Path q;
-                assert(parse_path_data("m1 1 2 0 0 2", q));
-                assert(near(q[0].segments[0].p[3], P(3, 1), 0));
-                assert(near(q[0].segments[1].p[3], P(3, 3), 0));
+                CHECK(parse_path_data("m1 1 2 0 0 2", q));
+                CHECK(near(q[0].segments[0].p[3], P(3, 1), 0));
+                CHECK(near(q[0].segments[1].p[3], P(3, 3), 0));
             }
             // H V h v
             {
                 Path p;
-                assert(parse_path_data("M0 0H10V5h-5v-5", p));
+                CHECK(parse_path_data("M0 0H10V5h-5v-5", p));
                 auto const& s = p[0].segments;
-                assert(s.size() == 4);
-                assert(near(s[0].p[3], P(10, 0), 0) && near(s[1].p[3], P(10, 5), 0));
-                assert(near(s[2].p[3], P(5, 5), 0) && near(s[3].p[3], P(5, 0), 0));
+                CHECK(s.size() == 4);
+                CHECK(near(s[0].p[3], P(10, 0), 0) && near(s[1].p[3], P(10, 5), 0));
+                CHECK(near(s[2].p[3], P(5, 5), 0) && near(s[3].p[3], P(5, 0), 0));
             }
             // Smooth cubic reflects the previous second control point;
             // smooth after a non-cubic uses the current point.
             {
                 Path p;
-                assert(parse_path_data("M0 0C1 1 2 1 3 0S5 -1 6 0", p));
-                assert(near(p[0].segments[1].p[1], P(4, -1), 1e-12));
+                CHECK(parse_path_data("M0 0C1 1 2 1 3 0S5 -1 6 0", p));
+                CHECK(near(p[0].segments[1].p[1], P(4, -1), 1e-12));
                 Path q;
-                assert(parse_path_data("M0 0L3 0S5 -1 6 0", q));
-                assert(near(q[0].segments[1].p[1], P(3, 0), 1e-12));
+                CHECK(parse_path_data("M0 0L3 0S5 -1 6 0", q));
+                CHECK(near(q[0].segments[1].p[1], P(3, 0), 1e-12));
             }
             // Quadratics become exact cubics; T reflects, including chains.
             {
                 Path p;
-                assert(parse_path_data("M0 0Q1 1 2 0T4 0t2 0", p));
+                CHECK(parse_path_data("M0 0Q1 1 2 0T4 0t2 0", p));
                 auto const& s = p[0].segments;
-                assert(s.size() == 3);
-                assert(near(s[0].p[1], P(2.0 / 3, 2.0 / 3), 1e-12));
+                CHECK(s.size() == 3);
+                CHECK(near(s[0].p[1], P(2.0 / 3, 2.0 / 3), 1e-12));
                 // Second control point reflected to (3, -1).
-                assert(near(s[1].p[1], P(2, 0) + (P(3, -1) - P(2, 0)) * (2.0 / 3), 1e-12));
+                CHECK(near(s[1].p[1], P(2, 0) + (P(3, -1) - P(2, 0)) * (2.0 / 3), 1e-12));
                 // Third reflected back to (5, 1).
-                assert(near(s[2].p[1], P(4, 0) + (P(5, 1) - P(4, 0)) * (2.0 / 3), 1e-12));
+                CHECK(near(s[2].p[1], P(4, 0) + (P(5, 1) - P(4, 0)) * (2.0 / 3), 1e-12));
             }
             // After Z the next subpath starts at the closed one's start, and
             // relative commands are relative to it.
             {
                 Path p;
-                assert(parse_path_data("M5 5 L6 5 L6 6 z l1 1", p));
-                assert(p.size() == 2);
-                assert(p[0].closed && !p[1].closed);
-                assert(near(p[1].segments[0].p[0], P(5, 5), 0));
-                assert(near(p[1].segments[0].p[3], P(6, 6), 0));
+                CHECK(parse_path_data("M5 5 L6 5 L6 6 z l1 1", p));
+                CHECK(p.size() == 2);
+                CHECK(p[0].closed && !p[1].closed);
+                CHECK(near(p[1].segments[0].p[0], P(5, 5), 0));
+                CHECK(near(p[1].segments[0].p[3], P(6, 6), 0));
             }
             // Packed arc flags: large=1 sweep=0 then the endpoint.
             {
                 Path p;
-                assert(parse_path_data("M0 0a5 5 0 1010 0", p));
+                CHECK(parse_path_data("M0 0a5 5 0 1010 0", p));
                 auto const& s = p[0].segments;
-                assert(s.size() == 2); // a semicircle is two quarter arcs
-                assert(near(s.back().p[3], P(10, 0), 0));
+                CHECK(s.size() == 2); // a semicircle is two quarter arcs
+                CHECK(near(s.back().p[3], P(10, 0), 0));
                 for (auto const& c : s)
                     for (int i = 0; i <= 8; ++i)
-                        assert(near(simd_distance(evaluate(c, i / 8.0), P(5, 0)), 5.0, 5 * 3e-4));
+                        CHECK(near(simd_distance(evaluate(c, i / 8.0), P(5, 0)), 5.0, 5 * 3e-4));
             }
             // Errors keep the prefix; a path must start with a moveto.
             {
                 Path p;
-                assert(!parse_path_data("M0 0 L1 1 L", p));
-                assert(p.size() == 1 && p[0].segments.size() == 1);
+                CHECK(!parse_path_data("M0 0 L1 1 L", p));
+                CHECK(p.size() == 1 && p[0].segments.size() == 1);
                 Path q;
-                assert(!parse_path_data("L1 1", q));
-                assert(q.empty());
+                CHECK(!parse_path_data("L1 1", q));
+                CHECK(q.empty());
                 Path r;
-                assert(!parse_path_data("M0 0 1", r));
+                CHECK(!parse_path_data("M0 0 1", r));
                 Path s;
-                assert(!parse_path_data("M0 0 z 1 1", s)); // no implicit repeat of Z
+                CHECK(!parse_path_data("M0 0 z 1 1", s)); // no implicit repeat of Z
                 Path t;
-                assert(!parse_path_data("M0 0 a1 1 0 2 0 1 1", t)); // flag must be 0/1
+                CHECK(!parse_path_data("M0 0 a1 1 0 2 0 1 1", t)); // flag must be 0/1
                 Path u;
-                assert(parse_path_data("  M 0,0 , 1,1  ", u)); // comma-wsp
-                assert(u[0].segments.size() == 1);
+                CHECK(parse_path_data("  M 0,0 , 1,1  ", u)); // comma-wsp
+                CHECK(u[0].segments.size() == 1);
             }
             co_return;
         };
@@ -1735,9 +1736,9 @@ namespace wry::svg {
                     // two combinations use the mirror-image center.
                     bool same_center = (large == sweep);
                     int expected = large ? 3 : 2;
-                    assert((int)sp.segments.size() == expected);
-                    assert(near(sp.segments.front().p[0], a, 0));
-                    assert(near(sp.segments.back().p[3], b, 0));
+                    CHECK((int)sp.segments.size() == expected);
+                    CHECK(near(sp.segments.front().p[0], a, 0));
+                    CHECK(near(sp.segments.back().p[3], b, 0));
                     double worst = 0;
                     double2 center = same_center ? c : a + b - c;
                     for (auto const& k : sp.segments) {
@@ -1748,7 +1749,7 @@ namespace wry::svg {
                             worst = std::max(worst, std::abs(r - 1));
                         }
                     }
-                    assert(worst < 3e-4);
+                    CHECK(worst < 3e-4);
                 }
             }
             // Radii too small are scaled up: a unit-radius request between
@@ -1758,49 +1759,49 @@ namespace wry::svg {
                 append_arc(sp, P(0, 0), 1, 1, 0, false, true, P(10, 0));
                 for (auto const& k : sp.segments)
                     for (int i = 0; i <= 8; ++i)
-                        assert(near(simd_distance(evaluate(k, i / 8.0), P(5, 0)), 5.0, 5 * 3e-4));
+                        CHECK(near(simd_distance(evaluate(k, i / 8.0), P(5, 0)), 5.0, 5 * 3e-4));
                 // sweep=1 is the positive-angle direction, clockwise on a
                 // y-down screen: left to right over the top, through y < 0.
-                assert(evaluate(sp.segments[0], 1.0).y < -4.9);
+                CHECK(evaluate(sp.segments[0], 1.0).y < -4.9);
             }
             // Zero radius is a line; coincident endpoints are nothing.
             {
                 Subpath sp;
                 append_arc(sp, P(0, 0), 0, 1, 0, false, true, P(10, 0));
-                assert(sp.segments.size() == 1 && sp.segments[0].line);
+                CHECK(sp.segments.size() == 1 && sp.segments[0].line);
                 Subpath sq;
                 append_arc(sq, P(1, 1), 3, 3, 0, false, true, P(1, 1));
-                assert(sq.segments.empty());
+                CHECK(sq.segments.empty());
             }
             co_return;
         };
 
         define_test("svg_transform") {
             Affine m;
-            assert(parse_transform("translate(10,20) scale(2) rotate(90)", m));
-            assert(near(m(P(1, 0)), P(10, 22), 1e-12));
-            assert(parse_transform("rotate(90 5 5)", m));
-            assert(near(m(P(6, 5)), P(5, 6), 1e-12));
-            assert(parse_transform("skewX(45)", m));
-            assert(near(m(P(0, 1)), P(1, 1), 1e-12));
-            assert(parse_transform("skewY(45)", m));
-            assert(near(m(P(1, 0)), P(1, 1), 1e-12));
-            assert(parse_transform(" matrix(1 2 3 4 5 6) ", m));
-            assert(near(m(P(1, 1)), P(9, 12), 1e-12));
-            assert(parse_transform("scale(2,3)translate(1)", m));
-            assert(near(m(P(0, 0)), P(2, 0), 1e-12));
-            assert(parse_transform("", m));
-            assert(!parse_transform("translate(1", m));
-            assert(!parse_transform("rotate(1 2)", m));
-            assert(!parse_transform("wobble(1)", m));
+            CHECK(parse_transform("translate(10,20) scale(2) rotate(90)", m));
+            CHECK(near(m(P(1, 0)), P(10, 22), 1e-12));
+            CHECK(parse_transform("rotate(90 5 5)", m));
+            CHECK(near(m(P(6, 5)), P(5, 6), 1e-12));
+            CHECK(parse_transform("skewX(45)", m));
+            CHECK(near(m(P(0, 1)), P(1, 1), 1e-12));
+            CHECK(parse_transform("skewY(45)", m));
+            CHECK(near(m(P(1, 0)), P(1, 1), 1e-12));
+            CHECK(parse_transform(" matrix(1 2 3 4 5 6) ", m));
+            CHECK(near(m(P(1, 1)), P(9, 12), 1e-12));
+            CHECK(parse_transform("scale(2,3)translate(1)", m));
+            CHECK(near(m(P(0, 0)), P(2, 0), 1e-12));
+            CHECK(parse_transform("", m));
+            CHECK(!parse_transform("translate(1", m));
+            CHECK(!parse_transform("rotate(1 2)", m));
+            CHECK(!parse_transform("wobble(1)", m));
 
             // Composed down the tree, then the root viewBox and the y-up
             // output flip.
             auto d = parse(R"~(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 100 100">
                 <g transform="translate(10 0)"><g transform="scale(2)">
                 <rect width="1" height="1"/></g></g></svg>)~");
-            assert(d.ok() && d.layers.size() == 1);
-            assert(near(d.size.x, 200, 0) && near(d.size.y, 200, 0));
+            CHECK(d.ok() && d.layers.size() == 1);
+            CHECK(near(d.size.x, 200, 0) && near(d.size.y, 200, 0));
             simd_float2 lo = {INFINITY, INFINITY}, hi = {-INFINITY, -INFINITY};
             for (auto const& b : d.layers[0].curves)
                 for (int i = 0; i != 4; ++i) {
@@ -1808,67 +1809,67 @@ namespace wry::svg {
                     hi = simd_max(hi, b.columns[i]);
                 }
             // user x in [10, 12], y in [0, 2]; viewBox scale 2; flip.
-            assert(near(lo.x, 20, 1e-4) && near(hi.x, 24, 1e-4));
-            assert(near(lo.y, 196, 1e-4) && near(hi.y, 200, 1e-4));
+            CHECK(near(lo.x, 20, 1e-4) && near(hi.x, 24, 1e-4));
+            CHECK(near(lo.y, 196, 1e-4) && near(hi.y, 200, 1e-4));
             co_return;
         };
 
         define_test("svg_color") {
             simd_float4 c;
-            assert(parse_color("#f00", c) && c.r == 1 && c.g == 0 && c.a == 1);
-            assert(parse_color("#00ff0080", c) && c.g == 1 && near(c.a, 128 / 255.0, 1e-6));
-            assert(parse_color("rgb(255, 0, 0)", c) && c.r == 1 && c.b == 0);
-            assert(parse_color("rgb(100%,50%,0%)", c) && c.r == 1 && near(c.g, 0.5, 1e-6));
-            assert(parse_color("rgba(0,0,255,0.5)", c) && c.b == 1 && near(c.a, 0.5, 1e-6));
-            assert(parse_color("RED", c) && c.r == 1);
-            assert(parse_color("transparent", c) && c.a == 0);
-            assert(!parse_color("none", c));
-            assert(!parse_color("#12345", c));
-            assert(!parse_color("#ggg", c));
+            CHECK(parse_color("#f00", c) && c.r == 1 && c.g == 0 && c.a == 1);
+            CHECK(parse_color("#00ff0080", c) && c.g == 1 && near(c.a, 128 / 255.0, 1e-6));
+            CHECK(parse_color("rgb(255, 0, 0)", c) && c.r == 1 && c.b == 0);
+            CHECK(parse_color("rgb(100%,50%,0%)", c) && c.r == 1 && near(c.g, 0.5, 1e-6));
+            CHECK(parse_color("rgba(0,0,255,0.5)", c) && c.b == 1 && near(c.a, 0.5, 1e-6));
+            CHECK(parse_color("RED", c) && c.r == 1);
+            CHECK(parse_color("transparent", c) && c.a == 0);
+            CHECK(!parse_color("none", c));
+            CHECK(!parse_color("#12345", c));
+            CHECK(!parse_color("#ggg", c));
 
             // Inheritance, style= over attributes, opacity, currentColor.
             auto d = parse(wrap(R"(<g fill="red" color="#00f" opacity="0.5">
                 <rect width="1" height="1" style="fill-opacity: 0.5"/>
                 <rect width="1" height="1" fill="#0f0" style="fill:currentColor"/>
                 <rect width="1" height="1" fill="none"/></g>)").c_str());
-            assert(d.ok() && d.layers.size() == 2);
-            assert(d.layers[0].color.r == 1 && near(d.layers[0].color.a, 0.25, 1e-6));
-            assert(d.layers[1].color.b == 1 && d.layers[1].color.g == 0);
-            assert(near(d.layers[1].color.a, 0.5, 1e-6));
+            CHECK(d.ok() && d.layers.size() == 2);
+            CHECK(d.layers[0].color.r == 1 && near(d.layers[0].color.a, 0.25, 1e-6));
+            CHECK(d.layers[1].color.b == 1 && d.layers[1].color.g == 0);
+            CHECK(near(d.layers[1].color.a, 0.5, 1e-6));
             co_return;
         };
 
         define_test("svg_shapes") {
             auto area = [](char const* body) {
                 auto d = parse(wrap(body).c_str());
-                assert(d.ok());
+                CHECK(d.ok());
                 return layers_area(d);
             };
-            assert(near(area(R"(<rect x="5" y="5" width="10" height="20"/>)"), 200, 1e-3));
-            assert(near(area(R"(<rect width="10" height="20" rx="2" ry="3"/>)"), 200 - (4 - M_PI) * 6, 1e-2));
+            CHECK(near(area(R"(<rect x="5" y="5" width="10" height="20"/>)"), 200, 1e-3));
+            CHECK(near(area(R"(<rect width="10" height="20" rx="2" ry="3"/>)"), 200 - (4 - M_PI) * 6, 1e-2));
             // rx alone sets ry; each clamps to half its side, independently
             // (so this is a 10 x 4 ellipse).
-            assert(near(area(R"(<rect width="10" height="4" rx="9"/>)"), M_PI * 10, 1e-2));
-            assert(near(area(R"(<rect width="10" height="4" rx="2"/>)"), 40 - (4 - M_PI) * 4, 1e-2));
-            assert(near(area(R"(<circle cx="50" cy="50" r="5"/>)"), M_PI * 25, 25 * 1e-3));
-            assert(near(area(R"(<ellipse cx="50" cy="50" rx="4" ry="2"/>)"), M_PI * 8, 8 * 1e-3));
-            assert(near(area(R"(<polygon points="0,0 4,0 0,3"/>)"), 6, 1e-4));
+            CHECK(near(area(R"(<rect width="10" height="4" rx="9"/>)"), M_PI * 10, 1e-2));
+            CHECK(near(area(R"(<rect width="10" height="4" rx="2"/>)"), 40 - (4 - M_PI) * 4, 1e-2));
+            CHECK(near(area(R"(<circle cx="50" cy="50" r="5"/>)"), M_PI * 25, 25 * 1e-3));
+            CHECK(near(area(R"(<ellipse cx="50" cy="50" rx="4" ry="2"/>)"), M_PI * 8, 8 * 1e-3));
+            CHECK(near(area(R"(<polygon points="0,0 4,0 0,3"/>)"), 6, 1e-4));
             // Fill closes an open polyline.
-            assert(near(area(R"(<polyline points="0 0 4 0 0 3"/>)"), 6, 1e-4));
+            CHECK(near(area(R"(<polyline points="0 0 4 0 0 3"/>)"), 6, 1e-4));
             // Not rendered: zero size, no fill, a line's interior.
-            assert(area(R"(<rect width="0" height="10"/>)") == 0);
-            assert(area(R"(<circle r="5" fill="none"/>)") == 0);
-            assert(area(R"(<line x1="0" y1="0" x2="10" y2="10"/>)") == 0);
-            assert(area(R"(<rect width="10" height="10" display="none"/>)") == 0);
-            assert(area(R"(<g display="none"><rect width="10" height="10"/></g>)") == 0);
+            CHECK(area(R"(<rect width="0" height="10"/>)") == 0);
+            CHECK(area(R"(<circle r="5" fill="none"/>)") == 0);
+            CHECK(area(R"(<line x1="0" y1="0" x2="10" y2="10"/>)") == 0);
+            CHECK(area(R"(<rect width="10" height="10" display="none"/>)") == 0);
+            CHECK(area(R"(<g display="none"><rect width="10" height="10"/></g>)") == 0);
             // <use> of <defs>, with x / y and style inheritance.
             {
                 auto d = parse(wrap(R"(<defs><circle id="c" r="2"/></defs>
                     <use href="#c" x="10" y="10" fill="#00f"/>
                     <use xlink:href="#c" x="20" y="10"/>)").c_str());
-                assert(d.ok() && d.layers.size() == 2);
-                assert(d.layers[0].color.b == 1 && d.layers[1].color.b == 0);
-                assert(near(layers_area(d), 2 * M_PI * 4, 1e-2));
+                CHECK(d.ok() && d.layers.size() == 2);
+                CHECK(d.layers[0].color.b == 1 && d.layers[1].color.b == 0);
+                CHECK(near(layers_area(d), 2 * M_PI * 4, 1e-2));
             }
             co_return;
         };
@@ -1879,21 +1880,21 @@ namespace wry::svg {
             char buf[512];
             std::snprintf(buf, sizeof buf, rings, "evenodd");
             auto d = parse(wrap(buf).c_str());
-            assert(d.ok());
-            assert(near(layers_area(d), M_PI * 75, 0.1));
+            CHECK(d.ok());
+            CHECK(near(layers_area(d), M_PI * 75, 0.1));
             std::snprintf(buf, sizeof buf, rings, "nonzero");
             d = parse(wrap(buf).c_str());
-            assert(near(layers_area(d), M_PI * 100, 0.1));
+            CHECK(near(layers_area(d), M_PI * 100, 0.1));
             // Inner drawn the other way round: a hole under either rule.
             char const* opposed = R"(<path fill-rule="%s" d="M 40 50 A 10 10 0 1 1 60 50 A 10 10 0 1 1 40 50 Z M 45 50 A 5 5 0 1 0 55 50 A 5 5 0 1 0 45 50 Z"/>)";
             std::snprintf(buf, sizeof buf, opposed, "nonzero");
             d = parse(wrap(buf).c_str());
-            assert(near(layers_area(d), M_PI * 75, 0.1));
+            CHECK(near(layers_area(d), M_PI * 75, 0.1));
             // A single contour drawn clockwise on screen still fills.
             d = parse(wrap(R"(<path d="M0 0 H10 V10 H0 Z"/>)").c_str());
-            assert(near(layers_area(d), 100, 1e-3));
+            CHECK(near(layers_area(d), 100, 1e-3));
             d = parse(wrap(R"(<path d="M0 0 V10 H10 V0 Z"/>)").c_str());
-            assert(near(layers_area(d), 100, 1e-3));
+            CHECK(near(layers_area(d), 100, 1e-3));
             co_return;
         };
 
@@ -1907,16 +1908,16 @@ namespace wry::svg {
   <rect x="5" y="5" width="10" height="10" fill="white"/>
   <circle cx="28" cy="28" r="6" style="fill: #fff"/>
 </svg>)");
-            assert(d.ok() && d.layers.size() == 2);
+            CHECK(d.ok() && d.layers.size() == 2);
             double expected = 100 + M_PI * 36;
-            assert(near(raster_area(d, 4), expected, expected * 0.01));
+            CHECK(near(raster_area(d, 4), expected, expected * 0.01));
             auto img = rasterize(d, 4, simd_float2{0, 0}, d.size, simd_float3{0, 0, 0});
-            assert(img.minor() == 160 && img.major() == 160);
+            CHECK(img.minor() == 160 && img.major() == 160);
             // Square center (10, 10) in y-down user space is row 40.
-            assert(((float)img[40, 40].r > 0.99f));
-            assert(((float)img[112, 112].r > 0.99f)); // circle center
-            assert(((float)img[2, 2].r < 0.01f));
-            assert(((float)img[40, 112].r < 0.01f));
+            CHECK(((float)img[40, 40].r > 0.99f));
+            CHECK(((float)img[112, 112].r > 0.99f)); // circle center
+            CHECK(((float)img[2, 2].r < 0.01f));
+            CHECK(((float)img[40, 112].r < 0.01f));
 
             // Strokes: a butt-capped line is a w x L rectangle; round caps
             // add a disc; square caps add w^2.
@@ -1925,23 +1926,23 @@ namespace wry::svg {
                 std::snprintf(buf, sizeof buf, R"(<path d="M 20 50 H 80" stroke="#fff" stroke-width="4" stroke-linecap="%s" fill="none"/>)", cap);
                 return parse(wrap(buf).c_str());
             };
-            assert(near(layers_area(line("butt")), 240, 1e-3));
-            assert(near(layers_area(line("round")), 240 + M_PI * 4, 1e-2));
-            assert(near(layers_area(line("square")), 240 + 16, 1e-3));
+            CHECK(near(layers_area(line("butt")), 240, 1e-3));
+            CHECK(near(layers_area(line("round")), 240 + M_PI * 4, 1e-2));
+            CHECK(near(layers_area(line("square")), 240 + 16, 1e-3));
             // A closed stroked square with miter joins is the difference of
             // two squares; its pieces overlap, so measure by rasterizing.
             auto sq = parse(wrap(R"(<rect x="20" y="20" width="40" height="40" fill="none" stroke="#fff" stroke-width="4"/>)").c_str());
             double ring = 44 * 44 - 36 * 36;
-            assert(near(raster_area(sq, 4), ring, ring * 0.01));
+            CHECK(near(raster_area(sq, 4), ring, ring * 0.01));
             // A stroked circle is an annulus (offset arcs are exact radii).
             auto ci = parse(wrap(R"(<circle cx="50" cy="50" r="20" fill="none" stroke="#fff" stroke-width="4"/>)").c_str());
             double annulus = M_PI * (22 * 22 - 18 * 18);
-            assert(near(raster_area(ci, 4), annulus, annulus * 0.01));
+            CHECK(near(raster_area(ci, 4), annulus, annulus * 0.01));
             // Round joins on a polyline: two butt bodies, a quarter disc on
             // the outer corner, the inner corner square counted once.
             auto pl = parse(wrap(R"(<polyline points="20,20 60,20 60,60" fill="none" stroke="#fff" stroke-width="4" stroke-linejoin="round"/>)").c_str());
             double bent = 2 * 40 * 4 - 4 + M_PI * 4 / 4;
-            assert(near(raster_area(pl, 4), bent, bent * 0.01));
+            CHECK(near(raster_area(pl, 4), bent, bent * 0.01));
             co_return;
         };
 
@@ -1953,7 +1954,7 @@ namespace wry::svg {
                 <g id="glyph2" transform="translate(5 0)"><use xlink:href="#r" y="-10"/></g>
                 </svg>)~";
             auto d = parse_otf_glyph(doc, 2);
-            assert(d.ok() && d.layers.size() == 1);
+            CHECK(d.ok() && d.layers.size() == 1);
             simd_float2 lo = {INFINITY, INFINITY}, hi = {-INFINITY, -INFINITY};
             for (auto const& b : d.layers[0].curves)
                 for (int i = 0; i != 4; ++i) {
@@ -1961,11 +1962,11 @@ namespace wry::svg {
                     hi = simd_max(hi, b.columns[i]);
                 }
             // y-down glyph space above the baseline becomes y-up.
-            assert(near(lo.x, 5, 1e-5) && near(hi.x, 15, 1e-5));
-            assert(near(lo.y, 0, 1e-5) && near(hi.y, 10, 1e-5));
-            assert(near(layers_area(d), 100, 1e-3));
-            assert(!parse_otf_glyph(doc, 3).ok());
-            assert(!parse_otf_glyph("\x1F\x8B...", 1).ok());
+            CHECK(near(lo.x, 5, 1e-5) && near(hi.x, 15, 1e-5));
+            CHECK(near(lo.y, 0, 1e-5) && near(hi.y, 10, 1e-5));
+            CHECK(near(layers_area(d), 100, 1e-3));
+            CHECK(!parse_otf_glyph(doc, 3).ok());
+            CHECK(!parse_otf_glyph("\x1F\x8B...", 1).ok());
 
             // The table lookup, over a hand-built 'SVG ' table: header,
             // document list of two records (glyphs 1-3, glyph 5), documents.
@@ -1981,12 +1982,12 @@ namespace wry::svg {
             t.insert(t.end(), a.begin(), a.end());
             t.insert(t.end(), b.begin(), b.end());
             span<byte const> s((byte const*)t.data(), t.size());
-            assert(otf::svg_document_in_table(s, 1) == a);
-            assert(otf::svg_document_in_table(s, 3) == a);
-            assert(otf::svg_document_in_table(s, 4).empty());
-            assert(otf::svg_document_in_table(s, 5) == b);
-            assert(otf::svg_document_in_table(s, 0).empty());
-            assert(otf::svg_document_in_table(span<byte const>((byte const*)t.data(), 20), 1).empty());
+            CHECK(otf::svg_document_in_table(s, 1) == a);
+            CHECK(otf::svg_document_in_table(s, 3) == a);
+            CHECK(otf::svg_document_in_table(s, 4).empty());
+            CHECK(otf::svg_document_in_table(s, 5) == b);
+            CHECK(otf::svg_document_in_table(s, 0).empty());
+            CHECK(otf::svg_document_in_table(span<byte const>((byte const*)t.data(), 20), 1).empty());
             co_return;
         };
 
@@ -2000,7 +2001,7 @@ namespace wry::svg {
             if (!path)
                 co_return;
             std::ifstream f(path, std::ios::binary);
-            assert(f);
+            CHECK(f);
             std::stringstream ss;
             ss << f.rdbuf();
             std::string text = ss.str();
@@ -2020,7 +2021,7 @@ namespace wry::svg {
                 printf("  element %-20s %d\n", k.c_str(), v);
             for (auto const& [k, v] : d.skipped)
                 printf("  skipped %-40s %d\n", k.c_str(), v);
-            assert(d.ok());
+            CHECK(d.ok());
             if (char const* dir = std::getenv("WRY_SVG_PNG_DIR")) {
                 auto write = [&](std::string name, float ppu, simd_float2 lo, simd_float2 hi) {
                     auto img = rasterize(d, ppu, lo, hi, simd_float3{0.05f, 0.05f, 0.06f});

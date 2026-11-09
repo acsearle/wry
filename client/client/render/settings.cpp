@@ -615,7 +615,7 @@ namespace wry {
             Settings s = load_settings(paths, &w);
             s.keymap.bind(*combo_from_string(StringView("F5")),
                           Action::rotate);
-            assert(save_settings(s, paths));
+            CHECK(save_settings(s, paths));
             Settings t = load_settings(paths, &w);
             assert(w.empty());
             assert(t.keymap.action_from_combo(
@@ -649,7 +649,7 @@ namespace wry {
         // A corrupt settings.json: load warns, runs on defaults, and
         // leaves the broken file in place for repair.
         {
-            assert(_text_to_file_atomic(paths.settings,
+            CHECK(_text_to_file_atomic(paths.settings,
                                         StringView("{ garbage")));
             std::vector<String> w;
             Settings s = load_settings(paths, &w);

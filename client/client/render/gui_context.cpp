@@ -1548,16 +1548,16 @@ namespace wry {
                 return text.find(needle) != std::string_view::npos;
             };
             type("tog");
-            assert(listed("ConsoleView"));
-            assert(listed("TextLog"));
-            assert(listed("LineField \"tog\""));
-            assert(listed("cursor 3 suggests \"gle-\""));
+            CHECK(listed("ConsoleView"));
+            CHECK(listed("TextLog"));
+            CHECK(listed("LineField \"tog\""));
+            CHECK(listed("cursor 3 suggests \"gle-\""));
             press(gui::key::ArrowLeft, Modifiers::Shift);
-            assert(listed("cursor 2 selected 2..3"));
+            CHECK(listed("cursor 2 selected 2..3"));
             press(gui::key::Escape);
             assert(!console.active());
             assert(console.widget_root() == nullptr);
-            assert(!listed("ConsoleView"));
+            CHECK(!listed("ConsoleView"));
             (void) listed;
         }
 

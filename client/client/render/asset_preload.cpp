@@ -209,10 +209,10 @@ namespace wry {
             for (std::size_t y = 0; y != direct.minor(); ++y)
                 assert(std::memcmp(&(*image)[(ptrdiff_t)y, 0], &direct[(ptrdiff_t)y, 0],
                                    direct.major() * sizeof(RGBA8Unorm_sRGB)) == 0);
-            assert(!preload.take_image(white, true).has_value());
+            CHECK(!preload.take_image(white, true).has_value());
         }
-        assert(!preload.take_image("no_such_asset_preload_test.png", false).has_value());
-        assert(!preload.take_mesh("never_requested.obj").has_value());
+        CHECK(!preload.take_image("no_such_asset_preload_test.png", false).has_value());
+        CHECK(!preload.take_mesh("never_requested.obj").has_value());
         co_return;
     };
 

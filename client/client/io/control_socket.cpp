@@ -146,11 +146,11 @@ namespace wry {
         for (char c : std::string_view("first\nsec"))
             pending.push_back(c);
         std::vector<std::string> out;
-        assert(codec.split(pending, out).empty());
+        CHECK(codec.split(pending, out).empty());
         assert(out.size() == 1 && out[0] == "first");
         for (char c : std::string_view("ond\r\n"))
             pending.push_back(c);
-        assert(codec.split(pending, out).empty());
+        CHECK(codec.split(pending, out).empty());
         assert(out.size() == 2 && out[1] == "second");
         assert(pending.empty());
 
