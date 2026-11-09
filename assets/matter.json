@@ -1,0 +1,43 @@
+{
+  "_comment": "Matter presentation: display name and pile colour per kind, keyed by the matter.hpp name minus MATTER_ (never the numeric code). 'color_srgb' is #rrggbb (or #rrggbbaa), sRGB; the shipping container is drawn as its mesh, so its colour is unused. 'price_compiled_in' is READ-ONLY reference: the price is a simulation rule (lockstep peers must agree), compiled in as MATTER_PRICE; editing it here changes nothing, and a unit test fails if it drifts from the compiled value. A missing file or key falls back to the compiled-in MATTER_COLOR_SRGB with a warning; unknown keys warn.",
+  "SHIPPING_CONTAINER": {
+    "name": "Shipping Container",
+    "color_srgb": "#c8c8c8",
+    "price_compiled_in": 0
+  },
+  "WATER": {
+    "name": "Water",
+    "color_srgb": "#6ea0dc",
+    "price_compiled_in": 0
+  },
+  "SAND": {
+    "name": "Sand",
+    "color_srgb": "#e8d096",
+    "price_compiled_in": 2
+  },
+  "GRASS": {
+    "name": "Grass",
+    "color_srgb": "#78b45a",
+    "price_compiled_in": 1
+  },
+  "ROCK": {
+    "name": "Rock",
+    "color_srgb": "#a5a096",
+    "price_compiled_in": 3
+  },
+  "COAL": {
+    "name": "Coal",
+    "color_srgb": "#3c3c42",
+    "price_compiled_in": 8
+  },
+  "IRON_ORE": {
+    "name": "Iron Ore",
+    "color_srgb": "#b9623e",
+    "price_compiled_in": 12
+  },
+  "LIMESTONE": {
+    "name": "Limestone",
+    "color_srgb": "#f0ecde",
+    "price_compiled_in": 5
+  }
+}

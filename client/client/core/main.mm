@@ -31,6 +31,7 @@
 #include "nursery.hpp"
 #include "thread_public.hpp"
 #include "load_timing.hpp"
+#include "presentation.hpp"
 
 #import "WryDelegate.h"
 
@@ -187,6 +188,21 @@ int main(int argc, const char** argv) {
 
     std::filesystem::current_path("/Users/antony/Desktop/assets/");
 
+    // The presentation tables (terrain and matter names and colours, the
+    // draft opcode help) from the text assets the build copies into the
+    // bundle (assets/README.md).  Installed here, before the collector
+    // and pool threads below exist, so the tables are immutable by the
+    // time any other thread can read them (presentation.hpp).  Warnings
+    // go to stderr now and to the floating log once the GUI is up.
+    std::vector<wry::String> presentation_warnings;
+    {
+        wry::LoadTimer timer("load_presentation");
+        wry::presentation_install(wry::load_presentation(wry::presentation_directory(),
+                                                         &presentation_warnings));
+    }
+    for (wry::String const& w : presentation_warnings)
+        fprintf(stderr, "%.*s\n", (int)w.chars.size(), w.chars.data());
+
     {
         // randomness
         std::random_device rd;
@@ -250,6 +266,8 @@ int main(int argc, const char** argv) {
     gui->scope = &root;
     if (!test_only)
         gui->configure_from_arguments(argc, argv);
+    for (wry::String const& w : presentation_warnings)
+        gui->append_log(w, std::chrono::seconds(15));
 
     if (headless) {
         // The render-free host: no NSApplication, window, device or scene

@@ -38,6 +38,7 @@
 #include "number_caption.hpp"
 #include "spawner.hpp"
 #include "matter.hpp"
+#include "presentation.hpp"
 #include "mesh.hpp"
 #include "palette.hpp"
 #include "platform.hpp"
@@ -240,7 +241,7 @@ struct WryNumberGlyph {
     // tile captioned with the kind (atlas row 2, by name from assets.json)
     // carrying a pile of it: sand art in an invisible cube, poured in
     // light grey layers (assets sandbox.obj + sandbox_layers.png,
-    // tools/sandbox_gen.py), tinted MATTER_COLOR_SRGB
+    // tools/sandbox_gen.py), tinted presentation().matter_color
     WryMesh* _sandbox_mesh;
     // The Ship (spawner.hpp): a bulk carrier assembled from a kit of
     // one-cell modules, prow + four holds + stern (assets ship_*.obj,
@@ -2379,8 +2380,8 @@ struct WryNumberGlyph {
             MeshInstanced pile;
             pile.model_transform = A;
             pile.inverse_transpose_model_transform = inverse(transpose(A));
-            const uint8_t* c = m < std::size(wry::MATTER_COLOR_SRGB)
-                ? wry::MATTER_COLOR_SRGB[m] : wry::MATTER_COLOR_SRGB[0];
+            // assets/matter.json, else MATTER_COLOR_SRGB (presentation.hpp)
+            const uint8_t* c = wry::presentation().matter_color((int64_t)m).data();
             pile.albedo = make<float4>(wry::from_sRGB(c[0] / 255.0f),
                                        wry::from_sRGB(c[1] / 255.0f),
                                        wry::from_sRGB(c[2] / 255.0f), 1.0f);
@@ -2756,10 +2757,11 @@ struct WryNumberGlyph {
                     simd_float4 c = linear(r, g, b);
                     return simd_mix(make<float4>(1.0f, 1.0f, 1.0f, 1.0f), c, make<float4>(tint, tint, tint, 0.0f));
                 };
-                // The pastels are terrain.hpp's TERRAIN_COLOR_SRGB, so
+                // The pastels are presentation().terrain_color (assets/
+                // terrain.json, else terrain.hpp's TERRAIN_COLOR_SRGB), so
                 // the world map (world_map.cpp) is inked the same
                 for (int k = 0; k != wry::TERRAIN_KIND_COUNT; ++k) {
-                    const uint8_t* c = wry::TERRAIN_COLOR_SRGB[k];
+                    const uint8_t* c = wry::presentation().terrain_color(k).data();
                     board.tint[k] = pastel(c[0], c[1], c[2]);
                 }
                 // x: line opacity, y: arm (fraction of an edge drawn from

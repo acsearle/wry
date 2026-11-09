@@ -18,10 +18,11 @@
 namespace wry {
 
     // A one-pixel-per-tile RGBA8 (sRGB bytes) image of the mapped world
-    // region: terrain as the base layer in the shared TERRAIN_COLOR_SRGB
-    // colors, with the sparse Term and entity-occupancy layers plotted over
-    // it in deliberately un-natural colors.  Unmapped cells (no terrain
-    // generated) stay transparent black.
+    // region: terrain as the base layer in the board's shared tints
+    // (presentation().terrain_color: assets/terrain.json, else
+    // TERRAIN_COLOR_SRGB), with the sparse Term and entity-occupancy
+    // layers plotted over it in deliberately un-natural colors.  Unmapped
+    // cells (no terrain generated) stay transparent black.
     //
     // The mapped rect is fixed to the starting terrain region for now;
     // growing it belongs with lazy terrain generation.

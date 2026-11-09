@@ -212,6 +212,18 @@ if(APPLE)
         MACOSX_PACKAGE_LOCATION Resources)
 endif()
 
+# The text assets (assets/README.md): every assets/*.json is a bundle
+# resource, copied to Contents/Resources/data, where game/presentation.cpp
+# finds it at startup.  CMake's bundle-copy rule re-copies a file whenever
+# it changes, so editing one and rebuilding is enough; the glob re-runs at
+# the next build when files are added or removed.
+file(GLOB WRY_TEXT_ASSETS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/*.json)
+if(APPLE)
+    target_sources(client PRIVATE ${WRY_TEXT_ASSETS})
+    set_source_files_properties(${WRY_TEXT_ASSETS} PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources/data)
+endif()
+
 # The suite: the binary's own headless test runner
 enable_testing()
 add_test(NAME suite COMMAND client --test-only)

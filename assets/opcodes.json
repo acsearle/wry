@@ -1,0 +1,358 @@
+{
+  "_comment": "DRAFT in-game context help for every opcode, for antony to edit; drafted by Claude from opcode.hpp, machine.cpp and game/docs/machine_language.md. Presentation only: nothing the simulation reads. Keys are the bare save-format names (OPCODE_NAMES minus the OPCODE_ prefix, as in assets.json and the OPCODE::X reader), in opcode.hpp order. Per entry: 'name' is the display name, 'summary' a one-line tooltip, 'help' a few sentences, 'stack' the stack effect as before -- after with the top of stack rightmost (omitted where the stack is untouched). Loaded at startup into a lookup (game/presentation.hpp); no UI shows it yet (the hover help panel is a later todo). A unit test requires an entry for every opcode and no entry for an unknown one.",
+  "NOOP": {
+    "name": "No-Op",
+    "summary": "Does nothing; the truck drives straight on.",
+    "help": "Does nothing. The truck carries straight on. Useful as a placeholder or a marker on a track."
+  },
+  "SKIP": {
+    "name": "Skip",
+    "summary": "Drive over the next cell without using it.",
+    "help": "The next cell is ignored: its instruction is not run and any number there is not picked up. Use it to cross another track's instructions or data. Other trucks, valves and junctions still block the way, and a skipped valve or flip-flop does not flip."
+  },
+  "HALT": {
+    "name": "Halt",
+    "summary": "Stop here until this cell changes.",
+    "help": "The truck parks on this cell and waits, keeping its stack. When the cell is changed (for example you replace the tile), the truck wakes and runs whatever is there now. Trucks behind it queue up."
+  },
+  "TURN_NORTH": {
+    "name": "Turn North",
+    "summary": "Face north, whichever way the truck was going.",
+    "help": "The truck turns to face north and leaves that way, wherever it came from. Good for merging tracks: trucks arriving from any side all leave north. If that means reversing, the truck pauses briefly to turn round."
+  },
+  "TURN_EAST": {
+    "name": "Turn East",
+    "summary": "Face east, whichever way the truck was going.",
+    "help": "The truck turns to face east and leaves that way, wherever it came from. Good for merging tracks: trucks arriving from any side all leave east. If that means reversing, the truck pauses briefly to turn round."
+  },
+  "TURN_SOUTH": {
+    "name": "Turn South",
+    "summary": "Face south, whichever way the truck was going.",
+    "help": "The truck turns to face south and leaves that way, wherever it came from. Good for merging tracks: trucks arriving from any side all leave south. If that means reversing, the truck pauses briefly to turn round."
+  },
+  "TURN_WEST": {
+    "name": "Turn West",
+    "summary": "Face west, whichever way the truck was going.",
+    "help": "The truck turns to face west and leaves that way, wherever it came from. Good for merging tracks: trucks arriving from any side all leave west. If that means reversing, the truck pauses briefly to turn round."
+  },
+  "TURN_RIGHT": {
+    "name": "Turn Right",
+    "summary": "Turn a quarter-turn to the right.",
+    "help": "The truck turns right (clockwise) and carries on. Four right turns make a loop."
+  },
+  "TURN_LEFT": {
+    "name": "Turn Left",
+    "summary": "Turn a quarter-turn to the left.",
+    "help": "The truck turns left (anticlockwise) and carries on."
+  },
+  "TURN_BACK": {
+    "name": "Turn Back",
+    "summary": "Turn round and go back the way you came.",
+    "help": "The truck reverses and leaves the way it came in, after a short pause to turn round."
+  },
+  "BRANCH_RIGHT": {
+    "name": "Branch Right",
+    "summary": "Take the top number; turn right that many times.",
+    "help": "Takes the number on top of the stack and turns right that many quarter-turns: 0 goes straight, 1 turns right, 2 turns back, -1 turns left. True counts as 1 and false as 0, so a comparison can steer it directly. If the top is not a number (or the stack is empty) the truck goes straight and keeps its stack.",
+    "stack": "n --"
+  },
+  "BRANCH_LEFT": {
+    "name": "Branch Left",
+    "summary": "Take the top number; turn left that many times.",
+    "help": "Takes the number on top of the stack and turns left that many quarter-turns: 0 goes straight, 1 turns left, 2 turns back, -1 turns right. True counts as 1 and false as 0, so a comparison can steer it directly. If the top is not a number (or the stack is empty) the truck goes straight and keeps its stack.",
+    "stack": "n --"
+  },
+  "LOAD": {
+    "name": "Load",
+    "summary": "Pick up what is on the next cell.",
+    "help": "Puts whatever is on the next cell on top of the stack, without running it. Numbers and instruction tiles are copied and stay where they are; cargo is taken, leaving the cell empty. An empty cell gives nothing.",
+    "stack": "-- x"
+  },
+  "STORE": {
+    "name": "Store",
+    "summary": "Put the top of the stack onto the next cell.",
+    "help": "Takes the top of the stack and writes it onto the next cell, replacing any number or instruction there. Cargo is never destroyed: if the cell holds cargo, or you are putting down cargo and the cell is not empty, the truck waits on that cell until it clears. Gotcha: with an empty stack, STORE erases the next cell.",
+    "stack": "x --"
+  },
+  "EXCHANGE": {
+    "name": "Exchange",
+    "summary": "Swap the top of the stack with the next cell.",
+    "help": "Takes the top of the stack, picks up what is on the next cell, and leaves the first thing there in its place. Nothing is copied or lost, so it works on cargo too. With an empty stack it just picks up the cell's contents, leaving it empty. Unlike STORE it never waits, so it can put cargo down on top of an instruction.",
+    "stack": "x -- y"
+  },
+  "HEADING_LOAD": {
+    "name": "Heading Load",
+    "summary": "Push the direction the truck is facing.",
+    "help": "Puts the truck's heading on the stack: 0 north, 1 east, 2 south, 3 west. Gotcha: the number counts every turn, so each full clockwise lap adds 4. BITWISE AND with 3 gives the direction 0-3; SHIFT RIGHT by 2 counts laps.",
+    "stack": "-- h"
+  },
+  "HEADING_STORE": {
+    "name": "Heading Store",
+    "summary": "Take the top number and face that direction.",
+    "help": "Takes the number on top of the stack and faces that way: 0 north, 1 east, 2 south, 3 west (other numbers wrap round). If the top is not a number the truck goes straight and keeps its stack. Gotcha: the numbers are compass directions, so rotating or mirroring a blueprint does not change where they point.",
+    "stack": "h --"
+  },
+  "LOCATION_LOAD": {
+    "name": "Location Load",
+    "summary": "Not built yet: does nothing.",
+    "help": "Planned to put the truck's location on the stack. Not working yet: the truck drives straight over it, as over a No-Op."
+  },
+  "LOCATION_STORE": {
+    "name": "Location Store",
+    "summary": "Not built yet: does nothing.",
+    "help": "Reserved; not working. The truck drives straight over it, as over a No-Op."
+  },
+  "DROP": {
+    "name": "Drop",
+    "summary": "Throw away the top of the stack (cargo: put it down).",
+    "help": "Throws away the top of the stack. Cargo is never destroyed: instead the truck drives onto the next cell and puts it down there, as if by STORE, waiting on that cell until it is empty. Gotcha: when dropping cargo, the next cell's instruction is not run.",
+    "stack": "x --"
+  },
+  "DUPLICATE": {
+    "name": "Duplicate",
+    "summary": "Copy the top of the stack.",
+    "help": "Puts a second copy of the top item on the stack. Cargo cannot be copied: if the top is cargo, nothing happens.",
+    "stack": "x -- x x"
+  },
+  "SWAP": {
+    "name": "Swap",
+    "summary": "Swap the top two items.",
+    "help": "Exchanges the top two items on the stack. Works on anything, including cargo. Does nothing with fewer than two items.",
+    "stack": "x y -- y x"
+  },
+  "OVER": {
+    "name": "Over",
+    "summary": "Copy the second item onto the top.",
+    "help": "Puts a copy of the item just under the top onto the stack. Cargo cannot be copied, so nothing happens if that item is cargo, or if there are fewer than two items.",
+    "stack": "x y -- x y x"
+  },
+  "IS_ZERO": {
+    "name": "Is Zero",
+    "summary": "Is the top number zero?",
+    "help": "Replaces the number on top with true if it is zero, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a==0"
+  },
+  "IS_POSITIVE": {
+    "name": "Is Positive",
+    "summary": "Is the top number above zero?",
+    "help": "Replaces the number on top with true if it is greater than zero (zero is not positive), false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a>0"
+  },
+  "IS_NEGATIVE": {
+    "name": "Is Negative",
+    "summary": "Is the top number below zero?",
+    "help": "Replaces the number on top with true if it is less than zero, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a<0"
+  },
+  "IS_NOT_ZERO": {
+    "name": "Is Not Zero",
+    "summary": "Is the top number anything but zero?",
+    "help": "Replaces the number on top with true if it is not zero, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a!=0"
+  },
+  "IS_NOT_POSITIVE": {
+    "name": "Is Not Positive",
+    "summary": "Is the top number zero or below?",
+    "help": "Replaces the number on top with true if it is zero or less, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a<=0"
+  },
+  "IS_NOT_NEGATIVE": {
+    "name": "Is Not Negative",
+    "summary": "Is the top number zero or above?",
+    "help": "Replaces the number on top with true if it is zero or more, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing if the top is not a number.",
+    "stack": "a -- a>=0"
+  },
+  "LOGICAL_NOT": {
+    "name": "Logical Not",
+    "summary": "Flip true and false.",
+    "help": "Replaces the top with its opposite: true becomes false and false becomes true. Numbers work too: 0 counts as false, anything else as true. Does nothing if the top is not a number.",
+    "stack": "a -- not a"
+  },
+  "LOGICAL_AND": {
+    "name": "Logical And",
+    "summary": "True if both of the top two are true.",
+    "help": "Replaces the top two with true if both are true, false otherwise. 0 counts as false, any other number as true. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a and b"
+  },
+  "LOGICAL_OR": {
+    "name": "Logical Or",
+    "summary": "True if either of the top two is true.",
+    "help": "Replaces the top two with true if either (or both) is true, false otherwise. 0 counts as false, any other number as true. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a or b"
+  },
+  "LOGICAL_XOR": {
+    "name": "Logical Xor",
+    "summary": "True if exactly one of the top two is true.",
+    "help": "Replaces the top two with true if exactly one of them is true, false if both or neither are. 0 counts as false, any other number as true. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a xor b"
+  },
+  "BITWISE_NOT": {
+    "name": "Bitwise Not",
+    "summary": "Flip every bit of the top number.",
+    "help": "Flips every bit of the top number. The result is minus one minus the number, so 0 becomes -1 and 5 becomes -6. Does nothing if the top is not a number.",
+    "stack": "a -- ~a"
+  },
+  "BITWISE_AND": {
+    "name": "Bitwise And",
+    "summary": "Keep the bits set in both numbers.",
+    "help": "Replaces the top two numbers with the bits set in both. AND with 3 keeps the last two bits, which turns a heading back into 0-3. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a&b"
+  },
+  "BITWISE_OR": {
+    "name": "Bitwise Or",
+    "summary": "Keep the bits set in either number.",
+    "help": "Replaces the top two numbers with the bits set in either one. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a|b"
+  },
+  "BITWISE_XOR": {
+    "name": "Bitwise Xor",
+    "summary": "Keep the bits set in exactly one number.",
+    "help": "Replaces the top two numbers with the bits set in one but not the other. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a^b"
+  },
+  "BITWISE_SPLIT": {
+    "name": "Bitwise Split",
+    "summary": "Split two numbers into shared and unshared bits.",
+    "help": "Replaces the top two numbers with two results: the bits set in both (underneath) and the bits set in just one (on top). No bits are lost; it is the building block of binary addition. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a&b a^b"
+  },
+  "SHIFT_RIGHT": {
+    "name": "Shift Right",
+    "summary": "Halve a number n times (n on top).",
+    "help": "Shifts the lower number right by the top number of bits: each step halves it, rounding down. A negative count acts as 0, and counts above 60 act as 60. Does nothing unless the top two are both numbers.",
+    "stack": "a n -- a>>n"
+  },
+  "POPCOUNT": {
+    "name": "Popcount",
+    "summary": "Count the 1 bits in the top number.",
+    "help": "Replaces the top number with how many of its bits are 1. Gotcha: negative numbers count their sign bits too, so -1 gives 64. Does nothing if the top is not a number.",
+    "stack": "a -- bits"
+  },
+  "ABS": {
+    "name": "Abs",
+    "summary": "Make the top number positive.",
+    "help": "Replaces the top number with its size, dropping any minus sign: -5 becomes 5. Does nothing if the top is not a number.",
+    "stack": "a -- |a|"
+  },
+  "NEGATE": {
+    "name": "Negate",
+    "summary": "Flip the sign of the top number.",
+    "help": "Replaces the top number with its negative: 5 becomes -5 and -5 becomes 5. Does nothing if the top is not a number.",
+    "stack": "a -- -a"
+  },
+  "SIGN": {
+    "name": "Sign",
+    "summary": "Replace the top number with -1, 0 or 1.",
+    "help": "Replaces the top number with -1 if it is negative, 0 if zero, 1 if positive. Feed it to a branch to turn left, go straight or turn right. Does nothing if the top is not a number.",
+    "stack": "a -- sign(a)"
+  },
+  "ADD": {
+    "name": "Add",
+    "summary": "Add the top two numbers.",
+    "help": "Replaces the top two numbers with their sum. Gotcha: results beyond about 576 quadrillion (either sign) stop counting as numbers, and later instructions ignore them. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a+b"
+  },
+  "SUBTRACT": {
+    "name": "Subtract",
+    "summary": "Subtract the top number from the one below.",
+    "help": "Replaces the top two numbers with the lower one minus the top one. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a-b"
+  },
+  "EQUAL": {
+    "name": "Equal",
+    "summary": "Are the top two items the same?",
+    "help": "Replaces the top two items with true if they are equal, false otherwise. Numbers, true/false (as 1/0) and instruction tiles can all be compared; things of different kinds are never equal. Cargo cannot be compared: if either item is cargo, or the stack has fewer than two items, nothing happens.",
+    "stack": "a b -- a==b"
+  },
+  "NOT_EQUAL": {
+    "name": "Not Equal",
+    "summary": "Are the top two items different?",
+    "help": "Replaces the top two items with true if they differ, false if they are equal. Numbers, true/false (as 1/0) and instruction tiles can all be compared; things of different kinds always differ. Cargo cannot be compared: if either item is cargo, or the stack has fewer than two items, nothing happens.",
+    "stack": "a b -- a!=b"
+  },
+  "LESS_THAN": {
+    "name": "Less Than",
+    "summary": "Is the lower number less than the top one?",
+    "help": "Replaces the top two numbers with true if the lower one is less than the top one, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a<b"
+  },
+  "GREATER_THAN": {
+    "name": "Greater Than",
+    "summary": "Is the lower number greater than the top one?",
+    "help": "Replaces the top two numbers with true if the lower one is greater than the top one, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a>b"
+  },
+  "LESS_THAN_OR_EQUAL_TO": {
+    "name": "Less Than Or Equal To",
+    "summary": "Is the lower number at most the top one?",
+    "help": "Replaces the top two numbers with true if the lower one is less than or equal to the top one, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a<=b"
+  },
+  "GREATER_THAN_OR_EQUAL_TO": {
+    "name": "Greater Than Or Equal To",
+    "summary": "Is the lower number at least the top one?",
+    "help": "Replaces the top two numbers with true if the lower one is greater than or equal to the top one, false otherwise. True and false count as 1 and 0 wherever a number is wanted, so the result can steer a branch directly. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- a>=b"
+  },
+  "COMPARE": {
+    "name": "Compare",
+    "summary": "Compare two numbers: -1, 0 or 1.",
+    "help": "Replaces the top two numbers with -1 if the lower one is smaller, 0 if they are equal, 1 if it is larger. Feed it to a branch to turn left, go straight or turn right. Does nothing unless the top two are both numbers.",
+    "stack": "a b -- sign(a-b)"
+  },
+  "FLIP_FLOP": {
+    "name": "Flip Flop",
+    "summary": "Turn right, then become a Flop Flip.",
+    "help": "The truck turns right, and the tile changes itself into a FLOP FLIP, so the next truck turns left. A stream of trucks is split alternately right and left. Skipping or loading it does not flip it."
+  },
+  "FLOP_FLIP": {
+    "name": "Flop Flip",
+    "summary": "Turn left, then become a Flip Flop.",
+    "help": "The truck turns left, and the tile changes itself into a FLIP FLOP, so the next truck turns right. A stream of trucks is split alternately left and right. Skipping or loading it does not flip it."
+  },
+  "ROT": {
+    "name": "Rot",
+    "summary": "Bring the third item up to the top.",
+    "help": "Takes the third item from the top and puts it on top, moving the other two down one. Works on anything, including cargo. Does nothing with fewer than three items.",
+    "stack": "x y z -- y z x"
+  },
+  "IS_MATTER": {
+    "name": "Is Matter",
+    "summary": "Is the top item cargo? (keeps the item)",
+    "help": "Puts true on the stack if the top item is cargo, false if it is anything else. The item itself stays where it was, underneath the answer. Does nothing on an empty stack.",
+    "stack": "x -- x flag"
+  },
+  "VALVE_NORTH_SOUTH": {
+    "name": "Valve North-South",
+    "summary": "Gate open north-south; flips when driven through.",
+    "help": "Trucks can only pass travelling north or south; trucks arriving from east or west wait in front of it. Each truck that drives through flips it to East-West, closing it behind itself. A valve never turns a truck, and one that Skips over it does not flip it."
+  },
+  "VALVE_EAST_WEST": {
+    "name": "Valve East-West",
+    "summary": "Gate open east-west; flips when driven through.",
+    "help": "Trucks can only pass travelling east or west; trucks arriving from north or south wait in front of it. Each truck that drives through flips it to North-South, closing it behind itself. A valve never turns a truck, and one that Skips over it does not flip it."
+  },
+  "DO_NOT_QUEUE": {
+    "name": "Do Not Queue",
+    "summary": "Junction: only enter if you can drive straight out.",
+    "help": "A truck only enters this cell when the cell straight beyond it is free too, and claims both at once. So no truck ever stops on the junction, and cross traffic keeps flowing while others wait. It never turns a truck."
+  },
+  "MINE": {
+    "name": "Mine",
+    "summary": "Dig the ground under the next cell for cargo.",
+    "help": "On reaching the next cell the truck stops to dig, then puts one item of that ground's material (sand, rock, coal...) on its stack. Harder ground takes longer. Unlike LOAD, the next cell's instruction or number is still used after digging. Ground with no material gives nothing.",
+    "stack": "-- m"
+  },
+  "BURY": {
+    "name": "Bury",
+    "summary": "Return cargo to matching ground under next cell.",
+    "help": "On reaching the next cell the truck stops to dig, and if the top of its stack is cargo of that ground's own kind, puts it back into the ground. Anything else stays on the stack and the digging time is wasted. The next cell is still used as normal afterwards.",
+    "stack": "m --"
+  },
+  "DUMP": {
+    "name": "Dump",
+    "summary": "Turn back and unload the top item behind you.",
+    "help": "The truck turns round and puts the top of its stack into the cell it was heading for, such as a Ship's hold. It waits, turned round, until that cell is empty. With an empty stack it just turns round. A Ship only sells priced cargo: anything else stays in the hold and blocks it.",
+    "stack": "x --"
+  }
+}

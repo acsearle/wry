@@ -29,4 +29,13 @@ namespace wry {
         return path_for_resource(s);
     }
 
+    std::filesystem::path bundle_resource_directory() {
+        @autoreleasepool {
+            NSString* path = [[NSBundle mainBundle] resourcePath];
+            if (!path)
+                return {};
+            return std::filesystem::path(path.UTF8String);
+        }
+    }
+
 }

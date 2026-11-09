@@ -82,7 +82,9 @@ X(MATTER_LIMESTONE),\
     // Representative colour of each kind's pile (the sand-art box the
     // board draws on a matter tile; it multiplies the box's light grey
     // layers), as sRGB bytes indexed by MATTER code.
-    // Renderer-side cosmetics only -- never simulation state.
+    // Renderer-side cosmetics only -- never simulation state.  The
+    // compiled-in fallback: the board reads presentation().matter_color,
+    // which assets/matter.json overrides (game/presentation.hpp).
     inline constexpr uint8_t MATTER_COLOR_SRGB[][4] = {
         { 200, 200, 200, 255 },   // MATTER_SHIPPING_CONTAINER (drawn as its mesh)
         { 110, 160, 220, 255 },   // MATTER_WATER

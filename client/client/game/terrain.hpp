@@ -37,11 +37,21 @@ namespace wry {
 
     inline constexpr int TERRAIN_KIND_COUNT = 7;
 
+    // Each kind's save-format short name, indexed by Terrain: the
+    // constant's name minus TERRAIN_, as the text assets key it
+    // (assets/terrain.json; game/presentation.cpp).  Append only, with
+    // the codes.
+    inline constexpr const char* TERRAIN_NAMES[TERRAIN_KIND_COUNT] = {
+        "WATER", "SAND", "GRASS", "ROCK", "COAL", "IRON_ORE", "LIMESTONE",
+    };
+
     // Representative solid color per kind, as sRGB bytes, indexed by
     // Terrain: the board's pastels (warm of their names: the sky's light
     // is blue).  The board (WryWorldScene.mm's WryTerrainUniforms tints)
-    // and the world-map builder (1 px/tile) both ink from here, so the
-    // map reads as the board seen from afar.
+    // and the world-map builder (1 px/tile) both ink from the same table,
+    // so the map reads as the board seen from afar.  This is the
+    // compiled-in fallback: both read presentation().terrain_color, which
+    // assets/terrain.json overrides (game/presentation.hpp).
     inline constexpr uint8_t TERRAIN_COLOR_SRGB[TERRAIN_KIND_COUNT][4] = {
         { 216, 226, 234, 255 },   // TERRAIN_WATER
         { 244, 232, 200, 255 },   // TERRAIN_SAND

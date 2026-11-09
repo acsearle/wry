@@ -17,6 +17,11 @@ namespace wry {
     
     std::filesystem::path path_for_resource(StringView name, StringView ext);
     std::filesystem::path path_for_resource(StringView name);
+
+    // The app bundle's Resources directory (client.app/Contents/Resources),
+    // or empty if the process has none.  For a bare executable this is
+    // the executable's own directory, per NSBundle.
+    std::filesystem::path bundle_resource_directory();
     
 }
 

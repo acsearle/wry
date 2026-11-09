@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "nursery.hpp"
+#include "presentation.hpp"
 #include "world_map.hpp"
 
 #include "coroutine.hpp"
@@ -24,7 +25,7 @@ namespace wry {
         constexpr uint8_t MAP_TERM_SRGB[4]   = { 255,   0, 255, 255 };  // magenta
         constexpr uint8_t MAP_ENTITY_SRGB[4] = { 255, 255, 255, 255 };  // white
 
-        void plot(WorldMap& map, Coordinate xy, const uint8_t (&srgb)[4]) {
+        void plot(WorldMap& map, Coordinate xy, const uint8_t* srgb) {   // 4 sRGB bytes
             size_t i = (size_t)(xy.x - WorldMap::X0);
             size_t j = (size_t)(xy.y - WorldMap::Y0);
             std::memcpy(map.rgba.data() + (j * WorldMap::EXTENT + i) * 4,
@@ -57,10 +58,9 @@ namespace wry {
             visit_in_region(world->_terrain_for_coordinate,
                             Coordinate{X0, Y0 + j},
                             Coordinate{X0 + E - 1, Y0 + j + SLICE_ROWS - 1},
-                            [map](Coordinate xy, Terrain t) {
-                if ((t < 0) || (t >= TERRAIN_KIND_COUNT))
-                    t = TERRAIN_ROCK;   // an unknown code: plain ground
-                plot(*map, xy, TERRAIN_COLOR_SRGB[t]);
+                            [map, &tints = presentation()](Coordinate xy, Terrain t) {
+                // an unknown code inks as plain ground (terrain_color)
+                plot(*map, xy, tints.terrain_color(t).data());
             });
             co_await coroutine::TransferToPoolExecutor{};
         }
@@ -136,13 +136,13 @@ namespace wry {
             size_t j = (size_t)(y - WorldMap::Y0);
             return m->rgba.data() + (j * WorldMap::EXTENT + i) * 4;
         };
-        auto is = [](const uint8_t* p, const uint8_t (&c)[4]) {
+        auto is = [](const uint8_t* p, const uint8_t* c) {
             return std::memcmp(p, c, 4) == 0;
         };
 
-        require(is(px(0, 0), TERRAIN_COLOR_SRGB[TERRAIN_GRASS]));
-        require(is(px(-128, -128), TERRAIN_COLOR_SRGB[TERRAIN_WATER]));
-        require(is(px(127, 127), TERRAIN_COLOR_SRGB[TERRAIN_ROCK]));
+        require(is(px(0, 0), presentation().terrain_color(TERRAIN_GRASS).data()));
+        require(is(px(-128, -128), presentation().terrain_color(TERRAIN_WATER).data()));
+        require(is(px(127, 127), presentation().terrain_color(TERRAIN_ROCK).data()));
         require(is(px(5, 0), MAP_TERM_SRGB));      // term over sand
         require(is(px(6, 1), MAP_ENTITY_SRGB));    // entity over sand
         require(px(100, -100)[3] == 0);            // unmapped: transparent
