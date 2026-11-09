@@ -55,7 +55,7 @@
 - How to handle pop-in pop-out of Terms as they are mined, shipped, picked up etc.
 
 ## Other
-- IN PROGRESS 2026-11-09 (decided, decisions_2026-11-08.md item 1): rename the repo folder to wry.nosync (iCloud was writing conflict copies inside .git)
+- Agent worktrees ~/Desktop/wry-wt-* are still on the iCloud Desktop (their .git files now point at wry.nosync); remove them once their screenshots are looked at (decisions item 2)
 ## Won't do
 Things that have been decided against
 - Non-shadow-casting fairy light shader for running lights, headlights, etc.
