@@ -260,6 +260,11 @@ struct WryNumberGlyph {
 
     NSCursor* _cursor;
     float _cursorPoints;   // the held tile cursor's size, screen points (0: the arrow)
+    // The followed machine's stack, exploded (drawn spaced out, one item
+    // per unit cube, so each face can be read): the machine whose stack
+    // is (being) exploded and how far, 0 to 1, eased per frame
+    wry::EntityID _explodedEntity;
+    float _explode;
     
 }
 
@@ -2408,6 +2413,21 @@ struct WryNumberGlyph {
             [_container_mesh addInstance:m];
         };
 
+        // The exploded stack follows the followed machine: a new one
+        // first collapses the old, then explodes; a quarter second each
+        // way at 60 Hz (per frame, so it is the same offscreen)
+        {
+            constexpr float kExplodeStep = 1.0f / 15.0f;
+            const wry::EntityID want = _model->_follow;
+            if (want != _explodedEntity) {
+                _explode = std::max(_explode - kExplodeStep, 0.0f);
+                if (_explode == 0.0f)
+                    _explodedEntity = want;
+            } else if (want) {
+                _explode = std::min(_explode + kExplodeStep, 1.0f);
+            }
+        }
+
         MeshVertex v;
         v.tangent = make<float4>(1.0f, 0.0f, 0.0f, 0.0f);
         v.bitangent = make<float4>(0.0f, 1.0f, 0.0f, 0.0f);
@@ -2523,8 +2543,11 @@ struct WryNumberGlyph {
                 // The carried stack, piled on the token: each item sits
                 // on the one below, a hair apart, and the step up is the
                 // item's own height (term_height: a chip, a matter tile
-                // and its pile, a container)
+                // and its pile, a container).  The followed machine's
+                // stack explodes: the step grows to a whole unit, as if
+                // each item were a cube, so the camera reads every face
                 const float stack_gap = 0.004f;
+                const float e = (p->_entity_id == _explodedEntity) ? smoothstep5(_explode) : 0.0f;
                 float base = token_lift + _model->_token_height;
                 const float yaw = atan2(dx1.x, dx1.y);
                 for (int i = (int) wry::PersistentStack<wry::Term>::size(p->_stack); i--;) {
@@ -2534,7 +2557,8 @@ struct WryNumberGlyph {
                     under.z = base;
                     simd_float4 centre = location;    // a chip's or tile's centre
                     centre.z = base + slab_thickness * 0.5f;
-                    base += item_height + stack_gap;
+                    const float pitch = item_height + stack_gap;
+                    base += pitch + e * std::max(1.0f - pitch, 0.0f);
                     if (has_tile(value)) {
                         emit_matter_tile(centre, value);
                     } else if (value.is_matter()) {
