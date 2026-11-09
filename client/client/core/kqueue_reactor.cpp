@@ -1028,7 +1028,7 @@ namespace wry {
     template<typename R>
     void start(StopToValueOperationState<R>& op) {
         std::stop_token token = get_stop_token(op._receiver);
-        assert(!token.stop_requested());  // the test's deadline is in the future
+        require(!token.stop_requested());  // the test's deadline is in the future
         op._callback.emplace(std::move(token), typename StopToValueOperationState<R>::Fire{&op});
     }
 

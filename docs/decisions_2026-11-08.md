@@ -63,6 +63,7 @@ roughly by how much they unblock.
     (presentation data now and simulation data later? ruleset hash or rules
     in the World? where the files live? who drafts the opcode help text?).
     Context help on hover depends on these.
+    **Decided 2026-11-10:** presentation data now, in a new repo [`assets/`](../assets/README.md) folder (terrain.json, matter.json, opcodes.json; JSON keyed by short name); Claude drafted the opcode help for Antony to edit. Done: 6f885f6. LATER: move the text parts of `~/Desktop/assets` (.json, .py, .svg) into the repo (todo). Still open as **10b**: simulation tables (prices, dig times): ruleset hash in HELLO, or rules in the World? (`docs/data_driven.md` option 1 vs 2; prices in a per-client file would desync lockstep.)
 11. **"Explode the stack" when following a truck**: what should it look
     like? (Click-to-follow is built.)
     **Decided 2026-11-09:** the stack's tiles are stacked tightly; explode means draw them vertically with enough spacing to read their faces, probably spaced as if they were cubes. Animating into and out of the state is a stretch goal (Claude is doing this now).
@@ -71,6 +72,7 @@ roughly by how much they unblock.
     **Decided 2026-11-10:** accept the drop; playtest to see how irritating it is. New open question (todo): what should happen when the cell changes during or after the turn the action is submitted, but before it is applied.
 13. **Console output scrolling**: the log fills the screen, so scrolling it
     would take the scroll wheel from world panning while the console is open.
+    **Decided 2026-11-10:** the console is modal (keys and mouse) while open, and the wheel scrolls its output. Done: 69d2a81. Playtest how annoying modality is.
 14. **Named saves** (`save NAME`): saves are named only by file today, and
     names would need a format change.
 15. **Asset cache memory**: decoded assets and the Metal objects made from
@@ -101,6 +103,7 @@ roughly by how much they unblock.
 19. **Model checker** ([`core/kqueue_reactor_model.cpp`](../client/client/core/kqueue_reactor_model.cpp)): spawn's
     `fetch_or(STARTED, release)` and the Callback's acquire garnish are not
     load-bearing in the model. Relax them, or keep them as belt-and-braces?
+    **Decided 2026-11-10:** relax all the things. Done: 37c1e1b (both relaxed; the old orders kept as passing model variants).
 20. **TSan reactor hook**: the global release/acquire on
     `g_reactor_tsan_helper` is broader than the kernel's per-knote ordering,
     so it can hide races. Switch to per-knote `__tsan_release(this)` /
@@ -115,8 +118,10 @@ roughly by how much they unblock.
 22. **`with_deadline`**: when an outer stop request races an inner that stops
     for another reason, the result can be nullopt or stopped; this is
     deliberate. OK?
+    **Explained 2026-11-10** (in chat; summary): the timer only *asks* the inner to stop. Outcomes: inner value -> value (even after the deadline or a cancel); inner error -> error; inner stopped and the outer token reads requested -> STOPPED; inner stopped otherwise (timer, its own reason) -> nullopt; an inner that ignores stop overruns the deadline. The race: an unrelated outer stop concurrent with an inner stopping for another reason can be reported as nullopt (the caller runs its timeout branch, then unwinds at its next stop check) or as STOPPED. Nothing completed is ever discarded. Awaiting the OK.
 23. **GC CRASH-1 trap tier**: the unpinned detector is now an assert, after
     clean sweeps. Strip the freed-object ring and quarantine tier too?
+    **Explained 2026-11-10** (in chat). Recommendation: one recorded soak (mac-debug ASan suite x20 with WRY_GC_QUARANTINE=1), then strip the freed-object ring, walk labels and ASan narration (24 MiB + per-object stores in every Debug build; built only for CRASH-1), keeping the unpinned detector (move it out of the TEMP block) and keeping quarantine as a documented opt-in (~15 lines; fix it to require the value 1: today any value, 0 included, enables it).
 
 ## Waiting on something external
 
@@ -139,3 +144,12 @@ roughly by how much they unblock.
     the same things as Debug.  Cost: a scripted rename of ~2,300 asserts,
     plus fixing whatever real Release-only failures the newly live checks
     turn up.
+
+## Raised 2026-11-10
+
+25. **DUMP under a parked truck** (found while drafting the opcode help):
+    `plan_arrival` lets DUMP write into an empty cell even when another truck
+    is parked on it (for example waiting on traffic); the truck then wakes
+    and picks the value up. `machine_language.md` 6.7 and 8.11 say machines
+    cannot write under an occupant. A truck on HALT is safe (its cell is not
+    empty). Is the code or the doc right?
