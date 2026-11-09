@@ -330,24 +330,24 @@ namespace wry {
         // by exact bytes (the sentinel content is unique amid concurrent saves).
         std::vector<uint8_t> ref = serialize_world(w);
         bool saved = save_game(w);
-        assert(saved);
+        require(saved);
 
         int new_id = -1;
         for (auto& [name, id] : enumerate_games())
             if (read_save_file(id) == ref) { new_id = id; break; }
-        assert(new_id >= 0);
+        require(new_id >= 0);
 
         World* w2 = load_game(new_id);
-        assert(w2);
-        assert(w2->_time == w->_time);
+        require(w2);
+        require(w2->_time == w->_time);
         Term t;
         bool has_term = w2->_term_for_coordinate.try_get(Coordinate{3, -7}, t);
-        assert(has_term);
+        require(has_term);
         (void) has_term;
-        assert(t._data == term_make_integer_with(99)._data);
+        require(t._data == term_make_integer_with(99)._data);
 
         delete_game(new_id);
-        assert(read_save_file(new_id).empty());
+        require(read_save_file(new_id).empty());
 
         co_return;
     };
@@ -380,14 +380,14 @@ namespace wry {
         Root<World const*> root(w);
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
         std::optional<int> result = co_await with_deadline(deadline, background_save_coroutine(std::move(root)));
-        assert(result.value_or(0) > 0);
+        require(result.value_or(0) > 0);
 
         int found = -1;
         for (auto& [name, id] : enumerate_games())
             if (read_save_file(id) == ref) { found = id; break; }
-        assert(found >= 0);
+        require(found >= 0);
         // The id reported is the file published
-        assert(result.value_or(0) == found);
+        require(result.value_or(0) == found);
         delete_game(found);
 
         co_return;

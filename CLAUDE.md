@@ -16,7 +16,8 @@
 
 ## Assertions
 
-- Never put a side effect inside `assert(...)` (or `precondition_debug` / `postcondition_debug`): NDEBUG removes the whole expression, and the Release build runs the unit tests. Hoist the call (`bool ok = parse(x, p); assert(ok);`) or use `CHECK(...)` from ext/assert.hpp, which always evaluates. This includes calls that fill out-parameters (parse_*, try_get), issue commands, deliver events, or save/write. Grepping for known mutator names has missed new ones three times.
+- Tests check with `require(...)` (core/test.hpp), never `assert(...)`: `require` is evaluated in every build and prints the expression and location before aborting, so the Release run of the suite checks exactly what Debug checks. `tools/lint_test_asserts.py` fails the CMake build on `assert(` inside a define_test body, a test section, or a test-support header (`--fix` rewrites them). It does not see a test helper function outside a body in a file that includes test.hpp at the top: use `require` there too.
+- In production code, never put a side effect inside `assert(...)` (or `precondition_debug` / `postcondition_debug`): NDEBUG removes the whole expression. Hoist the call (`bool ok = parse(x, p); assert(ok);`) or use `CHECK(...)` from ext/assert.hpp, which always evaluates. Side effects include calls that fill out-parameters (parse_*, try_get), issue commands, deliver events, or save/write.
 
 ## Plan Mode
 

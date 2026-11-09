@@ -453,47 +453,47 @@ namespace wry {
         std::filesystem::path path;
         {
             SessionLog log(dir, head, head_hash, bytes);
-            assert(log.path().empty());
+            require(log.path().empty());
             for (size_t i = 0; i != 3; ++i) {
                 const bool appended = log.append(steps[i], hashes[i], 1, 16666666);
-                assert(appended);
+                require(appended);
                 (void) appended;
             }
             path = log.path();
-            assert(!path.empty() && std::filesystem::exists(path));
+            require(!path.empty() && std::filesystem::exists(path));
         }
 
         auto contents = read_session_log(path);
-        assert(contents);
-        assert(contents->hello.protocol == wire::PROTOCOL_VERSION);
-        assert(contents->same_build());
-        assert(contents->welcome.client == 1 && contents->welcome.quantum_ns == 16666666);
-        assert(contents->welcome.head == head && contents->welcome.first == head + 1);
-        assert(contents->head == head && contents->head_hash == head_hash);
-        assert(contents->checkpoint == bytes);
-        assert(contents->entries.size() == 3);
-        assert(contents->last() == 10);
+        require(contents);
+        require(contents->hello.protocol == wire::PROTOCOL_VERSION);
+        require(contents->same_build());
+        require(contents->welcome.client == 1 && contents->welcome.quantum_ns == 16666666);
+        require(contents->welcome.head == head && contents->welcome.first == head + 1);
+        require(contents->head == head && contents->head_hash == head_hash);
+        require(contents->checkpoint == bytes);
+        require(contents->entries.size() == 3);
+        require(contents->last() == 10);
         for (size_t i = 0; i != 3; ++i) {
-            assert(contents->entries[i].step.number == 8 + i);
-            assert(contents->entries[i].hash == hashes[i]);
-            assert(step_to_wire(contents->entries[i].step) == step_to_wire(steps[i]));
+            require(contents->entries[i].step.number == 8 + i);
+            require(contents->entries[i].hash == hashes[i]);
+            require(step_to_wire(contents->entries[i].step) == step_to_wire(steps[i]));
         }
-        assert(contents->entries[1].step.commands.size() == 3);
-        assert(contents->entries[1].step.commands[2].kind == Command::PAUSED);
+        require(contents->entries[1].step.commands.size() == 3);
+        require(contents->entries[1].step.commands[2].kind == Command::PAUSED);
         {
             World* loaded = load_world_from_bytes(contents->checkpoint);
-            assert(loaded);
+            require(loaded);
             Root<World const*> keep{loaded};
-            assert(loaded->content_hash() == head_hash);
+            require(loaded->content_hash() == head_hash);
         }
 
         // The whole-log encoder reproduces the file
         auto file = read_file(path);
-        assert(file);
+        require(file);
         {
             std::string encoded = encode_session_log(*contents);
-            assert(encoded.size() == file->size());
-            assert(std::memcmp(encoded.data(), file->data(), encoded.size()) == 0);
+            require(encoded.size() == file->size());
+            require(std::memcmp(encoded.data(), file->data(), encoded.size()) == 0);
         }
 
         // Comparing: itself, a tampered hash, a tampered stream, and a
@@ -503,25 +503,25 @@ namespace wry {
         };
         {
             std::string same = compare_session_logs(*contents, *contents);
-            assert(contains(same, "checkpoints agree"));
-            assert(contains(same, "steps 8 to 10 in common"));
-            assert(contains(same, "streams identical"));
-            assert(contains(same, "hashes identical"));
+            require(contains(same, "checkpoints agree"));
+            require(contains(same, "steps 8 to 10 in common"));
+            require(contains(same, "streams identical"));
+            require(contains(same, "hashes identical"));
         }
         {
             auto other = decode_session_log(*file);
-            assert(other);
+            require(other);
             other->entries[1].hash ^= 1;
             std::string report = compare_session_logs(*contents, *other);
-            assert(contains(report, "streams identical"));
-            assert(contains(report, "hashes differ at step 9"));
+            require(contains(report, "streams identical"));
+            require(contains(report, "hashes differ at step 9"));
         }
         {
             auto other = decode_session_log(*file);
-            assert(other);
+            require(other);
             other->entries[1].step.commands.pop_back();
             std::string report = compare_session_logs(*contents, *other);
-            assert(contains(report, "streams differ at step 9"));
+            require(contains(report, "streams differ at step 9"));
         }
         {
             // A joiner's log: checkpoint at 8 with the hash this one
@@ -535,22 +535,22 @@ namespace wry {
             later.entries.push_back({steps[1], hashes[1]});
             later.entries.push_back({steps[2], hashes[2]});
             std::string report = compare_session_logs(*contents, later);
-            assert(contains(report, "B's checkpoint matches A's hash after step 8"));
-            assert(contains(report, "steps 9 to 10 in common"));
-            assert(contains(report, "hashes identical"));
+            require(contains(report, "B's checkpoint matches A's hash after step 8"));
+            require(contains(report, "steps 9 to 10 in common"));
+            require(contains(report, "hashes identical"));
             later.head_hash ^= 1;
             report = compare_session_logs(later, *contents);
-            assert(contains(report, "A's checkpoint differs from B's hash after step 8"));
+            require(contains(report, "A's checkpoint differs from B's hash after step 8"));
         }
 
         // Every truncation reads as a prefix, or fails; never beyond
         for (size_t n = 0; n < file->size(); ++n) {
             auto r = decode_session_log(std::span<const uint8_t>(*file).first(n));
             if (r) {
-                assert(r->entries.size() <= 3);
+                require(r->entries.size() <= 3);
                 for (size_t i = 0; i != r->entries.size(); ++i) {
-                    assert(r->entries[i].step.number == 8 + i);
-                    assert(r->entries[i].hash == hashes[i]);
+                    require(r->entries[i].step.number == 8 + i);
+                    require(r->entries[i].hash == hashes[i]);
                 }
             }
         }
@@ -570,7 +570,7 @@ namespace wry {
         for (size_t k = 0; k != SessionLog::keep + 3; ++k) {
             SessionLog log(dir, head, head_hash, bytes);
             const bool appended = log.append(steps[0], 1, 1, 0);
-            assert(appended);
+            require(appended);
             (void) appended;
         }
         {
@@ -578,7 +578,7 @@ namespace wry {
             for (auto const& entry : std::filesystem::directory_iterator(dir))
                 if (entry.path().extension() == ".wrylog")
                     ++count;
-            assert(count == SessionLog::keep);
+            require(count == SessionLog::keep);
         }
 
         std::filesystem::remove_all(dir);

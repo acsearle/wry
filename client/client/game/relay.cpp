@@ -773,18 +773,18 @@ namespace wry {
             a.drain();
             return !a.of(wire::WELCOME).empty();
         });
-        assert(welcomed);
+        require(welcomed);
         (void) welcomed;
         auto welcome = wire::decode_welcome(a.of(wire::WELCOME)[0]);
-        assert(welcome && welcome->client == a.server_id);
-        assert(welcome->quantum_ns == (uint64_t)std::chrono::nanoseconds(std::chrono::hours(1)).count());
+        require(welcome && welcome->client == a.server_id);
+        require(welcome->quantum_ns == (uint64_t)std::chrono::nanoseconds(std::chrono::hours(1)).count());
         // The stream so far followed: the PAUSED step, if the pause had
         // been applied before the handshake; either way head agrees
         bool caught_up = co_await eventually([&] {
             a.drain();
             return a.of(wire::STEP).size() >= welcome->head;
         });
-        assert(caught_up);
+        require(caught_up);
         (void) caught_up;
 
         // An action before the JOIN is a violation
@@ -794,17 +794,17 @@ namespace wry {
             b.drain();
             return !b.of(wire::WELCOME).empty();
         });
-        assert(b_welcomed);
+        require(b_welcomed);
         (void) b_welcomed;
         b.send(wire::encode_action(1, action_line(1)));
         bool b_kicked = co_await eventually([&] {
             b.drain();
             return !b.closed.empty();
         });
-        assert(b_kicked);
+        require(b_kicked);
         (void) b_kicked;
         std::string b_reason = kick_reason(b, "b before join");
-        assert(b_reason == "action before join");
+        require(b_reason == "action before join");
         (void) b_reason;
 
         // JOIN_REQUEST rides a step as a JOIN, after which actions are
@@ -818,7 +818,7 @@ namespace wry {
             std::vector<std::string> steps = a.of(wire::STEP);
             for (size_t i = 0; i != steps.size(); ++i) {
                 auto step = wire::decode_step(steps[i]);
-                assert(step);
+                require(step);
                 for (auto& e : step->entries) {
                     auto ev = (e.origin == SERVER_CLIENT_ID) ? wire::decode_event(e.bytes) : std::nullopt;
                     if (ev && ev->kind == Command::JOIN && ev->client == a.server_id)
@@ -832,12 +832,12 @@ namespace wry {
             a.drain();
             return !join_steps().empty();
         });
-        assert(joined);
+        require(joined);
         (void) joined;
-        assert(join_steps().size() == 1);
+        require(join_steps().size() == 1);
         auto join_step = wire::decode_step(a.of(wire::STEP)[join_steps()[0]]);
-        assert(join_step && join_step->entries.size() == 1);
-        assert(join_step->entries[0].origin == SERVER_CLIENT_ID);
+        require(join_step && join_step->entries.size() == 1);
+        require(join_step->entries[0].origin == SERVER_CLIENT_ID);
         const size_t before = a.of(wire::STEP).size();
 
         // Actions finalize in arrival order, a prefix of what was sent:
@@ -858,27 +858,27 @@ namespace wry {
             a.drain();
             return count_mine() == 5;
         });
-        assert(queued);
+        require(queued);
         (void) queued;
         std::vector<std::string> steps = a.of(wire::STEP);
         // Collect the client's entries across the steps after the join
         std::vector<uint64_t> seqs;
         for (size_t i = before; i < steps.size(); ++i) {
             auto step = wire::decode_step(steps[i]);
-            assert(step);
+            require(step);
             size_t mine = 0;
             for (auto& e : step->entries) {
                 if (e.origin == a.server_id) {
-                    assert(e.bytes == action_line((int)e.seq));
+                    require(e.bytes == action_line((int)e.seq));
                     seqs.push_back(e.seq);
                     ++mine;
                 }
             }
-            assert(mine <= 2);
+            require(mine <= 2);
         }
-        assert(seqs.size() == 5);
+        require(seqs.size() == 5);
         for (size_t i = 0; i != 5; ++i)
-            assert(seqs[i] == i + 1);
+            require(seqs[i] == i + 1);
 
         // A bad sequence number is a violation; nothing after it is
         // processed, and the client is gone from the next step
@@ -888,17 +888,17 @@ namespace wry {
             a.drain();
             return !a.closed.empty();
         });
-        assert(a_kicked);
+        require(a_kicked);
         (void) a_kicked;
         std::string a_reason = kick_reason(a, "a bad sequence");
-        assert(a_reason == "bad sequence number");
+        require(a_reason == "bad sequence number");
         (void) a_reason;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));
         co_await a.transport->shutdown(std::chrono::milliseconds(100));
         co_await b.transport->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
-        assert(relay->finished());
+        require(relay->finished());
         co_return;
     };
 
@@ -921,7 +921,7 @@ namespace wry {
             b.drain();
             return !a.of(wire::WELCOME).empty() && !b.of(wire::WELCOME).empty();
         });
-        assert(welcomed);
+        require(welcomed);
         (void) welcomed;
         // The JOINs ride the stream, each once (the two requests arrive on
         // two connections, so in either order, and possibly a step apart)
@@ -929,7 +929,7 @@ namespace wry {
             std::vector<ClientID> joins;
             for (std::string const& m : a.of(wire::STEP)) {
                 auto step = wire::decode_step(m);
-                assert(step);
+                require(step);
                 for (auto& e : step->entries)
                     if (e.origin == SERVER_CLIENT_ID) {
                         auto ev = wire::decode_event(e.bytes);
@@ -945,20 +945,20 @@ namespace wry {
             b.drain();
             return joins_seen().size() == 2;
         });
-        assert(joined);
+        require(joined);
         (void) joined;
         {
             std::vector<ClientID> joins = joins_seen();
-            assert(joins.size() == 2 && joins[0] != joins[1]);
-            assert(joins[0] == a.server_id || joins[0] == b.server_id);
-            assert(joins[1] == a.server_id || joins[1] == b.server_id);
+            require(joins.size() == 2 && joins[0] != joins[1]);
+            require(joins[0] == a.server_id || joins[0] == b.server_id);
+            require(joins[1] == a.server_id || joins[1] == b.server_id);
         }
         bool b_joined = co_await eventually([&] {
             a.drain();
             b.drain();
             return b.of(wire::STEP).size() == a.of(wire::STEP).size();
         });
-        assert(b_joined);
+        require(b_joined);
         (void) b_joined;
 
         // Actions from two clients all ride the stream, each client's in
@@ -973,7 +973,7 @@ namespace wry {
             std::vector<std::string> steps = a.of(wire::STEP);
             for (size_t i = steps_before_actions; i < steps.size(); ++i) {
                 auto step = wire::decode_step(steps[i]);
-                assert(step);
+                require(step);
                 for (auto& e : step->entries)
                     if (e.origin != SERVER_CLIENT_ID)
                         actions.push_back({e.origin, e.seq});
@@ -985,15 +985,15 @@ namespace wry {
             a.drain();
             return actions_seen().size() == 3;
         });
-        assert(arrived);
+        require(arrived);
         (void) arrived;
         {
             std::vector<std::pair<ClientID, uint64_t>> actions = actions_seen();
             std::vector<uint64_t> a_seqs, b_seqs;
             for (auto& [client, seq] : actions)
                 (client == a.server_id ? a_seqs : b_seqs).push_back(seq);
-            assert((a_seqs == std::vector<uint64_t>{1, 2}));
-            assert((b_seqs == std::vector<uint64_t>{1}));
+            require((a_seqs == std::vector<uint64_t>{1, 2}));
+            require((b_seqs == std::vector<uint64_t>{1}));
         }
 
         // A flood: more pending actions than the limit allows
@@ -1003,10 +1003,10 @@ namespace wry {
             b.drain();
             return !b.closed.empty();
         });
-        assert(flooded);
+        require(flooded);
         (void) flooded;
         std::string b_reason = kick_reason(b, "b flood");
-        assert(b_reason == "flood");
+        require(b_reason == "flood");
         (void) b_reason;
 
         // a quits; both exits ride the next step as LEAVEs, in order
@@ -1015,7 +1015,7 @@ namespace wry {
             a.drain();
             return !a.closed.empty();
         });
-        assert(a_closed);
+        require(a_closed);
         (void) a_closed;
 
         // A late subscriber replays the stream from genesis
@@ -1029,12 +1029,12 @@ namespace wry {
             auto welcome = wire::decode_welcome(c.of(wire::WELCOME)[0]);
             return c.of(wire::STEP).size() >= welcome->head && relay->clock().head >= welcome->head;
         });
-        assert(replayed);
+        require(replayed);
         (void) replayed;
         std::vector<std::string> steps = c.of(wire::STEP);
         for (size_t i = 0; i != steps.size(); ++i) {
             auto step = wire::decode_step(steps[i]);
-            assert(step && step->number == i + 1);
+            require(step && step->number == i + 1);
         }
         // The LEAVEs are in the stream: b's kick, then a's quit
         std::vector<ClientID> left;
@@ -1047,7 +1047,7 @@ namespace wry {
                         left.push_back(ev->client);
                 }
         }
-        assert(left.size() == 2 && left[0] == b.server_id && left[1] == a.server_id);
+        require(left.size() == 2 && left[0] == b.server_id && left[1] == a.server_id);
 
         // Shutdown tells the survivors
         co_await relay->shutdown(std::chrono::milliseconds(200));
@@ -1055,7 +1055,7 @@ namespace wry {
             c.drain();
             return !c.closed.empty();
         });
-        assert(told && !c.of(wire::SHUTDOWN).empty());
+        require(told && !c.of(wire::SHUTDOWN).empty());
         (void) told;
         co_await a.transport->shutdown(std::chrono::milliseconds(100));
         co_await b.transport->shutdown(std::chrono::milliseconds(100));
@@ -1079,11 +1079,11 @@ namespace wry {
             a.drain();
             return !r.of(wire::WELCOME).empty() && !a.of(wire::WELCOME).empty();
         });
-        assert(welcomed);
+        require(welcomed);
         (void) welcomed;
         relay->step(3);
         bool stepped = co_await eventually([&] { return relay->clock().head >= 4; });
-        assert(stepped);
+        require(stepped);
         (void) stepped;
 
         // Agreement in either order is silent; the client is still served
@@ -1105,7 +1105,7 @@ namespace wry {
                     }
             return false;
         });
-        assert(joined && a.closed.empty());
+        require(joined && a.closed.empty());
         (void) joined;
 
         // A disagreement at a step the reference has reported is a kick,
@@ -1116,10 +1116,10 @@ namespace wry {
             a.drain();
             return !a.closed.empty();
         });
-        assert(desynced);
+        require(desynced);
         (void) desynced;
         std::string a_reason = kick_reason(a, "a desync");
-        assert(a_reason == "desync at step 3");
+        require(a_reason == "desync at step 3");
         (void) a_reason;
 
         RawClient b{*relay, scope};
@@ -1129,17 +1129,17 @@ namespace wry {
             b.drain();
             return !b.of(wire::WELCOME).empty();
         });
-        assert(b_welcomed);
+        require(b_welcomed);
         (void) b_welcomed;
         r.send(wire::encode_hash(4, 0x4444));
         bool b_desynced = co_await eventually([&] {
             b.drain();
             return !b.closed.empty();
         });
-        assert(b_desynced);
+        require(b_desynced);
         (void) b_desynced;
         std::string b_reason = kick_reason(b, "b desync");
-        assert(b_reason == "desync at step 4");
+        require(b_reason == "desync at step 4");
         (void) b_reason;
 
         // A report for a step not yet finalized is a violation
@@ -1150,10 +1150,10 @@ namespace wry {
             c.drain();
             return !c.closed.empty();
         });
-        assert(c_kicked);
+        require(c_kicked);
         (void) c_kicked;
         std::string c_reason = kick_reason(c, "c future");
-        assert(c_reason == "hash for a step not yet finalized");
+        require(c_reason == "hash for a step not yet finalized");
         (void) c_reason;
 
         // The reference itself is never kicked for a hash
@@ -1171,7 +1171,7 @@ namespace wry {
                     }
             return false;
         });
-        assert(r_alive && r.closed.empty());
+        require(r_alive && r.closed.empty());
         (void) r_alive;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));
@@ -1207,7 +1207,7 @@ namespace wry {
                         }
                 return false;
             });
-            assert(x_alive && x.closed.empty() && y.closed.empty());
+            require(x_alive && x.closed.empty() && y.closed.empty());
             (void) x_alive;
             co_await lone->shutdown(std::chrono::milliseconds(100));
             co_await x.transport->shutdown(std::chrono::milliseconds(100));
@@ -1229,11 +1229,11 @@ namespace wry {
             r.drain();
             return !r.of(wire::WELCOME).empty();
         });
-        assert(r_welcomed);
+        require(r_welcomed);
         (void) r_welcomed;
         relay->step(2);
         bool stepped = co_await eventually([&] { return relay->clock().head >= 3; });
-        assert(stepped);
+        require(stepped);
         (void) stepped;
 
         // A joiner's HELLO: its WELCOME starts the stream after the head,
@@ -1246,15 +1246,15 @@ namespace wry {
             j.drain();
             return !r.of(wire::REQUEST_SAVE).empty() && !j.of(wire::WELCOME).empty();
         });
-        assert(asked);
+        require(asked);
         (void) asked;
         auto request = wire::decode_save_request(r.of(wire::REQUEST_SAVE)[0]);
         auto welcome = wire::decode_welcome(j.of(wire::WELCOME)[0]);
-        assert(request && welcome);
-        assert(request->boundary == welcome->head && welcome->first == welcome->head + 1);
-        assert(j.of(wire::STEP).empty());
+        require(request && welcome);
+        require(request->boundary == welcome->head && welcome->first == welcome->head + 1);
+        require(j.of(wire::STEP).empty());
         // The reference got no request for itself
-        assert(r.of(wire::REQUEST_SAVE).size() == 1);
+        require(r.of(wire::REQUEST_SAVE).size() == 1);
 
         // The donor's frames reach the joiner, in order, by transfer id
         std::string blob(150000, 'z');
@@ -1268,21 +1268,21 @@ namespace wry {
             j.drain();
             return !j.of(wire::SAVE_END).empty();
         });
-        assert(delivered);
+        require(delivered);
         (void) delivered;
         {
             auto begin = wire::decode_save_begin(j.of(wire::SAVE_BEGIN).at(0));
-            assert(begin && begin->transfer == request->transfer && begin->total == blob.size());
+            require(begin && begin->transfer == request->transfer && begin->total == blob.size());
             std::vector<std::string> data = j.of(wire::SAVE_DATA);
-            assert(data.size() == 2);
+            require(data.size() == 2);
             std::string joined;
             for (size_t i = 0; i != 2; ++i) {
                 auto d = wire::decode_save_data(data[i]);
-                assert(d && d->index == i && d->transfer == request->transfer);
+                require(d && d->index == i && d->transfer == request->transfer);
                 joined.append(d->bytes);
             }
-            assert(joined == blob);
-            assert(wire::decode_save_end(j.of(wire::SAVE_END)[0]).value() == request->transfer);
+            require(joined == blob);
+            require(wire::decode_save_end(j.of(wire::SAVE_END)[0]).value() == request->transfer);
         }
         // A finished transfer takes no more frames
         r.send(wire::encode_save_data(request->transfer, 2, "late"));
@@ -1307,7 +1307,7 @@ namespace wry {
             j.drain();
             return j.of(wire::STEP).size() >= 2;
         });
-        assert(waited && joins_for(j, j.server_id) == 0);
+        require(waited && joins_for(j, j.server_id) == 0);
         (void) waited;
         j.send(wire::encode_hash(welcome->head, 0xabc));
         relay->step(2);
@@ -1315,7 +1315,7 @@ namespace wry {
             j.drain();
             return j.of(wire::STEP).size() >= 4;
         });
-        assert(unverified && joins_for(j, j.server_id) == 0);
+        require(unverified && joins_for(j, j.server_id) == 0);
         (void) unverified;
         r.send(wire::encode_hash(welcome->head, 0xabc));
         bool admitted = co_await eventually([&] {
@@ -1323,9 +1323,9 @@ namespace wry {
             j.drain();
             return joins_for(j, j.server_id) == 1;
         });
-        assert(admitted);
+        require(admitted);
         (void) admitted;
-        assert(j.of(wire::SAVE_DATA).size() == 2);   // the late chunk never came
+        require(j.of(wire::SAVE_DATA).size() == 2);   // the late chunk never came
 
         // Only the reference may send save frames, and nobody may ask for
         // one
@@ -1340,13 +1340,13 @@ namespace wry {
             y.drain();
             return !x.closed.empty() && !y.closed.empty();
         });
-        assert(refused);
+        require(refused);
         (void) refused;
         std::string x_reason = kick_reason(x, "x save frame");
-        assert(x_reason == "unexpected message");
+        require(x_reason == "unexpected message");
         (void) x_reason;
         std::string y_reason = kick_reason(y, "y request");
-        assert(y_reason == "unexpected message");
+        require(y_reason == "unexpected message");
         (void) y_reason;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));
@@ -1377,11 +1377,11 @@ namespace wry {
                 d.drain();
                 return !d.of(wire::WELCOME).empty() && d.of(wire::STEP).size() >= 2;
             });
-            assert(welcomed);
+            require(welcomed);
             (void) welcomed;
             auto welcome = wire::decode_welcome(d.of(wire::WELCOME)[0]);
-            assert(welcome && welcome->first == 42 && welcome->head >= 42);
-            assert(wire::decode_step(d.of(wire::STEP)[0])->number == 42);
+            require(welcome && welcome->first == 42 && welcome->head >= 42);
+            require(wire::decode_step(d.of(wire::STEP)[0])->number == 42);
             co_await late->shutdown(std::chrono::milliseconds(100));
             co_await d.transport->shutdown(std::chrono::milliseconds(100));
             (void) co_await late_scope.join();
@@ -1389,22 +1389,22 @@ namespace wry {
 
         // The clock runs from the start
         bool ticking = co_await eventually([&] { return relay->clock().head >= 3; });
-        assert(ticking);
+        require(ticking);
         (void) ticking;
         relay->pause();
         bool paused = co_await eventually([&] { return relay->clock().paused; });
-        assert(paused);
+        require(paused);
         (void) paused;
         uint64_t head = relay->clock().head;
         co_await testing::pause(std::chrono::milliseconds(50));
-        assert(relay->clock().head == head);           // stopped
+        require(relay->clock().head == head);           // stopped
         relay->step(4);
         bool stepped = co_await eventually([&] { return relay->clock().head == head + 4; });
-        assert(stepped && relay->clock().paused);
+        require(stepped && relay->clock().paused);
         (void) stepped;
         relay->resume();
         bool running = co_await eventually([&] { return !relay->clock().paused && relay->clock().head > head + 4; });
-        assert(running);
+        require(running);
         (void) running;
 
         // A subscriber sees PAUSED and RESUMED in the stream; a silent
@@ -1417,10 +1417,10 @@ namespace wry {
             silent.drain();
             return !silent.closed.empty() && a.of(wire::STEP).size() >= head + 4;
         });
-        assert(seen);
+        require(seen);
         (void) seen;
         std::string silent_reason = kick_reason(silent, "silent");
-        assert(silent_reason == "handshake timeout");
+        require(silent_reason == "handshake timeout");
         (void) silent_reason;
         bool paused_seen = false, resumed_seen = false;
         for (std::string const& m : a.of(wire::STEP)) {
@@ -1431,12 +1431,12 @@ namespace wry {
                 if (ev && ev->kind == Command::RESUMED) resumed_seen = true;
             }
         }
-        assert(paused_seen && resumed_seen);
+        require(paused_seen && resumed_seen);
 
         // Brutal close ends the task without waiting for anyone
         relay->close();
         bool ended = co_await eventually([&] { return relay->finished(); });
-        assert(ended);
+        require(ended);
         (void) ended;
         co_await a.transport->shutdown(std::chrono::milliseconds(100));
         co_await silent.transport->shutdown(std::chrono::milliseconds(100));
@@ -1457,7 +1457,7 @@ namespace wry {
         relay->step_if_paused(3);
         relay->pause();
         bool paused = co_await eventually([&] { return relay->clock().paused; });
-        assert(paused && relay->clock().head == head + 1);
+        require(paused && relay->clock().head == head + 1);
         (void) paused;
 
         // The decision is the relay's, in inbox order.  Posted behind a
@@ -1468,7 +1468,7 @@ namespace wry {
         relay->pause();
         relay->step_if_paused(3);
         bool stepped = co_await eventually([&] { return relay->clock().head == head + 5; });
-        assert(stepped && relay->clock().paused);
+        require(stepped && relay->clock().paused);
         (void) stepped;
 
         co_await relay->shutdown(std::chrono::milliseconds(100));

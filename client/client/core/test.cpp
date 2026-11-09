@@ -13,7 +13,13 @@
 namespace wry {
     
     namespace detail {
-        
+
+        void require_failed(const char* expression, const char* file, int line) {
+            fprintf(stderr, "%s:%d: require(%s) failed\n", file, line, expression);
+            fflush(stderr);
+            std::abort();
+        }
+
         void test_t::base::print_metadata(const char* suffix, double tau) {
             printf("[");
             if (!_metadata.empty()) for (size_t i = 0;;) {

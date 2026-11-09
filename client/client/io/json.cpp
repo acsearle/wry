@@ -424,23 +424,23 @@ namespace wry::json {
     {
         Json j = Json::from(StringView("{\"a\":1,\"b\":[true,null,\"x\\\"y\"]}"));
 
-        assert(j.is_object());
-        assert(!j.is_array());
-        assert(j.size() == 2);
-        assert(j[StringView("a")].is_number());
-        assert(j[StringView("a")].as_number() == 1.0);
+        require(j.is_object());
+        require(!j.is_array());
+        require(j.size() == 2);
+        require(j[StringView("a")].is_number());
+        require(j[StringView("a")].as_number() == 1.0);
 
         Json const& b = j[StringView("b")];
-        assert(b.is_array());
-        assert(b.size() == 3);
-        assert(b[0].is_bool() && b[0].as_bool() == true);
-        assert(b[1].is_null());
-        assert(b[2].is_string() && b[2].as_string() == StringView("x\"y")); // escape decoded
+        require(b.is_array());
+        require(b.size() == 3);
+        require(b[0].is_bool() && b[0].as_bool() == true);
+        require(b[1].is_null());
+        require(b[2].is_string() && b[2].as_string() == StringView("x\"y")); // escape decoded
 
         // Leniency kept from the original parser: trailing commas.
         Json t = Json::from(StringView("{\"a\": [1, 2,], }"));
-        assert(t.is_object() && t.size() == 1);
-        assert(t[StringView("a")].size() == 2);
+        require(t.is_object() && t.size() == 1);
+        require(t[StringView("a")].size() == 2);
 
         co_return;
     };
@@ -458,29 +458,29 @@ namespace wry::json {
             return false;
         };
 
-        assert(rejects(""));                    // empty document
-        assert(rejects("   "));                 // whitespace only
-        assert(rejects("{"));                   // truncated object
-        assert(rejects("{\"a\""));              // missing ':'
-        assert(rejects("{\"a\":}"));            // missing value
-        assert(rejects("{\"a\":1 \"b\":2}"));   // missing ','
-        assert(rejects("{a:1}"));               // unquoted key
-        assert(rejects("{\"a\":1,\"a\":2}"));   // duplicate key
-        assert(rejects("[1, 2"));               // truncated array
-        assert(rejects("[1 2]"));               // missing ','
-        assert(rejects("\"unterminated"));      // unterminated string
-        assert(rejects("tru"));                 // bad literal
-        assert(rejects("nul"));                 // bad literal
-        assert(rejects("xyz"));                 // junk
-        assert(rejects("{\"a\":1} garbage"));   // trailing junk
-        assert(rejects("- 1"));                 // malformed number
+        require(rejects(""));                    // empty document
+        require(rejects("   "));                 // whitespace only
+        require(rejects("{"));                   // truncated object
+        require(rejects("{\"a\""));              // missing ':'
+        require(rejects("{\"a\":}"));            // missing value
+        require(rejects("{\"a\":1 \"b\":2}"));   // missing ','
+        require(rejects("{a:1}"));               // unquoted key
+        require(rejects("{\"a\":1,\"a\":2}"));   // duplicate key
+        require(rejects("[1, 2"));               // truncated array
+        require(rejects("[1 2]"));               // missing ','
+        require(rejects("\"unterminated"));      // unterminated string
+        require(rejects("tru"));                 // bad literal
+        require(rejects("nul"));                 // bad literal
+        require(rejects("xyz"));                 // junk
+        require(rejects("{\"a\":1} garbage"));   // trailing junk
+        require(rejects("- 1"));                 // malformed number
 
         // And the error is catchable as std::exception with a message.
         try {
             Json::from(StringView("{"));
-            assert(false);
+            require(false);
         } catch (std::exception const& e) {
-            assert(e.what() != nullptr);
+            require(e.what() != nullptr);
         }
 
         co_return;

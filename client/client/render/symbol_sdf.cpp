@@ -440,14 +440,14 @@ namespace wry {
         // Axis-aligned edges are linear in coverage; a diagonal edge
         // through the centre is at distance zero, and at zero coverage
         // the centre is a half diagonal away
-        assert(edge_distance(0.5f, 1.0f, 0.0f) == 0.0f);
-        assert(edge_distance(0.2f, 0.0f, 1.0f) == 0.3f);
-        assert(std::abs(edge_distance(0.5f, 0.7071f, 0.7071f)) < 1e-4f);
-        assert(std::abs(edge_distance(0.0f, 0.7071f, 0.7071f) - 0.7071f) < 1e-4f);
-        assert(std::abs(edge_distance(1.0f, 0.7071f, 0.7071f) + 0.7071f) < 1e-4f);
+        require(edge_distance(0.5f, 1.0f, 0.0f) == 0.0f);
+        require(edge_distance(0.2f, 0.0f, 1.0f) == 0.3f);
+        require(std::abs(edge_distance(0.5f, 0.7071f, 0.7071f)) < 1e-4f);
+        require(std::abs(edge_distance(0.0f, 0.7071f, 0.7071f) - 0.7071f) < 1e-4f);
+        require(std::abs(edge_distance(1.0f, 0.7071f, 0.7071f) + 0.7071f) < 1e-4f);
         // A corner sliver: the line at distance t cuts area t^2 * ... --
         // for the diagonal, area = (0.7071 - t)^2, so t = 0.7071 - sqrt(a)
-        assert(std::abs(edge_distance(0.01f, 0.7071f, 0.7071f) - (0.7071f - 0.1f)) < 1e-3f);
+        require(std::abs(edge_distance(0.01f, 0.7071f, 0.7071f) - (0.7071f - 0.1f)) < 1e-3f);
         co_return;
     };
 
@@ -480,7 +480,7 @@ namespace wry {
         // Crossing points model the contour as straight within a texel,
         // the supersampled coverage is quantized to 1/64, and the sweep
         // is not exact; measured 0.08
-        assert(worst < 0.15f);
+        require(worst < 0.15f);
 
         // The same disc as the only occupied cell of a tiny atlas, built at
         // half resolution
@@ -490,20 +490,20 @@ namespace wry {
             for (int x = 0; x != n; ++x)
                 atlas[3 * n + y, 5 * n + x] = RGBA8Unorm_sRGB(1.0f, 1.0f, 1.0f, coverage[y, x]);
         SymbolSDF sdf = build_symbol_sdf(atlas, n / 2);
-        assert(sdf.cell == n / 2 && sdf.source_cell == n);
+        require(sdf.cell == n / 2 && sdf.source_cell == n);
         // The stroke width is the field's deepest point doubled: the box
         // filter averages the four source texels around the centre, each
         // up to a texel and a half from it, so it reads short, and this
         // disc is deeper than the fine channel's range, so it comes from
         // the coarse channel at a texel's precision (measured 38.9)
-        assert((sdf.stroke_width_at(5, 3) < 2.0f * radius + 1.0f));
-        assert((sdf.stroke_width_at(5, 3) > 2.0f * radius - 3.0f));
-        assert((sdf.stroke_width_at(0, 0) == 0.0f));
+        require((sdf.stroke_width_at(5, 3) < 2.0f * radius + 1.0f));
+        require((sdf.stroke_width_at(5, 3) > 2.0f * radius - 3.0f));
+        require((sdf.stroke_width_at(0, 0) == 0.0f));
         // An empty cell decodes as far outside in both channels, gradient
         // zero
         {
             SymbolSDFTexel t = sdf.image[0, 0];
-            assert(t.distance == 255 && t.gradient_x == 128 && t.gradient_y == 128 && t.far_distance == 255);
+            require(t.distance == 255 && t.gradient_x == 128 && t.gradient_y == 128 && t.far_distance == 255);
         }
         float worst_distance = 0.0f, worst_gradient = 0.0f, worst_far = 0.0f;
         for (int y = 0; y != n / 2; ++y) {
@@ -531,9 +531,9 @@ namespace wry {
         // gradient is discontinuous there, as it is along every stroke's
         // medial axis), and the 8-bit encodings quantize to 1/8 texel and
         // 1/128 of a unit vector; measured 0.11 and 0.05
-        assert(worst_distance < 0.2f);
-        assert(worst_gradient < 0.06f);
-        assert(worst_far < 0.7f);
+        require(worst_distance < 0.2f);
+        require(worst_gradient < 0.06f);
+        require(worst_far < 0.7f);
         co_return;
     };
 
@@ -556,19 +556,19 @@ namespace wry {
         }
         SymbolSDF a = build_symbol_sdf(atlas, n / 2);
         SymbolSDF b = co_await build_symbol_sdf_parallel(atlas, n / 2);
-        assert(a.cell == b.cell && a.source_cell == b.source_cell);
-        assert(a.image.minor() == b.image.minor() && a.image.major() == b.image.major());
+        require(a.cell == b.cell && a.source_cell == b.source_cell);
+        require(a.image.minor() == b.image.minor() && a.image.major() == b.image.major());
         for (std::size_t y = 0; y != a.image.minor(); ++y)
-            assert(std::memcmp(&a.image[(ptrdiff_t)y, 0], &b.image[(ptrdiff_t)y, 0],
+            require(std::memcmp(&a.image[(ptrdiff_t)y, 0], &b.image[(ptrdiff_t)y, 0],
                                a.image.major() * sizeof(SymbolSDFTexel)) == 0);
-        assert(a.stroke_width == b.stroke_width);
-        assert(a.stroke_width_at(7, 2) > 0.0f && a.stroke_width_at(0, 0) == 0.0f);
+        require(a.stroke_width == b.stroke_width);
+        require(a.stroke_width_at(7, 2) > 0.0f && a.stroke_width_at(0, 0) == 0.0f);
         // In waves (3 does not divide the 256 cells: a short last wave)
         SymbolSDF w = co_await build_symbol_sdf_parallel(atlas, n / 2, 3);
         for (std::size_t y = 0; y != a.image.minor(); ++y)
-            assert(std::memcmp(&a.image[(ptrdiff_t)y, 0], &w.image[(ptrdiff_t)y, 0],
+            require(std::memcmp(&a.image[(ptrdiff_t)y, 0], &w.image[(ptrdiff_t)y, 0],
                                a.image.major() * sizeof(SymbolSDFTexel)) == 0);
-        assert(a.stroke_width == w.stroke_width);
+        require(a.stroke_width == w.stroke_width);
 
         if (std::getenv("WRY_BENCH") && std::filesystem::exists("assets_tile.png")) {
             matrix<RGBA8Unorm_sRGB> tiles = from_png(StringView("assets_tile.png"));
@@ -585,7 +585,7 @@ namespace wry {
             using ms = std::chrono::duration<double, std::milli>;
             printf("symbol_sdf_parallel: assets_tile.png field build %.0f ms sequential, %.0f ms parallel%s\n",
                    ms(t1 - t0).count(), ms(t2 - t1).count(), same ? "" : " MISMATCH");
-            assert(same);
+            require(same);
         }
         co_return;
     };

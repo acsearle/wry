@@ -120,7 +120,7 @@ roughly by how much they unblock.
 
 ## Raised 2026-11-09
 
-24. **assert policy**: the svg Release trap was the fourth round of
+24. **assert policy** (**Decided 2026-11-10:** (a), (b) and (c) as recommended; done, see done.md): the svg Release trap was the fourth round of
     side-effects-in-assert, all of them in tests (2,288 of the ~3,000 asserts
     are inside define_test bodies; every one of the 35 found today was in a
     test).  Recommendation, all three together: (a) never put side effects in

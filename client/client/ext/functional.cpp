@@ -41,18 +41,18 @@ namespace wry {
         // empty
         {
             move_only_function<void()> f;
-            assert(!f);
-            assert(f == nullptr);
+            require(!f);
+            require(f == nullptr);
             move_only_function<int(int)> g = nullptr;
-            assert(!g);
+            require(!g);
         }
 
         // small callable, in place: result and argument
         {
             int base = 40;
             move_only_function<int(int)> f = [base](int x) { return base + x; };
-            assert(f);
-            assert(f(2) == 42);
+            require(f);
+            require(f(2) == 42);
         }
 
         // large callable, boxed on the heap: callable, destroyed exactly once
@@ -63,16 +63,16 @@ namespace wry {
                                                pad = std::array<char, 64>{}]() mutable {
                     return (int)pad.size();
                 };
-                assert(f() == 64);
-                assert(destroyed.load() == 0);
+                require(f() == 64);
+                require(destroyed.load() == 0);
             }
-            assert(destroyed.load() == 1);
+            require(destroyed.load() == 1);
         }
 
         // over-aligned callable: boxed
         {
             move_only_function<int()> f = [v = OverAligned{7}]() { return v.value; };
-            assert(f() == 7);
+            require(f() == 7);
         }
 
         // move: the destination is callable, the source is empty, the probe
@@ -84,14 +84,14 @@ namespace wry {
                 ran.fetch_add(1, std::memory_order_relaxed);
             };
             move_only_function<void()> b = std::move(a);
-            assert(!a);
-            assert(b);
+            require(!a);
+            require(b);
             b();
-            assert(ran.load() == 1);
-            assert(destroyed.load() == 0);
+            require(ran.load() == 1);
+            require(destroyed.load() == 0);
             b = nullptr;
-            assert(!b);
-            assert(destroyed.load() == 1);
+            require(!b);
+            require(destroyed.load() == 1);
         }
 
         // move assignment over a live callable destroys the old one
@@ -101,21 +101,21 @@ namespace wry {
             move_only_function<void()> a = [p = Probe{&d1}]() {};
             move_only_function<void()> b = [p = Probe{&d2}]() {};
             a = std::move(b);
-            assert(d1.load() == 1);
-            assert(d2.load() == 0);
-            assert(!b);
-            assert(a);
+            require(d1.load() == 1);
+            require(d2.load() == 0);
+            require(!b);
+            require(a);
         }
 
         // assignment from a callable; swap
         {
             move_only_function<int()> a = []() { return 1; };
             a = []() { return 2; };
-            assert(a() == 2);
+            require(a() == 2);
             move_only_function<int()> b = []() { return 3; };
             swap(a, b);
-            assert(a() == 3);
-            assert(b() == 2);
+            require(a() == 3);
+            require(b() == 2);
         }
 
         // void result discards the callable's; reference argument
@@ -123,7 +123,7 @@ namespace wry {
             int n = 0;
             move_only_function<void(int&)> f = [](int& x) { x += 5; return 99; };
             f(n);
-            assert(n == 5);
+            require(n == 5);
         }
 
         // a move-only callable dropped unrun still destroys exactly once
@@ -133,7 +133,7 @@ namespace wry {
                 move_only_function<void()> f = [p = Probe{&destroyed}]() {};
                 (void) f;
             }
-            assert(destroyed.load() == 1);
+            require(destroyed.load() == 1);
         }
 
         co_return;

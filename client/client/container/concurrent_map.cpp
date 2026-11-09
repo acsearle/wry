@@ -26,24 +26,24 @@ namespace wry::concurrent_map {
                 int v = rand() % N;
                 auto [p, f] = a.try_emplace(k, v);
                 auto [q, g] = b.try_emplace(k, v);
-                assert(f == g);
+                require(f == g);
                 if (p != a.end()) {
-                    assert(p->second == q->second);
+                    require(p->second == q->second);
                 }
             }
             
             for (auto [k, v] : a) {
                 auto q = b.find(k);
-                assert(q != b.end());
-                assert(q->first == k);
-                assert(q->second == v);
+                require(q != b.end());
+                require(q->first == k);
+                require(q->second == v);
             }
 
             for (auto [k, v] : b) {
                 auto p = a.find(k);
-                assert(p != a.end());
-                assert(p->first == k);
-                assert(p->second == v);
+                require(p != a.end());
+                require(p->first == k);
+                require(p->second == v);
             }
 
         }

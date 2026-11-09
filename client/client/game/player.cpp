@@ -147,7 +147,7 @@ namespace wry {
             return world._ptr->_ready.find(player_id)
                 != world._ptr->_ready.end();
         };
-        assert(player_is_scheduled());
+        require(player_is_scheduled());
 
         // One action per tick, as the step's input.
         const Coordinate contended = sink->_location;
@@ -159,16 +159,16 @@ namespace wry {
             // the player's write (or the player is dead, caught below).
             if (cell_empty(world._ptr, contended))
                 ++ticks_lost;
-            assert(player_is_scheduled());
+            require(player_is_scheduled());
         }
         // Non-vacuity: the player really did lose contested ticks.
-        assert(ticks_lost > 0);
+        require(ticks_lost > 0);
 
         // An uncontended write still lands on the next step.
         const Coordinate quiet = Coordinate{5, 5};
         co_await player_test_step(world, {player_test_write(quiet, term_make_integer_with(42))});
-        assert(cell_holds(world._ptr, quiet, term_make_integer_with(42)));
-        assert(player_is_scheduled());
+        require(cell_holds(world._ptr, quiet, term_make_integer_with(42)));
+        require(player_is_scheduled());
 
         co_return;
     };
@@ -186,15 +186,15 @@ namespace wry {
 
         const Coordinate xy{5, 5};
         co_await player_test_step(world, {player_test_write(xy, term_make_integer_with(7))});
-        assert(cell_holds(world._ptr, xy, term_make_integer_with(7)));
+        require(cell_holds(world._ptr, xy, term_make_integer_with(7)));
 
         co_await player_test_step(world, {player_test_write(xy, term_make_null())});
-        assert(cell_empty(world._ptr, xy));
+        require(cell_empty(world._ptr, xy));
 
         // Erasing a cell that was never written inserts nothing.
         const Coordinate never{6, 6};
         co_await player_test_step(world, {player_test_write(never, term_make_null())});
-        assert(cell_empty(world._ptr, never));
+        require(cell_empty(world._ptr, never));
 
         co_return;
     };
@@ -216,30 +216,30 @@ namespace wry {
         co_await player_test_step(b, {make_join_command(5)});
         EntityID pa{}, pb{};
         bool mapped_a = a._ptr->_player_for_client.try_get(5, pa);
-        assert(mapped_a && (pa == cursor));
+        require(mapped_a && (pa == cursor));
         (void) mapped_a;
         bool mapped_b = b._ptr->_player_for_client.try_get(5, pb);
-        assert(mapped_b && (pb == pa));
+        require(mapped_b && (pb == pa));
         (void) mapped_b;
-        assert(a._ptr->content_hash() == b._ptr->content_hash());
-        assert(a._ptr->_entity_id_source.data == cursor.data + 1);
+        require(a._ptr->content_hash() == b._ptr->content_hash());
+        require(a._ptr->_entity_id_source.data == cursor.data + 1);
         {
             Entity const* e = nullptr;
             bool found = a._ptr->_entity_for_entity_id.try_get(pa, e);
-            assert(found);
+            require(found);
             (void) found;
-            assert(dynamic_cast<Player const*>(e));
+            require(dynamic_cast<Player const*>(e));
         }
         // Scheduled from the step after the JOIN
-        assert(a._ptr->_ready.find(pa) != a._ptr->_ready.end());
+        require(a._ptr->_ready.find(pa) != a._ptr->_ready.end());
 
         // An action in the JOIN's own step is too early and is dropped;
         // from the next step the client's actions land
         const Coordinate xy{1, 1};
         co_await player_test_step(a, {make_join_command(6), player_test_write(xy, term_make_integer_with(9), 6)});
-        assert(cell_empty(a._ptr, xy));
+        require(cell_empty(a._ptr, xy));
         co_await player_test_step(a, {player_test_write(xy, term_make_integer_with(9), 6)});
-        assert(cell_holds(a._ptr, xy, term_make_integer_with(9)));
+        require(cell_holds(a._ptr, xy, term_make_integer_with(9)));
 
         // A JOIN for a mapped client is a no-op: no new entity, same id
         {
@@ -247,15 +247,15 @@ namespace wry {
             co_await player_test_step(a, {make_join_command(5)});
             EntityID again{};
             bool mapped_again = a._ptr->_player_for_client.try_get(5, again);
-            assert(mapped_again && (again == pa));
+            require(mapped_again && (again == pa));
             (void) mapped_again;
-            assert(a._ptr->_entity_id_source == before);
+            require(a._ptr->_entity_id_source == before);
         }
 
         // An action from a client the World does not map is dropped
         const Coordinate stray{2, 2};
         co_await player_test_step(a, {player_test_write(stray, term_make_integer_with(1), 9)});
-        assert(cell_empty(a._ptr, stray));
+        require(cell_empty(a._ptr, stray));
 
         // Several actions in one step from one client all land; the last
         // write to a cell wins
@@ -265,21 +265,21 @@ namespace wry {
             player_test_write(c4, term_make_integer_with(2), 5),
             player_test_write(c3, term_make_integer_with(3), 5),
         });
-        assert(cell_holds(a._ptr, c3, term_make_integer_with(3)));
-        assert(cell_holds(a._ptr, c4, term_make_integer_with(2)));
+        require(cell_holds(a._ptr, c3, term_make_integer_with(3)));
+        require(cell_holds(a._ptr, c4, term_make_integer_with(2)));
 
         // LEAVE unmaps the client; its Player stays, idle, and its
         // actions no longer route anywhere
         co_await player_test_step(a, {make_leave_command(5)});
-        assert(!a._ptr->_player_for_client.contains(5));
+        require(!a._ptr->_player_for_client.contains(5));
         {
             Entity const* e = nullptr;
             bool found = a._ptr->_entity_for_entity_id.try_get(pa, e);
-            assert(found && e);
+            require(found && e);
             (void) found;
         }
         co_await player_test_step(a, {player_test_write(stray, term_make_integer_with(1), 5)});
-        assert(cell_empty(a._ptr, stray));
+        require(cell_empty(a._ptr, stray));
 
         // The clock events are not the World's business
         co_await player_test_step(a, {Command{Command::PAUSED}, Command{Command::RESUMED}});

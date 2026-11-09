@@ -740,14 +740,14 @@ namespace wry {
             int64_t sum = 0;
             for (auto const& [id, w] : weights)
                 sum += w;
-            assert(total == sum);
+            require(total == sum);
             int64_t prefix = 0;
             for (auto const& [id, w] : weights) {
                 int64_t cumulant = -1;
                 bool dealt = try_lookup_cumulant(f, id, cumulant);
-                assert(dealt == (w > 0));
+                require(dealt == (w > 0));
                 if (dealt)
-                    assert(cumulant == prefix);
+                    require(cumulant == prefix);
                 prefix += w;
             }
             for (int i = 0; i != 8; ++i) {
@@ -755,7 +755,7 @@ namespace wry {
                 if (weights.contains(id))
                     continue;
                 int64_t cumulant = -1;
-                CHECK(!try_lookup_cumulant(f, id, cumulant));
+                require(!try_lookup_cumulant(f, id, cumulant));
             }
             if (!(iter & 15))
                 mutator_repin();

@@ -187,27 +187,27 @@ namespace wry {
             // Signed area: CCW positive, CW negative.
             {
                 auto s = square(1.0f, 2.0f, 4.0f, 6.0f);
-                assert(std::abs(bezier4_signed_area(s) - 12.0) < 1e-9);
+                require(std::abs(bezier4_signed_area(s) - 12.0) < 1e-9);
                 for (auto& c : s) {
                     std::swap(c.columns[0], c.columns[3]);
                     std::swap(c.columns[1], c.columns[2]);
                 }
-                assert(std::abs(bezier4_signed_area(s) + 12.0) < 1e-9);
+                require(std::abs(bezier4_signed_area(s) + 12.0) < 1e-9);
             }
 
             // Coverage deep inside is one, far outside is zero, and the
             // prefilter preserves the integral: the bitmap sums to the area.
             {
                 auto s = square(0.0f, 0.0f, 10.0f, 10.0f);
-                assert(std::abs(bezier4_coverage(s, simd_float2{5, 5}, 1.0f) - 1.0f) < 1e-3f);
-                assert(std::abs(bezier4_coverage(s, simd_float2{20, 5}, 1.0f)) < 1e-3f);
+                require(std::abs(bezier4_coverage(s, simd_float2{5, 5}, 1.0f) - 1.0f) < 1e-3f);
+                require(std::abs(bezier4_coverage(s, simd_float2{20, 5}, 1.0f)) < 1e-3f);
                 auto b = rasterize_coverage(s, 0.5f);
                 double sum = 0.0;
                 for (size_t i = 0; i != b.coverage.minor(); ++i)
                     for (size_t j = 0; j != b.coverage.major(); ++j)
                         sum += (float)b.coverage[i, j];
                 sum *= 0.25; // pixel area
-                assert(std::abs(sum - 100.0) < 0.5);
+                require(std::abs(sum - 100.0) < 0.5);
             }
 
             // More curves than the old 128-deep up-front stack held: 200
@@ -218,8 +218,8 @@ namespace wry {
                     auto s = square((float)i, 0.0f, (float)(i + 1), 4.0f);
                     many.insert(many.end(), s.begin(), s.end());
                 }
-                assert(many.size() == 800);
-                assert(std::abs(bezier4_coverage(many, simd_float2{190.5f, 2.0f}, 0.25f) - 1.0f) < 1e-3f);
+                require(many.size() == 800);
+                require(std::abs(bezier4_coverage(many, simd_float2{190.5f, 2.0f}, 0.25f) - 1.0f) < 1e-3f);
             }
 
             co_return;

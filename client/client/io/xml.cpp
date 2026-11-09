@@ -328,38 +328,38 @@ namespace wry::xml {
   <text>a &lt;b&gt; &amp; &#65;&#x42;<![CDATA[<raw>]]></text>
 </svg>
 <!-- trailing -->)");
-                assert(d.ok());
-                assert(d.root.children.size() == 1);
+                require(d.ok());
+                require(d.root.children.size() == 1);
                 auto const& svg = d.root.children[0];
-                assert(svg.name == "svg");
-                assert(svg.attribute("xmlns:xlink"));
-                assert(*svg.attribute("viewBox") == "0 0 10 10");
-                assert(!svg.attribute("width"));
-                assert(svg.children.size() == 2);
+                require(svg.name == "svg");
+                require(svg.attribute("xmlns:xlink"));
+                require(*svg.attribute("viewBox") == "0 0 10 10");
+                require(!svg.attribute("width"));
+                require(svg.children.size() == 2);
                 auto const& g = svg.children[0];
-                assert(*g.attribute("fill-rule") == "evenodd");
-                assert(g.children.size() == 2);
-                assert(g.children[0].name == "path");
-                assert(*g.children[1].attribute("width") == "1");
+                require(*g.attribute("fill-rule") == "evenodd");
+                require(g.children.size() == 2);
+                require(g.children[0].name == "path");
+                require(*g.children[1].attribute("width") == "1");
                 auto const& t = svg.children[1];
-                assert(t.text == "a <b> & AB<raw>");
+                require(t.text == "a <b> & AB<raw>");
             }
 
             // Errors are reported, not thrown, and keep the partial tree.
             {
                 auto d = parse("<a><b></a>");
-                assert(!d.ok());
-                assert(d.error == "mismatched end tag");
+                require(!d.ok());
+                require(d.error == "mismatched end tag");
                 d = parse("<a x=1/>");
-                assert(!d.ok());
+                require(!d.ok());
                 d = parse("<a x='1' x='2'/>");
-                assert(!d.ok());
+                require(!d.ok());
                 d = parse("<a>&nbsp;</a>");
-                assert(!d.ok());
+                require(!d.ok());
                 d = parse("<a><!-- open");
-                assert(!d.ok());
+                require(!d.ok());
                 d = parse("");
-                assert(!d.ok());
+                require(!d.ok());
             }
 
             co_return;

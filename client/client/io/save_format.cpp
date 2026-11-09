@@ -900,24 +900,24 @@ namespace wry {
             L._cursor = bytes.data();
             L._end = bytes.data() + bytes.size();
             World* r = L.load_and_commission();
-            assert(r || L._why);
+            require(r || L._why);
             return r;
         };
         World* back = load(good);
-        assert(back && back->content_hash() == w->content_hash());
+        require(back && back->content_hash() == w->content_hash());
         // the hash itself, after magic, version and record count
         std::vector<uint8_t> bad = good;
         bad[12] ^= 1;
-        assert(!load(bad));
+        require(!load(bad));
         // a covered value: the money, the u64 after the World record's
         // refs, located by searching for it (123 is unique in this file)
         std::vector<uint8_t> also_bad = good;
         const uint64_t money = 123;
         auto at = std::search(also_bad.begin() + 20, also_bad.end(),
                               (const uint8_t*)&money, (const uint8_t*)&money + 8);
-        assert(at != also_bad.end());
+        require(at != also_bad.end());
         *at ^= 2;
-        assert(!load(also_bad));
+        require(!load(also_bad));
         co_return;
     };
 
@@ -945,9 +945,9 @@ namespace wry {
         w->hack_repair_invariant();
         std::vector<uint8_t> good = test_save_to_buffer(w);
         World* back = test_load_from_buffer(good);
-        assert(back);
+        require(back);
         back->hack_repair_invariant();
-        assert(back->content_hash() == w->content_hash());
+        require(back->content_hash() == w->content_hash());
 
         // Every truncation
         for (size_t cut = 0; cut < good.size(); ++cut) {
@@ -958,7 +958,7 @@ namespace wry {
         {
             std::vector<uint8_t> longer = good;
             longer.push_back(0);
-            assert(!test_load_from_buffer(longer));
+            require(!test_load_from_buffer(longer));
         }
         std::mt19937_64 rng(2026);
         for (int i = 0; i != 3000; ++i) {
@@ -975,30 +975,30 @@ namespace wry {
         // a save's
         {
             World* bad = test_load_from_buffer(good);
-            assert(bad);
+            require(bad);
             bad->_waiting_on_time.set({Time{9}, EntityID{777}});
-            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+            require(!test_load_from_buffer(test_save_to_buffer(bad)));
         }
         {
             World* bad = test_load_from_buffer(good);
-            assert(bad);
+            require(bad);
             bad->_entity_id_source = EntityID{1};
-            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+            require(!test_load_from_buffer(test_save_to_buffer(bad)));
         }
         {
             World* bad = test_load_from_buffer(good);
-            assert(bad);
+            require(bad);
             Machine* odd = new Machine;
             odd->_entity_id = m->_entity_id;
             odd->_phase = (decltype(odd->_phase))7;
             odd->seal();
             bad->_entity_for_entity_id.set(odd->_entity_id, odd);
-            assert(!test_load_from_buffer(test_save_to_buffer(bad)));
+            require(!test_load_from_buffer(test_save_to_buffer(bad)));
         }
         {
             std::vector<uint8_t> not_a_save = good;
             not_a_save[0] ^= 0xff;
-            assert(!test_load_from_buffer(not_a_save));
+            require(!test_load_from_buffer(not_a_save));
         }
         co_return;
     };
@@ -1053,11 +1053,11 @@ namespace wry {
 
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
-        assert(w2);
-        assert(w2->_time == w->_time);
+        require(w2);
+        require(w2->_time == w->_time);
         w2->hack_repair_invariant();
-        assert(w2->content_hash() == w->content_hash());
-        assert(world_content_hash_oracle(w2) == w->content_hash());
+        require(w2->content_hash() == w->content_hash());
+        require(world_content_hash_oracle(w2) == w->content_hash());
 
         auto ki_as_set = [](const auto& ki, auto key) {
             std::set<uint64_t> out;
@@ -1071,19 +1071,19 @@ namespace wry {
             std::set<uint64_t> expected;
             if (auto it = oracle.find(k); it != oracle.end())
                 expected = it->second;
-            assert(ki_as_set(w2->_entity_for_entity_id.ki, EntityID{k}) == expected);
+            require(ki_as_set(w2->_entity_for_entity_id.ki, EntityID{k}) == expected);
         }
-        assert((ki_as_set(w2->_term_for_coordinate.ki, Coordinate{1, -2})
+        require((ki_as_set(w2->_term_for_coordinate.ki, Coordinate{1, -2})
                 == std::set<uint64_t>{101, 202}));
-        assert((ki_as_set(w2->_entity_id_for_coordinate.ki, Coordinate{-3, 4})
+        require((ki_as_set(w2->_entity_id_for_coordinate.ki, Coordinate{-3, 4})
                 == std::set<uint64_t>{303}));
-        assert(ki_as_set(w2->_term_for_coordinate.ki, Coordinate{9, 9}).empty());
+        require(ki_as_set(w2->_term_for_coordinate.ki, Coordinate{9, 9}).empty());
 
         Term t;
         bool has = w2->_term_for_coordinate.try_get(Coordinate{1, -2}, t);
-        assert(has);
-        assert(t._data == term_make_integer_with(7)._data);
-        assert(w2->_waiting_on_time.contains({Time{78}, EntityID{101}}));
+        require(has);
+        require(t._data == term_make_integer_with(7)._data);
+        require(w2->_waiting_on_time.contains({Time{78}, EntityID{101}}));
 
         co_return;
     };
@@ -1148,43 +1148,43 @@ namespace wry {
         Root<World*> a{w};
         for (int i = 0; i != 3; ++i)
             co_await step_once(a);
-        assert(a._ptr->_time == Time{3});
-        assert(!a._ptr->_ready.is_empty());
+        require(a._ptr->_time == Time{3});
+        require(!a._ptr->_ready.is_empty());
 
         // The cursor advanced (by at least the two first-tick requests),
         // and both spawn cells are now occupied by machines whose IDs were
         // dealt from the block above the starting cursor: distinct, in the
         // block, and ordered like their spawners (rank order == EntityID
         // order of the requesters).
-        assert(a._ptr->_entity_id_source.data >= cursor0.data + 2);
+        require(a._ptr->_entity_id_source.data >= cursor0.data + 2);
         EntityID spawned[2] = {};
         for (int i = 0; i != 2; ++i) {
-            CHECK(a._ptr->_entity_id_for_coordinate.try_get(spawner_at[i], spawned[i]));
-            assert(spawned[i]);
-            assert(spawned[i].data >= cursor0.data);
-            assert(spawned[i].data < a._ptr->_entity_id_source.data);
+            require(a._ptr->_entity_id_for_coordinate.try_get(spawner_at[i], spawned[i]));
+            require(spawned[i]);
+            require(spawned[i].data >= cursor0.data);
+            require(spawned[i].data < a._ptr->_entity_id_source.data);
         }
-        assert(spawned[0] != spawned[1]);
-        assert((spawners[0]->_entity_id < spawners[1]->_entity_id)
+        require(spawned[0] != spawned[1]);
+        require((spawners[0]->_entity_id < spawners[1]->_entity_id)
                == (spawned[0] < spawned[1]));
 
         // Save mid-flight, reload, unfold the bucket into _ready.
         std::vector<uint8_t> b1 = test_save_to_buffer(a._ptr);
         World* l = test_load_from_buffer(b1);
-        assert(l);
-        assert(l->_ready.is_empty());
-        assert(l->_entity_id_source == a._ptr->_entity_id_source);
-        assert(l->_waiting_on_time.contains({Time{3}, counter->_entity_id}));
+        require(l);
+        require(l->_ready.is_empty());
+        require(l->_entity_id_source == a._ptr->_entity_id_source);
+        require(l->_waiting_on_time.contains({Time{3}, counter->_entity_id}));
         // The content hash folds _ready into the time wheel as the save
         // does, so the commissioned load (bucket unfolded into _ready)
         // hashes as the stepped original did incrementally, and the
         // oracle agrees with both.
         const uint64_t hash_at_save = a._ptr->content_hash();
-        assert(hash_at_save == world_content_hash_oracle(a._ptr));
+        require(hash_at_save == world_content_hash_oracle(a._ptr));
         l->hack_repair_invariant();
-        assert(!l->_ready.is_empty());
-        assert(l->content_hash() == hash_at_save);
-        assert(world_content_hash_oracle(l) == hash_at_save);
+        require(!l->_ready.is_empty());
+        require(l->content_hash() == hash_at_save);
+        require(world_content_hash_oracle(l) == hash_at_save);
         Root<World*> b{l};
 
         // Both lineages step onward and must not diverge -- including in
@@ -1195,19 +1195,19 @@ namespace wry {
         }
 
         Term ta{}, tb{};
-        CHECK(a._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, ta));
-        CHECK(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
-        assert(ta.as_int64_t() == 6);
-        assert(tb.as_int64_t() == 6);
-        assert(a._ptr->_entity_id_source == b._ptr->_entity_id_source);
+        require(a._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, ta));
+        require(b._ptr->_term_for_coordinate.try_get(Coordinate{0, 0}, tb));
+        require(ta.as_int64_t() == 6);
+        require(tb.as_int64_t() == 6);
+        require(a._ptr->_entity_id_source == b._ptr->_entity_id_source);
 
         std::vector<uint8_t> ba = test_save_to_buffer(a._ptr);
         std::vector<uint8_t> bb = test_save_to_buffer(b._ptr);
-        assert(ba == bb);
-        assert(a._ptr->content_hash() == b._ptr->content_hash());
-        assert(a._ptr->content_hash() != hash_at_save);
-        assert(world_content_hash_oracle(a._ptr) == a._ptr->content_hash());
-        assert(world_content_hash_oracle(b._ptr) == b._ptr->content_hash());
+        require(ba == bb);
+        require(a._ptr->content_hash() == b._ptr->content_hash());
+        require(a._ptr->content_hash() != hash_at_save);
+        require(world_content_hash_oracle(a._ptr) == a._ptr->content_hash());
+        require(world_content_hash_oracle(b._ptr) == b._ptr->content_hash());
 
         printf("ready_roundtrip: cursor %llu -> %llu, spawned EntityID{%llu} and EntityID{%llu}\n",
                (unsigned long long)cursor0.data,
@@ -1261,49 +1261,49 @@ namespace wry {
         w->hack_repair_invariant();
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
-        assert(w2);
+        require(w2);
         w2->hack_repair_invariant();
-        assert(w2->content_hash() == w->content_hash());
-        assert(world_content_hash_oracle(w2) == w->content_hash());
+        require(w2->content_hash() == w->content_hash());
+        require(world_content_hash_oracle(w2) == w->content_hash());
 
         auto get = [w2](EntityID id) -> const Entity* {
             const Entity* e = nullptr;
             bool has = w2->_entity_for_entity_id.try_get(id, e);
-            assert(has);
-            assert(e);
-            assert(e->_entity_id == id);
+            require(has);
+            require(e);
+            require(e->_entity_id == id);
             return e;
         };
 
         const Entity* p2 = get(player->_entity_id);
-        assert(p2->_save_type_tag() == Player::SAVE_TYPE_TAG);
+        require(p2->_save_type_tag() == Player::SAVE_TYPE_TAG);
 
         const Entity* sp2 = get(spawner->_entity_id);
-        assert(sp2->_save_type_tag() == Spawner::SAVE_TYPE_TAG);
-        assert((static_cast<const Spawner*>(sp2)->_location == Coordinate{0, 0}));
+        require(sp2->_save_type_tag() == Spawner::SAVE_TYPE_TAG);
+        require((static_cast<const Spawner*>(sp2)->_location == Coordinate{0, 0}));
 
         const Entity* so2 = get(source->_entity_id);
-        assert(so2->_save_type_tag() == Source::SAVE_TYPE_TAG);
+        require(so2->_save_type_tag() == Source::SAVE_TYPE_TAG);
         const Source* loaded_source = static_cast<const Source*>(so2);
-        assert((loaded_source->_location == Coordinate{2, 2}));
-        assert(_term_is_object(loaded_source->_of_this));
+        require((loaded_source->_location == Coordinate{2, 2}));
+        require(_term_is_object(loaded_source->_of_this));
         const HeapTerm* h = _term_as_object(loaded_source->_of_this);
-        assert(h && h->_save_type_tag() == HeapInt64::SAVE_TYPE_TAG);
-        assert(static_cast<const HeapInt64*>(h)->as_int64_t() == 1234567);
+        require(h && h->_save_type_tag() == HeapInt64::SAVE_TYPE_TAG);
+        require(static_cast<const HeapInt64*>(h)->as_int64_t() == 1234567);
 
         const Entity* sk2 = get(sink->_entity_id);
-        assert(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
-        assert((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
+        require(sk2->_save_type_tag() == Sink::SAVE_TYPE_TAG);
+        require((static_cast<const Sink*>(sk2)->_location == Coordinate{4, 2}));
 
         const Entity* sh2 = get(ship->_entity_id);
-        assert(sh2->_save_type_tag() == Ship::SAVE_TYPE_TAG);
-        assert((static_cast<const Ship*>(sh2)->_location == Coordinate{-3, 7}));
-        assert(static_cast<const Ship*>(sh2)->_heading == HEADING_WEST);
-        assert(w2->_money == -42);
-        assert(w2->_seed == 0x0123456789abcdefull);
+        require(sh2->_save_type_tag() == Ship::SAVE_TYPE_TAG);
+        require((static_cast<const Ship*>(sh2)->_location == Coordinate{-3, 7}));
+        require(static_cast<const Ship*>(sh2)->_heading == HEADING_WEST);
+        require(w2->_money == -42);
+        require(w2->_seed == 0x0123456789abcdefull);
 
         // The cursor comes back past every entity in the save
-        assert(w2->_entity_id_source.data > sink->_entity_id.data);
+        require(w2->_entity_id_source.data > sink->_entity_id.data);
 
         co_return;
     };
@@ -1413,96 +1413,96 @@ namespace wry {
 
         std::vector<uint8_t> b1 = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(b1);
-        assert(w2);
+        require(w2);
         w2->hack_repair_invariant();
 
         // Content hash: the loaded world hashes as the original, at
         // different addresses throughout; both agree with the oracle.
-        assert(w2->content_hash() == w->content_hash());
-        assert(world_content_hash_oracle(w) == w->content_hash());
-        assert(world_content_hash_oracle(w2) == w2->content_hash());
+        require(w2->content_hash() == w->content_hash());
+        require(world_content_hash_oracle(w) == w->content_hash());
+        require(world_content_hash_oracle(w2) == w2->content_hash());
         // And the entity hashes are content hashes: the shared heap int
         // and the machine's stack hash alike on both sides.
         {
             const Entity* me = nullptr;
-            CHECK(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
-            assert(me != machine);
-            assert(me->content_hash() == machine->content_hash());
-            assert(PersistentStack<Term>::hash_of(static_cast<const Machine*>(me)->_stack)
+            require(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
+            require(me != machine);
+            require(me->content_hash() == machine->content_hash());
+            require(PersistentStack<Term>::hash_of(static_cast<const Machine*>(me)->_stack)
                    == PersistentStack<Term>::hash_of(machine->_stack));
             Term tv;
-            CHECK(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv));
-            assert(_term_as_object(tv) != shared);
-            assert(content_hash(tv) == content_hash(shared_term));
+            require(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv));
+            require(_term_as_object(tv) != shared);
+            require(content_hash(tv) == content_hash(shared_term));
         }
 
         // Maps / terms / entities / wait set: targeted semantic checks.
-        assert(w2->_time == w->_time);
+        require(w2->_time == w->_time);
 
         Term t;
-        CHECK(w2->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
-        assert(t._data == term_make_integer_with(2)._data);
+        require(w2->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+        require(t._data == term_make_integer_with(2)._data);
 
         EntityID eid;
-        CHECK(w2->_entity_id_for_coordinate.try_get(Coordinate{2, 2}, eid));
-        assert(eid == source->_entity_id);
+        require(w2->_entity_id_for_coordinate.try_get(Coordinate{2, 2}, eid));
+        require(eid == source->_entity_id);
 
         // The shared heap object survives and is STILL shared (one pointer)
         // across the coordinate term and the Source after reload.
         Term tv_coord;
-        CHECK(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv_coord));
+        require(w2->_term_for_coordinate.try_get(Coordinate{-2, -2}, tv_coord));
         const Entity* se = nullptr;
-        CHECK(w2->_entity_for_entity_id.try_get(source->_entity_id, se));
-        assert(se->_save_type_tag() == Source::SAVE_TYPE_TAG);
+        require(w2->_entity_for_entity_id.try_get(source->_entity_id, se));
+        require(se->_save_type_tag() == Source::SAVE_TYPE_TAG);
         Term tv_source = static_cast<const Source*>(se)->_of_this;
-        assert(_term_is_object(tv_coord) && _term_is_object(tv_source));
-        assert(_term_as_object(tv_coord) == _term_as_object(tv_source));
-        assert(static_cast<const HeapInt64*>(_term_as_object(tv_coord))
+        require(_term_is_object(tv_coord) && _term_is_object(tv_source));
+        require(_term_as_object(tv_coord) == _term_as_object(tv_source));
+        require(static_cast<const HeapInt64*>(_term_as_object(tv_coord))
                    ->as_int64_t() == 9001);
 
         const Entity* me = nullptr;
-        CHECK(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
-        assert(me->_save_type_tag() == Machine::SAVE_TYPE_TAG);
+        require(w2->_entity_for_entity_id.try_get(machine->_entity_id, me));
+        require(me->_save_type_tag() == Machine::SAVE_TYPE_TAG);
         const Machine* m2 = static_cast<const Machine*>(me);
-        assert(m2->_phase == Machine::PHASE_TRAVELLING);
-        assert((m2->_new_location == Coordinate{6, 5}));
-        assert(m2->_new_time == Time{41});
-        assert(PersistentStack<Term>::size(m2->_stack) == 3);
+        require(m2->_phase == Machine::PHASE_TRAVELLING);
+        require((m2->_new_location == Coordinate{6, 5}));
+        require(m2->_new_time == Time{41});
+        require(PersistentStack<Term>::size(m2->_stack) == 3);
 
-        assert(w2->_waiting_on_time.contains({Time{44}, machine->_entity_id}));
+        require(w2->_waiting_on_time.contains({Time{44}, machine->_entity_id}));
 
         WaitSet ws;
-        CHECK(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));
+        require(w2->_entity_id_for_coordinate.ki.try_get(Coordinate{0, 0}, ws));
         std::set<uint64_t> got;
         ws.for_each([&got](EntityID e) { got.insert(e.data); });
-        assert((got == std::set<uint64_t>{ sink->_entity_id.data,
+        require((got == std::set<uint64_t>{ sink->_entity_id.data,
                                            counter->_entity_id.data }));
 
         // Location multimap round-trips, including the multi-member set.
         {
             EntityIDSet ls;
-            CHECK(w2->_located_for_coordinate.try_get(spawner->_location, ls));
+            require(w2->_located_for_coordinate.try_get(spawner->_location, ls));
             std::set<uint64_t> located;
             ls.for_each([&located](EntityID e) { located.insert(e.data); });
-            assert((located == std::set<uint64_t>{ spawner->_entity_id.data,
+            require((located == std::set<uint64_t>{ spawner->_entity_id.data,
                                                    machine->_entity_id.data }));
             EntityIDSet ss;
-            CHECK(w2->_located_for_coordinate.try_get(sink->_location, ss));
-            assert(ss.contains(sink->_entity_id));
+            require(w2->_located_for_coordinate.try_get(sink->_location, ss));
+            require(ss.contains(sink->_entity_id));
         }
 
         Terrain terrain = -1;
-        CHECK(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));
-        assert(terrain == TERRAIN_WATER);
-        CHECK(w2->_terrain_for_coordinate.try_get(Coordinate{-40, 25}, terrain));
-        assert(terrain == TERRAIN_ROCK);
-        CHECK(!w2->_terrain_for_coordinate.try_get(Coordinate{9, 9}, terrain));
+        require(w2->_terrain_for_coordinate.try_get(Coordinate{1, 0}, terrain));
+        require(terrain == TERRAIN_WATER);
+        require(w2->_terrain_for_coordinate.try_get(Coordinate{-40, 25}, terrain));
+        require(terrain == TERRAIN_ROCK);
+        require(!w2->_terrain_for_coordinate.try_get(Coordinate{9, 9}, terrain));
         {
             WaitSet tws;
-            CHECK(w2->_terrain_for_coordinate.ki.try_get(Coordinate{1, 0}, tws));
+            require(w2->_terrain_for_coordinate.ki.try_get(Coordinate{1, 0}, tws));
             std::set<uint64_t> twaiters;
             tws.for_each([&twaiters](EntityID e) { twaiters.insert(e.data); });
-            assert((twaiters == std::set<uint64_t>{ spawner->_entity_id.data }));
+            require((twaiters == std::set<uint64_t>{ spawner->_entity_id.data }));
         }
 
         // Strong backstop: re-saving the loaded world reproduces the stream.
@@ -1526,21 +1526,21 @@ namespace wry {
                 });
                 return ok;
             };
-            assert(same(w->_term_for_coordinate.kv, w2->_term_for_coordinate.kv));
-            assert(same(w->_entity_id_for_coordinate.kv, w2->_entity_id_for_coordinate.kv));
-            assert(same(w->_entity_for_entity_id.kv, w2->_entity_for_entity_id.kv));
-            assert(same(w->_terrain_for_coordinate.kv, w2->_terrain_for_coordinate.kv));
-            assert(same_ki(w->_located_for_coordinate.kv, w2->_located_for_coordinate.kv));
-            assert(same_ki(w->_term_for_coordinate.ki, w2->_term_for_coordinate.ki));
-            assert(same_ki(w->_entity_id_for_coordinate.ki, w2->_entity_id_for_coordinate.ki));
-            assert(same_ki(w->_located_for_coordinate.ki, w2->_located_for_coordinate.ki));
-            assert(same_ki(w->_entity_for_entity_id.ki, w2->_entity_for_entity_id.ki));
-            assert(same_ki(w->_terrain_for_coordinate.ki, w2->_terrain_for_coordinate.ki));
+            require(same(w->_term_for_coordinate.kv, w2->_term_for_coordinate.kv));
+            require(same(w->_entity_id_for_coordinate.kv, w2->_entity_id_for_coordinate.kv));
+            require(same(w->_entity_for_entity_id.kv, w2->_entity_for_entity_id.kv));
+            require(same(w->_terrain_for_coordinate.kv, w2->_terrain_for_coordinate.kv));
+            require(same_ki(w->_located_for_coordinate.kv, w2->_located_for_coordinate.kv));
+            require(same_ki(w->_term_for_coordinate.ki, w2->_term_for_coordinate.ki));
+            require(same_ki(w->_entity_id_for_coordinate.ki, w2->_entity_id_for_coordinate.ki));
+            require(same_ki(w->_located_for_coordinate.ki, w2->_located_for_coordinate.ki));
+            require(same_ki(w->_entity_for_entity_id.ki, w2->_entity_for_entity_id.ki));
+            require(same_ki(w->_terrain_for_coordinate.ki, w2->_terrain_for_coordinate.ki));
             NodeSet_U128::assert_canonical(w2->_waiting_on_time._inner);
         }
 
         std::vector<uint8_t> b2 = test_save_to_buffer(w2);
-        assert(b1 == b2);
+        require(b1 == b2);
 
         co_return;
     };
@@ -1559,14 +1559,14 @@ namespace wry {
 
         std::vector<uint8_t> buffer = test_save_to_buffer(w);
         World* w2 = test_load_from_buffer(buffer);
-        assert(w2);
+        require(w2);
         w2->hack_repair_invariant();
         EntityID mapped{};
         bool has_mapping = w2->_player_for_client.try_get(ClientID{3}, mapped);
-        assert(has_mapping && (mapped == p->_entity_id));
+        require(has_mapping && (mapped == p->_entity_id));
         (void) has_mapping;
-        assert(w2->_player_for_client.size() == 1);
-        assert(w2->content_hash() == w->content_hash());
+        require(w2->_player_for_client.size() == 1);
+        require(w2->content_hash() == w->content_hash());
 
         // A different mapping is a different World
         World* w3 = new World;
@@ -1577,7 +1577,7 @@ namespace wry {
         w3->_waiting_on_time.set({Time{0}, q->_entity_id});
         w3->_player_for_client.set(ClientID{4}, q->_entity_id);
         w3->hack_repair_invariant();
-        assert(w3->content_hash() != w->content_hash());
+        require(w3->content_hash() != w->content_hash());
         co_return;
     };
 

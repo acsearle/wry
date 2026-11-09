@@ -182,9 +182,9 @@ namespace wry {
     // pinned by the drain loop.
     define_test("thread_public") {
 
-        assert(epoch::local_state.is_pinned);
+        require(epoch::local_state.is_pinned);
         ThreadPublic* self = thread_public_this_thread();
-        assert(self);
+        require(self);
 
         // We can find ourself, live and pinned.
         {
@@ -194,10 +194,10 @@ namespace wry {
                 ++live;
                 if (&tp == self) {
                     found_self = true;
-                    assert(tp._is_pinned.load_relaxed());
+                    require(tp._is_pinned.load_relaxed());
                 }
             });
-            assert(found_self);
+            require(found_self);
             printf("thread_public: %d live threads\n", live);
             thread_public_debug_dump();
         }
@@ -223,13 +223,13 @@ namespace wry {
                         mutator_pin();
                         thread_public_register(name);
                         ThreadPublic* me = thread_public_this_thread();
-                        assert(me);
+                        require(me);
                         bool found = false;
                         thread_public_for_each([&](ThreadPublic const& tp) {
                             if (&tp == me)
                                 found = true;
                         });
-                        assert(found);
+                        require(found);
                         mutator_repin();
                         thread_public_deregister();
                         mutator_unpin();
@@ -243,7 +243,7 @@ namespace wry {
                 if (!strncmp(tp._name, "tp-churn-", 9))
                     ++stragglers;
             });
-            assert(stragglers == 0);
+            require(stragglers == 0);
         }
 
         co_return;

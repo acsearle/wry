@@ -166,7 +166,7 @@ namespace wry {
             auto frames_until = [&](auto done) -> coroutine::Task {
                 const auto deadline = testing::soon();
                 while (!done()) {
-                    assert(std::chrono::steady_clock::now() < deadline);
+                    require(std::chrono::steady_clock::now() < deadline);
                     host.frame();
                     WorldState* world = host.world();
                     if (!(world && world->has_server_input()))
@@ -180,12 +180,12 @@ namespace wry {
             // The menu: laid out by the first frame, so its buttons can be
             // pressed in the second; the world shows from the one after
             host.frame();
-            assert(host.world() == nullptr);
+            require(host.world() == nullptr);
             [[maybe_unused]] auto pressed = gc.issue(Origin::gui, "press \"New Game\"");
-            assert(pressed.reply.status == Reply::OK);
+            require(pressed.reply.status == Reply::OK);
             host.frame();
-            assert(host.world() != nullptr);
-            assert(gc.world == host.world());
+            require(host.world() != nullptr);
+            require(gc.world == host.world());
 
             // The relay's JOIN rides a step once the clock has run: until
             // then this client has no Player and its actions wait (the
@@ -195,7 +195,7 @@ namespace wry {
                 return std::string_view(text.data(), text.chars.size()).starts_with("host joined");
             };
             co_await frames_until(joined);
-            CHECK(joined());
+            require(joined());
 
             // A write, stepped in: `step` is pending until that many more
             // steps have arrived and been applied.  Which step carries the
@@ -205,34 +205,34 @@ namespace wry {
             // a reply counts can be ones already on their way.  So step
             // until it shows, as the smoke scripts do
             [[maybe_unused]] auto paused = gc.issue(Origin::gui, "pause");
-            assert(paused.reply.status == Reply::OK);
+            require(paused.reply.status == Reply::OK);
             [[maybe_unused]] auto written = gc.issue(Origin::gui, "write Coordinate(1, 1) OPCODE::SWAP");
-            assert(written.reply.status == Reply::OK);
+            require(written.reply.status == Reply::OK);
             auto landed = [&] {
                 return gc.issue(Origin::gui, "get Coordinate(1, 1)").reply.text == StringView("OPCODE::SWAP");
             };
             [[maybe_unused]] bool before = landed();
-            assert(!before);
+            require(!before);
             for (const auto deadline = testing::soon(); !landed();) {
-                assert(std::chrono::steady_clock::now() < deadline);
+                require(std::chrono::steady_clock::now() < deadline);
                 [[maybe_unused]] auto stepped = gc.issue(Origin::gui, "step");
-                assert(stepped.reply.status == Reply::PENDING);
+                require(stepped.reply.status == Reply::PENDING);
                 co_await settle();
             }
 
             // A screenshot is refused by the next frame
             [[maybe_unused]] auto shot = gc.issue(Origin::gui, "screenshot \"/dev/null\"");
-            assert(shot.reply.status == Reply::PENDING);
+            require(shot.reply.status == Reply::PENDING);
             host.frame();
             host.frame();
-            assert(gc.detached.empty());
-            assert(gc.history.back().status == Reply::ERROR);
+            require(gc.detached.empty());
+            require(gc.history.back().status == Reply::ERROR);
 
             // quit ends the loop
-            assert(!host.done());
+            require(!host.done());
             [[maybe_unused]] auto quit_issued = gc.issue(Origin::gui, "quit");
-            assert(quit_issued.reply.status == Reply::OK);
-            assert(host.done());
+            require(quit_issued.reply.status == Reply::OK);
+            require(host.done());
 
             co_await host.world()->end_session(std::chrono::milliseconds(200));
         }
@@ -255,27 +255,27 @@ namespace wry {
             HeadlessHost host(gc);
             auto expect = [&](const char* line, Reply::Status want) {
                 [[maybe_unused]] const Reply::Status got = gc.issue(Origin::gui, StringView(line)).reply.status;
-                assert(got == want);
+                require(got == want);
             };
             host.frame();
-            assert(host.world() == nullptr);
+            require(host.world() == nullptr);
             expect("main-menu", Reply::ERROR);           // no game to quit
             expect("new-game", Reply::OK);
             host.frame();
-            assert(host.world() != nullptr && gc.world == host.world());
+            require(host.world() != nullptr && gc.world == host.world());
 
             co_await host.world()->end_session(std::chrono::milliseconds(200));
             expect("main-menu", Reply::OK);
-            assert(host.world() != nullptr);                // until the frame ends
+            require(host.world() != nullptr);                // until the frame ends
             host.frame();
-            assert(host.world() == nullptr && gc.world == nullptr);
+            require(host.world() == nullptr && gc.world == nullptr);
             expect("save", Reply::ERROR);                   // no world to save
 
             // The menu again: laid out by this frame, pressed in the next
             host.frame();
             expect("press \"New Game\"", Reply::OK);
             host.frame();
-            assert(host.world() != nullptr && gc.world == host.world());
+            require(host.world() != nullptr && gc.world == host.world());
             co_await host.world()->end_session(std::chrono::milliseconds(200));
         }
         (void) co_await scope.join();

@@ -141,12 +141,12 @@ namespace wry::coroutine {
 
         // The host absorbed a child cancellation and still completed
         // normally through word 0
-        assert(fence._outcome.load(std::memory_order_relaxed) == 1);
-        assert(value.load(std::memory_order_relaxed) == 17);
-        assert(caught.load(std::memory_order_relaxed) == 1);
-        assert(stopped_ok.load(std::memory_order_relaxed) == 1);
-        assert(shielded.load(std::memory_order_relaxed) == 1);
-        assert(budgeted.load(std::memory_order_relaxed) == 1);
+        require(fence._outcome.load(std::memory_order_relaxed) == 1);
+        require(value.load(std::memory_order_relaxed) == 17);
+        require(caught.load(std::memory_order_relaxed) == 1);
+        require(stopped_ok.load(std::memory_order_relaxed) == 1);
+        require(shielded.load(std::memory_order_relaxed) == 1);
+        require(budgeted.load(std::memory_order_relaxed) == 1);
 
         co_return;
     };
@@ -199,15 +199,15 @@ namespace wry::coroutine {
         {
             std::atomic<int> destroyed{0};
             execution::RaceWinner<int> w = co_await execution::when_any(race_slow(&destroyed), race_fast(3));
-            assert((w.index == 1) && (w.value == 3));
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require((w.index == 1) && (w.value == 3));
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         // Ties: both entrants complete inside start; the first claims and
         // the second's value is dropped
         {
             execution::RaceWinner<int> w = co_await execution::when_any(execution::just(1), execution::just(2));
-            assert((w.index == 0) && (w.value == 1));
+            require((w.index == 0) && (w.value == 1));
         }
 
         // An error wins like a value
@@ -219,22 +219,22 @@ namespace wry::coroutine {
             } catch (std::runtime_error const&) {
                 caught = true;
             }
-            assert(caught);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(caught);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         // Every entrant stops: the race completes stopped, absorbed here
         {
             auto r = co_await stopped_as_optional(execution::when_any(race_stopper(), race_stopper()));
-            assert(!r.has_value());
+            require(!r.has_value());
         }
 
         // void entrants
         {
             std::atomic<int> destroyed{0};
             execution::RaceWinner<void> w = co_await execution::when_any(race_void_slow(&destroyed), race_void_fast());
-            assert(w.index == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(w.index == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         co_return;
@@ -264,10 +264,10 @@ namespace wry::coroutine {
         source.request_stop();
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
-        assert(steady_clock::now() - t0 < seconds(2));
-        assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-        assert(destroyed.load(std::memory_order_relaxed) == 3);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(steady_clock::now() - t0 < seconds(2));
+        require(fence._outcome.load(std::memory_order_relaxed) == 2);
+        require(destroyed.load(std::memory_order_relaxed) == 3);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
 
         co_return;
     };
@@ -279,7 +279,7 @@ namespace wry::coroutine {
         // awaitable lifted through a coroutine
         {
             execution::Outcome<int> outcome = execution::sync_wait(sw_add(10));
-            assert(outcome.value() == 14);
+            require(outcome.value() == 14);
         }
         {
             bool caught = false;
@@ -288,17 +288,17 @@ namespace wry::coroutine {
             } catch (std::runtime_error const&) {
                 caught = true;
             }
-            assert(caught);
+            require(caught);
         }
         {
             std::stop_source source;
             source.request_stop();
             execution::Outcome<int> outcome = execution::sync_wait(osfs_stoppable_child(), source.get_token());
-            assert(outcome.is_stopped());
+            require(outcome.is_stopped());
         }
         {
             execution::Outcome<void> outcome = coroutine::sync_wait(TransferToPoolExecutor{});
-            assert(outcome.has_value());
+            require(outcome.has_value());
         }
 
         // A nursery's join, as WorldState::update does it: the join is a
@@ -311,9 +311,9 @@ namespace wry::coroutine {
             nursery.soon(sw_void_child(&ran));
             nursery.soon(target, sw_add(0));
             execution::Outcome<std::ptrdiff_t> outcome = sync_wait(nursery.join());
-            assert(outcome.value() == 0);
-            assert(ran.load(std::memory_order_relaxed) == 1);
-            assert(target.value() == 4);
+            require(outcome.value() == 0);
+            require(ran.load(std::memory_order_relaxed) == 1);
+            require(target.value() == 4);
         }
 
         co_return;

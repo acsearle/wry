@@ -354,31 +354,31 @@ namespace wry {
         auto contains = [&](std::string const& s, const char* what) {
             return s.find(what) != std::string::npos;
         };
-        assert(text == dump_world(w));
-        assert(!contains(text, "? ("));
-        assert(text.starts_with("#1 World\n  _time = 3\n"));
-        assert(contains(text, " Machine\n"));
-        assert(contains(text, " Source\n"));
-        assert(contains(text, " Spawner\n"));
-        assert(contains(text, " Sink\n"));
-        assert(contains(text, " Player\n"));
-        assert(contains(text, "_stack = [OPCODE::FLIP_FLOP, \"a longer heap string\", 7]"));
-        assert(contains(text, "Coordinate(1, 2): \"hello\""));
-        assert(contains(text, "Coordinate(-1, 0): OPCODE::SWAP"));
-        assert(contains(text, "Coordinate(3, 3): 9001"));
-        assert(contains(text, "_of_this = 9001"));
-        assert(contains(text, "(5, EntityID(5))"));
-        assert(contains(text, "_player_for_client: 1 entry\n    1: EntityID(1)"));
-        assert(contains(text, "{EntityID(2), EntityID(5)}"));
-        assert(contains(text, "_entity_for_entity_id: 5 entries"));
-        assert(contains(text, "_new_location = Coordinate(6, 5)"));
+        require(text == dump_world(w));
+        require(!contains(text, "? ("));
+        require(text.starts_with("#1 World\n  _time = 3\n"));
+        require(contains(text, " Machine\n"));
+        require(contains(text, " Source\n"));
+        require(contains(text, " Spawner\n"));
+        require(contains(text, " Sink\n"));
+        require(contains(text, " Player\n"));
+        require(contains(text, "_stack = [OPCODE::FLIP_FLOP, \"a longer heap string\", 7]"));
+        require(contains(text, "Coordinate(1, 2): \"hello\""));
+        require(contains(text, "Coordinate(-1, 0): OPCODE::SWAP"));
+        require(contains(text, "Coordinate(3, 3): 9001"));
+        require(contains(text, "_of_this = 9001"));
+        require(contains(text, "(5, EntityID(5))"));
+        require(contains(text, "_player_for_client: 1 entry\n    1: EntityID(1)"));
+        require(contains(text, "{EntityID(2), EntityID(5)}"));
+        require(contains(text, "_entity_for_entity_id: 5 entries"));
+        require(contains(text, "_new_location = Coordinate(6, 5)"));
 
         // Through a save: the same text
         {
             World* loaded = load_world_from_bytes(serialize_world(w));
-            assert(loaded);
+            require(loaded);
             Root<World const*> keep{loaded};
-            assert(dump_world(loaded) == text);
+            require(dump_world(loaded) == text);
         }
 
         // One changed cell: one line out, one line in
@@ -410,8 +410,8 @@ namespace wry {
             std::vector<std::string> only_a, only_b;
             std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(only_a));
             std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(only_b));
-            assert(only_a.size() == 1 && only_a[0] == "    Coordinate(1, 2): \"hello\"");
-            assert(only_b.size() == 1 && only_b[0] == "    Coordinate(1, 2): \"goodbye\"");
+            require(only_a.size() == 1 && only_a[0] == "    Coordinate(1, 2): \"hello\"");
+            require(only_b.size() == 1 && only_b[0] == "    Coordinate(1, 2): \"goodbye\"");
         }
         co_return;
     };

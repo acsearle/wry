@@ -14,31 +14,31 @@ namespace wry {
         
         ContiguousDeque<int> a;
         
-        assert(a.is_empty());
-        assert(a.size() == 0);
+        require(a.is_empty());
+        require(a.size() == 0);
         
         a.push_back(1);
-        assert(!a.is_empty());
-        assert(a.size() == 1);
-        assert(a.front() == 1);
-        assert(&a.front() == a.data());
-        assert(a.begin() == a.data());
-        assert(a.end() - a.begin() == a.size());
-        assert(&a.back() == a.data());
+        require(!a.is_empty());
+        require(a.size() == 1);
+        require(a.front() == 1);
+        require(&a.front() == a.data());
+        require(a.begin() == a.data());
+        require(a.end() - a.begin() == a.size());
+        require(&a.back() == a.data());
         
         a.push_back(2);
-        assert(!a.is_empty());
-        assert(a.size() == 2);
-        assert(a.front() == 1);
-        assert(a.back() == 2);
+        require(!a.is_empty());
+        require(a.size() == 2);
+        require(a.front() == 1);
+        require(a.back() == 2);
         
         a.push_front(3);
-        assert(a[0] == 3);
-        assert(a[1] == 1);
-        assert(a[2] == 2);
+        require(a[0] == 3);
+        require(a[1] == 1);
+        require(a[2] == 2);
         
         a.clear();
-        assert(a.is_empty());
+        require(a.is_empty());
         co_return;
     };
     

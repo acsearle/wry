@@ -51,6 +51,7 @@
 #include "coroutine.hpp"
 #include "kqueue_reactor.hpp"
 #include "mpsc_queue.hpp"
+#include "test.hpp"
 #include "transport.hpp"
 
 namespace wry::testing {
@@ -101,11 +102,11 @@ namespace wry::testing {
 
         SocketPair() {
             const int paired = ::socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
-            assert(paired == 0);
+            require(paired == 0);
             (void) paired;
             for (int fd : fds) {
                 const bool ok = make_nonblocking(fd);
-                assert(ok);
+                require(ok);
                 (void) ok;
             }
         }
@@ -278,7 +279,7 @@ namespace wry::testing {
                 messages.push_back(std::move(*message));
             } else if (auto* open = std::get_if<Transport::Opened>(&event)) {
                 for (size_t i = first_of_batch; i != messages.size(); ++i)
-                    assert(messages[i].connection != open->connection);
+                    require(messages[i].connection != open->connection);
                 if (opened)
                     opened->push_back(std::move(*open));
             } else if (auto* close = std::get_if<Transport::Closed>(&event)) {

@@ -140,11 +140,11 @@ namespace wry {
                 // int sv = 0; bool sh = serial.kv.try_get(k, sv);
                 int uv = 0; bool uh = unified.kv.try_get(k, uv);
                 auto it = kv_expect.find(k);
-                assert(uh == (it != kv_expect.end()));
+                require(uh == (it != kv_expect.end()));
                 // assert(ph == sh && (!ph || pv == sv));
                 // assert(ph == uh && (!ph || pv == uv));
                 if (uh)
-                    assert(uv == it->second);
+                    require(uv == it->second);
 
                 // ki: parallel == serial == unified == oracle
                 // std::set<uint64_t> ps = ki_set(parallel, k);
@@ -155,7 +155,7 @@ namespace wry {
                                                                  : std::set<uint64_t>{};
                 // assert(ps == ss);
                 // assert(ps == es);
-                assert(us == es);
+                require(us == es);
             }
 
             // Canonical shape on both sides: the unified frame's assembly and
@@ -175,8 +175,8 @@ namespace wry {
                 const KiAMT* ki_out = unified.ki._inner ? &*unified.ki._inner : nullptr;
                 KvAMT::assert_canonical(kv_out);
                 KiAMT::assert_canonical(ki_out);
-                assert(KvAMT::same_shape(kv_out, kv_ref));
-                assert(KiAMT::same_shape(ki_out, ki_ref));
+                require(KvAMT::same_shape(kv_out, kv_ref));
+                require(KiAMT::same_shape(ki_out, ki_ref));
             }
 
             if (!(iter & 7))
@@ -204,7 +204,7 @@ namespace wry {
             int count = 0;
             visit_in_region(m, Coordinate{-10, -10}, Coordinate{10, 10},
                             [&count](Coordinate, EntityID) { ++count; });
-            assert(count == 0);
+            require(count == 0);
         }
 
         std::map<std::pair<i32, i32>, u64> truth;
@@ -237,7 +237,7 @@ namespace wry {
                     (lo.y <= xy.second) && (xy.second <= hi.y))
                     expected.emplace_back(xy.first, xy.second, id);
             std::sort(expected.begin(), expected.end());
-            assert(got == expected);
+            require(got == expected);
         };
 
         // origin-spanning (sign-boundary blocks), single cell, straddling

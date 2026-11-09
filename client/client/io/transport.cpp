@@ -1163,11 +1163,11 @@ namespace wry {
                 append_bytes(pending, stream.data() + at, n);
                 at += n;
                 std::string_view violation = codec.split(pending, out);
-                assert(violation.empty());
+                require(violation.empty());
                 (void) violation;
             }
-            assert(pending.empty());
-            assert(out == messages);
+            require(pending.empty());
+            require(out == messages);
         }
 
         // Violations, each reported once the six-byte prefix is in, with
@@ -1178,27 +1178,27 @@ namespace wry {
             append_bytes(pending, whole.data(), whole.size());
             std::vector<std::string> out;
             std::string_view violation = codec.split(pending, out);
-            assert(out.size() == 1 && out[0] == tagged(1, "first"));
+            require(out.size() == 1 && out[0] == tagged(1, "first"));
             return std::string(violation);
         };
         {
             std::string over = codec.frame(tagged(1, std::string(70, 'x')));
-            CHECK(violation_of(over) == "frame too long");
-            assert(violation_of(over.substr(0, 6)) == "frame too long");     // before the body
-            assert(violation_of(over.substr(0, 5)).empty());                 // not yet
+            require(violation_of(over) == "frame too long");
+            require(violation_of(over.substr(0, 6)) == "frame too long");     // before the body
+            require(violation_of(over.substr(0, 5)).empty());                 // not yet
             std::string unknown = codec.frame(tagged(7, "?"));
-            assert(violation_of(unknown) == "unknown tag");
+            require(violation_of(unknown) == "unknown tag");
             std::string one_byte = codec.frame(tagged(1, "")).substr(0, 4);
             one_byte[0] = 1;                                                 // length 1: no room for a tag
-            assert(violation_of(one_byte) == "frame too short");
-            assert(violation_of("").empty());
+            require(violation_of(one_byte) == "frame too short");
+            require(violation_of("").empty());
         }
 
         // The farewell carries the reason under the kick tag
         {
             std::string farewell = codec.farewell("because");
-            assert(Transport::FrameCodec::tag_of(farewell) == 9);
-            assert(farewell.substr(2) == "because");
+            require(Transport::FrameCodec::tag_of(farewell) == 9);
+            require(farewell.substr(2) == "because");
         }
         co_return;
     };
@@ -1213,20 +1213,20 @@ namespace wry {
         auto held = [&]() { return std::string(pending.data(), pending.size()); };
         set("one\r\ntwo\nthr");
         std::vector<std::string> out;
-        CHECK(codec.split(pending, out).empty());
-        assert(out.size() == 2 && out[0] == "one" && out[1] == "two");
-        assert(held() == "thr");
+        require(codec.split(pending, out).empty());
+        require(out.size() == 2 && out[0] == "one" && out[1] == "two");
+        require(held() == "thr");
         append_bytes(pending, "ee\n", 3);
-        CHECK(codec.split(pending, out).empty());
-        assert(out.size() == 3 && out[2] == "three" && pending.empty());
+        require(codec.split(pending, out).empty());
+        require(out.size() == 3 && out[2] == "three" && pending.empty());
         // A partial line over the cap, and a complete one
         set("123456789");
-        CHECK(codec.split(pending, out) == "line too long");
+        require(codec.split(pending, out) == "line too long");
         set("ok\n123456789\n");
-        CHECK(codec.split(pending, out) == "line too long");
-        assert(out.size() == 4 && out[3] == "ok");
-        assert(codec.frame("x") == "x\n");
-        assert(codec.farewell("why") == "why");
+        require(codec.split(pending, out) == "line too long");
+        require(out.size() == 4 && out[3] == "ok");
+        require(codec.frame("x") == "x\n");
+        require(codec.farewell("why") == "why");
         co_return;
     };
 
@@ -1235,15 +1235,15 @@ namespace wry {
         Transport::Limits limits;
         std::string error;
         auto server = Transport::listen_tcp("127.0.0.1", 0, codec, limits, error);
-        assert(server && error.empty());
-        assert(server->port() != 0);
+        require(server && error.empty());
+        require(server->port() != 0);
         auto client = Transport::make(codec, limits);
         Nursery nursery;
         nursery.soon(server->serve());
         nursery.soon(client->serve());
 
         int id = co_await client->connect_tcp("127.0.0.1", server->port());
-        assert(id > 0);
+        require(id > 0);
 
         // Both sides see the connection open, labelled by address
         std::vector<Transport::Message> server_messages, client_messages;
@@ -1255,15 +1255,15 @@ namespace wry {
             drain(client->events(), client_messages, client_closed, &client_opened);
             return !server_messages.empty();
         });
-        assert(heard);
+        require(heard);
         (void) heard;
-        assert(server_opened.size() == 1 && server_opened[0].peer.starts_with("127.0.0.1:"));
-        assert(client_opened.size() == 1 && client_opened[0].connection == (uint64_t)id);
-        assert(client_opened[0].peer == "127.0.0.1:" + std::to_string(server->port()));
-        assert(server_messages[0].bytes == tagged(1, "hello"));
+        require(server_opened.size() == 1 && server_opened[0].peer.starts_with("127.0.0.1:"));
+        require(client_opened.size() == 1 && client_opened[0].connection == (uint64_t)id);
+        require(client_opened[0].peer == "127.0.0.1:" + std::to_string(server->port()));
+        require(server_messages[0].bytes == tagged(1, "hello"));
         const uint64_t accepted = server_messages[0].connection;
-        assert(accepted == server_opened[0].connection);
-        assert(server->connections() == 1 && client->connections() == 1);
+        require(accepted == server_opened[0].connection);
+        require(server->connections() == 1 && client->connections() == 1);
 
         // A message bigger than the socket buffers arrives whole
         {
@@ -1273,7 +1273,7 @@ namespace wry {
                 drain(client->events(), client_messages, client_closed);
                 return !client_messages.empty();
             });
-            assert(arrived && client_messages[0].bytes == big);
+            require(arrived && client_messages[0].bytes == big);
             (void) arrived;
         }
 
@@ -1285,12 +1285,12 @@ namespace wry {
             drain(server->events(), server_messages, server_closed);
             return !client_closed.empty() && !server_closed.empty();
         });
-        assert(farewell);
+        require(farewell);
         (void) farewell;
-        assert(client_messages.size() == 2 && client_messages[1].bytes == tagged(9, "testing"));
-        assert(client_closed[0].reason == "end of stream");
-        assert(server_closed[0].connection == accepted && server_closed[0].reason == "kicked: testing");
-        assert(server->connections() == 0 && client->connections() == 0);
+        require(client_messages.size() == 2 && client_messages[1].bytes == tagged(9, "testing"));
+        require(client_closed[0].reason == "end of stream");
+        require(server_closed[0].connection == accepted && server_closed[0].reason == "kicked: testing");
+        require(server->connections() == 0 && client->connections() == 0);
 
         // Dialing a closed port fails cleanly
         {
@@ -1298,14 +1298,14 @@ namespace wry {
             uint16_t port = refused->port();
             refused.reset();
             int result = co_await client->connect_tcp("127.0.0.1", port);
-            assert(result == -ECONNREFUSED);
+            require(result == -ECONNREFUSED);
             (void) result;
         }
 
         co_await server->shutdown(std::chrono::milliseconds(100));
         co_await client->shutdown(std::chrono::milliseconds(100));
         (void) co_await nursery.join();
-        assert(server->finished() && client->finished());
+        require(server->finished() && client->finished());
         co_return;
     };
 
@@ -1321,7 +1321,7 @@ namespace wry {
         nursery.soon(server->serve());
         SocketPair pair;
         const int id = server->adopt(pair.release_server());
-        assert(id > 0);
+        require(id > 0);
 
         const std::string line = std::string(65536, 'l') + '\n';
         size_t written = 0;
@@ -1331,7 +1331,7 @@ namespace wry {
         std::vector<Transport::Closed> closed;
         auto hold = [&] {
             drain(server->events(), held, closed);
-            assert(held.size() <= limits.max_unconsumed);
+            require(held.size() <= limits.max_unconsumed);
         };
         // Send the line, from wherever the last partial send stopped, until
         // a send finds no room for long enough to be the bound holding:
@@ -1348,18 +1348,18 @@ namespace wry {
             } else if (*n == -EAGAIN) {
                 continue;
             } else {
-                assert(*n > 0);
+                require(*n > 0);
                 written += (size_t)*n;
             }
         }
-        assert(blocked);
+        require(blocked);
         // The inbox holds the bound exactly, and the rest is in flight: in
         // the reader's hands or the kernel's
         bool at_bound = co_await eventually([&] {
             hold();
             return held.size() == limits.max_unconsumed;
         });
-        assert(at_bound && closed.empty());
+        require(at_bound && closed.empty());
         // Consuming (destroying the Messages) returns the credits: the
         // reader resumes, the peer can send again, and everything written
         // arrives, whole.  From here every batch is tallied and dropped
@@ -1369,7 +1369,7 @@ namespace wry {
             std::vector<Transport::Message> batch;
             drain(server->events(), batch, closed);
             for (auto& message : batch) {
-                assert(message.bytes.size() == line.size() - 1);
+                require(message.bytes.size() == line.size() - 1);
                 delivered_bytes += message.bytes.size() + 1;
                 ++delivered_count;
             }
@@ -1382,26 +1382,26 @@ namespace wry {
             consume();
             return delivered_count > limits.max_unconsumed;
         });
-        assert(flowed);
+        require(flowed);
         // Finish the partial line, and one more whole one, now that the
         // peer reads again
         const size_t offset = written % line.size();
         bool sent = co_await send_all(pair.client(), line.substr(offset));
-        assert(sent);
+        require(sent);
         written += line.size() - offset;
         sent = co_await send_all(pair.client(), line);
-        assert(sent);
+        require(sent);
         written += line.size();
         pair.close_client();
         bool complete = co_await eventually([&] {
             consume();
             return !closed.empty();
         });
-        assert(complete);
+        require(complete);
         consume();
         // Every whole line arrived as a message, and nothing else
-        assert(delivered_bytes == written);
-        assert(closed[0].reason == "end of stream");
+        require(delivered_bytes == written);
+        require(closed[0].reason == "end of stream");
 
         co_await server->shutdown(std::chrono::milliseconds(100));
         (void) co_await nursery.join();
@@ -1421,17 +1421,17 @@ namespace wry {
         nursery.soon(server->serve());
         SocketPair pair;
         const int id = server->adopt(pair.release_server());
-        assert(id > 0);
+        require(id > 0);
 
         bool sent = co_await send_all(pair.client(), "hi\n");
-        assert(sent);
+        require(sent);
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
         bool heard = co_await eventually([&] {
             drain(server->events(), messages, closed);
             return !messages.empty();
         });
-        assert(heard && messages[0].connection == (uint64_t)id);
+        require(heard && messages[0].connection == (uint64_t)id);
         auto t0 = std::chrono::steady_clock::now();
         for (int i = 0; i != 64; ++i)
             server->send((uint64_t)id, std::string(64 << 10, 'y'));       // nobody reads it
@@ -1439,16 +1439,16 @@ namespace wry {
             drain(server->events(), messages, closed);
             return !closed.empty();
         });
-        assert(kicked);
-        assert(closed[0].connection == (uint64_t)id && closed[0].reason == "kicked: slow consumer");
+        require(kicked);
+        require(closed[0].connection == (uint64_t)id && closed[0].reason == "kicked: slow consumer");
         // The grace was waited for (a lower bound holds whatever the load)
-        assert(std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(150));
-        assert(server->connections() == 0);
+        require(std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(150));
+        require(server->connections() == 0);
         // The peer, reading at last, gets what fit in the buffers and the
         // end of stream, never the whole backlog
         StreamReader peer{pair.client()};
         (void) co_await peer.end_of_stream();
-        assert(peer.ended && peer.pending.size() < limits.max_queued_bytes);
+        require(peer.ended && peer.pending.size() < limits.max_queued_bytes);
 
         co_await server->shutdown(std::chrono::milliseconds(100));
         (void) co_await nursery.join();
@@ -1466,11 +1466,11 @@ namespace wry {
         nursery.soon(server->serve());
         SocketPair pair;
         const int id = server->adopt(pair.release_server());
-        assert(id > 0);
+        require(id > 0);
         StreamReader peer{pair.client()};
 
         bool sent = co_await send_all(pair.client(), "one\n");
-        assert(sent);
+        require(sent);
         std::vector<Transport::Message> messages;
         std::vector<Transport::Closed> closed;
         std::vector<Transport::Opened> opened;
@@ -1478,23 +1478,23 @@ namespace wry {
             drain(server->events(), messages, closed, &opened);
             return !messages.empty();
         });
-        assert(heard);
-        assert(opened.size() == 1 && opened[0].connection == (uint64_t)id);
-        assert(opened[0].peer.ends_with(" " + std::to_string(::getpid())));
+        require(heard);
+        require(opened.size() == 1 && opened[0].connection == (uint64_t)id);
+        require(opened[0].peer.ends_with(" " + std::to_string(::getpid())));
         server->kick((uint64_t)id, "bye");
         server->kick((uint64_t)id, "again");                 // idempotent: the first wins
         (void) ::send(pair.client(), "late\n", 5, 0);        // non-blocking; may already be refused
         auto lines = co_await peer.lines(1);
-        assert(lines.size() == 1 && lines[0] == "bye");
+        require(lines.size() == 1 && lines[0] == "bye");
         bool ended = co_await peer.end_of_stream();
-        assert(ended && peer.pending.empty());               // then the end of stream, nothing else
+        require(ended && peer.pending.empty());               // then the end of stream, nothing else
         bool reported = co_await eventually([&] {
             drain(server->events(), messages, closed);
             return !closed.empty();
         });
-        assert(reported);
-        assert(closed[0].reason == "kicked: bye");
-        assert(messages.size() == 1);                        // never "late"
+        require(reported);
+        require(closed[0].reason == "kicked: bye");
+        require(messages.size() == 1);                        // never "late"
         server->send((uint64_t)id, "nobody hears this");
 
         co_await server->shutdown(std::chrono::milliseconds(100));
@@ -1508,21 +1508,21 @@ namespace wry {
         scope.soon(picky->serve());
         SocketPair bad_pair;
         const int bad_id = picky->adopt(bad_pair.release_server());
-        assert(bad_id > 0);
+        require(bad_id > 0);
         StreamReader bad{bad_pair.client()};
         sent = co_await send_all(bad_pair.client(), "fine\n123456789\n");
-        assert(sent);
+        require(sent);
         bool violated = co_await eventually([&] {
             drain(picky->events(), messages, closed);
             return closed.size() == 2;
         });
-        assert(violated);
-        assert(messages.size() == 2 && messages[1].bytes == "fine");
-        assert(closed[1].connection == (uint64_t)bad_id && closed[1].reason == "kicked: line too long");
+        require(violated);
+        require(messages.size() == 2 && messages[1].bytes == "fine");
+        require(closed[1].connection == (uint64_t)bad_id && closed[1].reason == "kicked: line too long");
         auto farewell = co_await bad.lines(1);
-        assert(farewell.size() == 1 && farewell[0] == "line too long");
+        require(farewell.size() == 1 && farewell[0] == "line too long");
         bool bad_ended = co_await bad.end_of_stream();
-        assert(bad_ended);
+        require(bad_ended);
         co_await picky->shutdown(std::chrono::milliseconds(100));
         (void) co_await scope.join();
         co_return;

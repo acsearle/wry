@@ -1287,18 +1287,18 @@ namespace wry {
 
         {
             const Machine* m = test_machine_for(world, ma);
-            assert(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
-            assert((m->_new_location == Coordinate{0, 11}));
-            assert(m->_new_heading == HEADING_NORTH);
-            assert(m->_on_arrival == OPCODE_NOOP);
-            assert((test_stack_is(m, {Term(true)})));
+            require(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            require((m->_new_location == Coordinate{0, 11}));
+            require(m->_new_heading == HEADING_NORTH);
+            require(m->_on_arrival == OPCODE_NOOP);
+            require((test_stack_is(m, {Term(true)})));
         }
 
         {
             const Machine* m = test_machine_for(world, mb);
-            assert((m->_new_location == Coordinate{12, 4}));
-            assert(m->_new_heading == HEADING_SOUTH);
-            assert((test_stack_is(m, {term_make_integer_with(2),
+            require((m->_new_location == Coordinate{12, 4}));
+            require(m->_new_heading == HEADING_SOUTH);
+            require((test_stack_is(m, {term_make_integer_with(2),
                                       term_make_integer_with(3),
                                       term_make_integer_with(1),
                                       term_make_integer_with(2)})));
@@ -1306,62 +1306,62 @@ namespace wry {
 
         {
             const Machine* m = test_machine_for(world, mc);
-            assert((m->_new_location == Coordinate{21, 4}));
-            assert(m->_new_heading == HEADING_EAST);
-            assert((test_stack_is(m, {})));
+            require((m->_new_location == Coordinate{21, 4}));
+            require(m->_new_heading == HEADING_EAST);
+            require((test_stack_is(m, {})));
         }
 
         {
             const Machine* m = test_machine_for(world, md);
-            assert((m->_new_location == Coordinate{30, 5}));
-            assert(m->_new_heading == HEADING_NORTH);
-            assert((test_stack_is(m, {})));
+            require((m->_new_location == Coordinate{30, 5}));
+            require(m->_new_heading == HEADING_NORTH);
+            require((test_stack_is(m, {})));
         }
 
         {
             const Machine* m = test_machine_for(world, me);
-            assert((m->_new_location == Coordinate{43, 5}));
-            assert(m->_new_heading == HEADING_EAST);
-            assert((test_stack_is(m, {})));
+            require((m->_new_location == Coordinate{43, 5}));
+            require(m->_new_heading == HEADING_EAST);
+            require((test_stack_is(m, {})));
 
             // A committed null write erases the key: the emptied cell is
             // absent, not present-with-null
             Term taken{};
             bool present_40_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{40, 2}, taken);
-            assert(!present_40_2);
+            require(!present_40_2);
             (void) present_40_2;
 
             Term placed{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{42, 5}, placed);
-            assert(placed._data == term_make_matter(MATTER_SHIPPING_CONTAINER)._data);
+            require(placed._data == term_make_matter(MATTER_SHIPPING_CONTAINER)._data);
         }
 
         // The location multimap tracked every move: each parked machine is
         // located at exactly its HALT cell, and the sets along its track
         // (start cell, a mid-track cell, the pre-turn corner) emptied
         // behind it.
-        assert((test_located_only_at(world, ma, 0, 11,
+        require((test_located_only_at(world, ma, 0, 11,
                                      {Coordinate{0, 0}, Coordinate{0, 5},
                                       Coordinate{0, 10}})));
-        assert((test_located_only_at(world, mb, 12, 4,
+        require((test_located_only_at(world, mb, 12, 4,
                                      {Coordinate{10, 0}, Coordinate{10, 6},
                                       Coordinate{12, 6}})));
-        assert((test_located_only_at(world, mc, 21, 4,
+        require((test_located_only_at(world, mc, 21, 4,
                                      {Coordinate{20, 0}, Coordinate{20, 4}})));
-        assert((test_located_only_at(world, md, 30, 5,
+        require((test_located_only_at(world, md, 30, 5,
                                      {Coordinate{30, 0}, Coordinate{30, 4}})));
-        assert((test_located_only_at(world, me, 43, 5,
+        require((test_located_only_at(world, me, 43, 5,
                                      {Coordinate{40, 0}, Coordinate{40, 2},
                                       Coordinate{41, 5}, Coordinate{42, 5}})));
 
         {
             const Machine* m = test_machine_for(world, mf);
-            assert((m->_new_location == Coordinate{50, -1}));
-            assert(m->_new_heading == HEADING_SOUTH);
-            assert((test_stack_is(m, {term_make_integer_with(7),
+            require((m->_new_location == Coordinate{50, -1}));
+            require(m->_new_heading == HEADING_SOUTH);
+            require((test_stack_is(m, {term_make_integer_with(7),
                                       term_make_integer_with(7)})));
         }
-        assert((test_located_only_at(world, mf, 50, -1,
+        require((test_located_only_at(world, mf, 50, -1,
                                      {Coordinate{50, 0}, Coordinate{50, 1},
                                       Coordinate{50, 2}})));
 
@@ -1369,38 +1369,38 @@ namespace wry {
             // Track G: the 9 was not picked up, the TURN_EAST was not
             // executed
             const Machine* m = test_machine_for(world, mg);
-            assert((m->_new_location == Coordinate{60, 6}));
-            assert(m->_new_heading == HEADING_NORTH);
-            assert((test_stack_is(m, {term_make_integer_with(5)})));
+            require((m->_new_location == Coordinate{60, 6}));
+            require(m->_new_heading == HEADING_NORTH);
+            require((test_stack_is(m, {term_make_integer_with(5)})));
         }
 
         {
             // Track H: quote copied (source glyph intact), code written,
             // exchange swapped
             const Machine* m = test_machine_for(world, mh);
-            assert((m->_new_location == Coordinate{70, 9}));
-            assert((test_stack_is(m, {term_make_integer_with(7),
+            require((m->_new_location == Coordinate{70, 9}));
+            require((test_stack_is(m, {term_make_integer_with(7),
                                       term_make_integer_with(42)})));
             Term quoted{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 2}, quoted);
-            assert(quoted._data == term_make_opcode(OPCODE_ADD)._data);
+            require(quoted._data == term_make_opcode(OPCODE_ADD)._data);
             Term written{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 4}, written);
-            assert(written._data == term_make_opcode(OPCODE_ADD)._data);
+            require(written._data == term_make_opcode(OPCODE_ADD)._data);
             Term swapped{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{70, 8}, swapped);
-            assert(swapped._data == term_make_integer_with(8)._data);
+            require(swapped._data == term_make_integer_with(8)._data);
         }
 
         {
             // Track I: exchange-with-empty-stack moved the 6 out of the
             // cell; the logical family accepted the bool/int mix
             const Machine* m = test_machine_for(world, mi);
-            assert((m->_new_location == Coordinate{80, 7}));
-            assert((test_stack_is(m, {Term(true)})));
+            require((m->_new_location == Coordinate{80, 7}));
+            require((test_stack_is(m, {Term(true)})));
             Term moved{};
             bool present_80_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{80, 2}, moved);
-            assert(!present_80_2);
+            require(!present_80_2);
             (void) present_80_2;
         }
 
@@ -1410,17 +1410,17 @@ namespace wry {
             // back to FLIP_FLOP.  The follower's heading wound to -1;
             // reduce mod 4.
             const Machine* m1 = test_machine_for(world, mj1);
-            assert((m1->_new_location == Coordinate{91, 1}));
-            assert(m1->_new_heading == HEADING_EAST);
+            require((m1->_new_location == Coordinate{91, 1}));
+            require(m1->_new_heading == HEADING_EAST);
             const Machine* m2 = test_machine_for(world, mj2);
-            assert((m2->_new_location == Coordinate{89, 1}));
-            assert((m2->_new_heading & 3) == HEADING_WEST);
+            require((m2->_new_location == Coordinate{89, 1}));
+            require((m2->_new_heading & 3) == HEADING_WEST);
             Term glyph{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{90, 1}, glyph);
-            assert(glyph._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
-            assert((test_located_only_at(world, mj1, 91, 1,
+            require(glyph._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+            require((test_located_only_at(world, mj1, 91, 1,
                                          {Coordinate{90, 0}, Coordinate{90, 1}})));
-            assert((test_located_only_at(world, mj2, 89, 1,
+            require((test_located_only_at(world, mj2, 89, 1,
                                          {Coordinate{90, -1}, Coordinate{90, 0},
                                           Coordinate{90, 1}})));
         }
@@ -1432,22 +1432,22 @@ namespace wry {
             // lawfully sunk, and the parked machine shared the Sink's
             // cell in the location map while never displacing it
             const Machine* m = test_machine_for(world, mk);
-            assert((m->_new_location == Coordinate{100, 5}));
-            assert((test_stack_is(m, {})));
-            assert(m->_new_time >= Time{360});
+            require((m->_new_location == Coordinate{100, 5}));
+            require((test_stack_is(m, {})));
+            require(m->_new_time >= Time{360});
             Term taken{};
             bool present_100_2 = world._ptr->_term_for_coordinate.try_get(Coordinate{100, 2}, taken);
-            assert(!present_100_2);
+            require(!present_100_2);
             (void) present_100_2;
             Term sunk{};
             bool present_100_4 = world._ptr->_term_for_coordinate.try_get(Coordinate{100, 4}, sunk);
-            assert(!present_100_4);
+            require(!present_100_4);
             (void) present_100_4;
             EntityIDSet at_sink{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{100, 4}, at_sink);
-            assert(at_sink.contains(sink_id));
-            assert(!at_sink.contains(mk));
-            assert((test_located_only_at(world, mk, 100, 5,
+            require(at_sink.contains(sink_id));
+            require(!at_sink.contains(mk));
+            require((test_located_only_at(world, mk, 100, 5,
                                          {Coordinate{100, 0}, Coordinate{100, 4}})));
         }
 
@@ -1456,24 +1456,24 @@ namespace wry {
             // consumer picked up a COPY (the signal survives) and
             // branched south on it
             const Machine* p = test_machine_for(world, ml_producer);
-            assert((p->_new_location == Coordinate{110, 6}));
-            assert((test_stack_is(p, {})));
+            require((p->_new_location == Coordinate{110, 6}));
+            require((test_stack_is(p, {})));
             const Machine* c = test_machine_for(world, ml_consumer);
-            assert((c->_new_location == Coordinate{111, 4}));
-            assert(c->_new_heading == HEADING_SOUTH);
-            assert((test_stack_is(c, {})));
+            require((c->_new_location == Coordinate{111, 4}));
+            require(c->_new_heading == HEADING_SOUTH);
+            require((test_stack_is(c, {})));
             Term signal{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{110, 5}, signal);
-            assert(signal._data == Term(true)._data);
+            require(signal._data == Term(true)._data);
         }
 
         {
             // Track M: passage flipped the valve's axis
             const Machine* m = test_machine_for(world, mm);
-            assert((m->_new_location == Coordinate{115, 2}));
+            require((m->_new_location == Coordinate{115, 2}));
             Term valve{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{115, 1}, valve);
-            assert(valve._data == term_make_opcode(OPCODE_VALVE_EAST_WEST)._data);
+            require(valve._data == term_make_opcode(OPCODE_VALVE_EAST_WEST)._data);
         }
 
         {
@@ -1481,25 +1481,25 @@ namespace wry {
             // (256 unblocked, past 400 held), both machines are through,
             // and the valve flipped twice back to north-south.
             const Machine* a2 = test_machine_for(world, mn_a);
-            assert((a2->_new_location == Coordinate{121, 5}));
-            assert(a2->_new_heading == HEADING_EAST);
-            assert(a2->_new_time >= Time{400});
+            require((a2->_new_location == Coordinate{121, 5}));
+            require(a2->_new_heading == HEADING_EAST);
+            require(a2->_new_time >= Time{400});
             const Machine* b2 = test_machine_for(world, mn_b);
-            assert((b2->_new_location == Coordinate{120, 6}));
-            assert(b2->_new_heading == HEADING_NORTH);
+            require((b2->_new_location == Coordinate{120, 6}));
+            require(b2->_new_heading == HEADING_NORTH);
             Term valve{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{120, 5}, valve);
-            assert(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
+            require(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
         }
 
         {
             // Track O: the ghost passage left the valve unflipped
             const Machine* m = test_machine_for(world, mo);
-            assert((m->_new_location == Coordinate{130, 3}));
-            assert((test_stack_is(m, {})));
+            require((m->_new_location == Coordinate{130, 3}));
+            require((test_stack_is(m, {})));
             Term valve{};
             (void) world._ptr->_term_for_coordinate.try_get(Coordinate{130, 2}, valve);
-            assert(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
+            require(valve._data == term_make_opcode(OPCODE_VALVE_NORTH_SOUTH)._data);
         }
 
         {
@@ -1507,14 +1507,14 @@ namespace wry {
             // usual time for a 4-hop track) and both claimed cells were
             // released behind the machine
             const Machine* m = test_machine_for(world, mp);
-            assert((m->_new_location == Coordinate{140, 4}));
-            assert(m->_new_time == Time{256});
-            assert((test_located_only_at(world, mp, 140, 4,
+            require((m->_new_location == Coordinate{140, 4}));
+            require(m->_new_time == Time{256});
+            require((test_located_only_at(world, mp, 140, 4,
                                          {Coordinate{140, 2}, Coordinate{140, 3}})));
             EntityID junction_occupant = {};
             (void) world._ptr->_entity_id_for_coordinate.try_get(Coordinate{140, 2},
                                                                  junction_occupant);
-            assert(!junction_occupant);
+            require(!junction_occupant);
         }
 
         {
@@ -1522,23 +1522,23 @@ namespace wry {
             // never re-departed after t=128, and the junction's
             // occupancy is clear), while B crossed and parked beyond
             const Machine* a2 = test_machine_for(world, mq_a);
-            assert((a2->_new_location == Coordinate{144, 5}));
-            assert(a2->_new_heading == HEADING_EAST);
-            assert(a2->_new_time <= Time{200});
+            require((a2->_new_location == Coordinate{144, 5}));
+            require(a2->_new_heading == HEADING_EAST);
+            require(a2->_new_time <= Time{200});
             const Machine* b2 = test_machine_for(world, mq_b);
-            assert((b2->_new_location == Coordinate{145, 7}));
-            assert(b2->_new_heading == HEADING_NORTH);
+            require((b2->_new_location == Coordinate{145, 7}));
+            require(b2->_new_heading == HEADING_NORTH);
             const Machine* blocker2 = test_machine_for(world, mq_blocker);
-            assert((blocker2->_new_location == Coordinate{146, 5}));
+            require((blocker2->_new_location == Coordinate{146, 5}));
             EntityID junction_occupant = {};
             (void) world._ptr->_entity_id_for_coordinate.try_get(Coordinate{145, 5},
                                                                  junction_occupant);
-            assert(!junction_occupant);
+            require(!junction_occupant);
             EntityIDSet at_junction{};
             (void) world._ptr->_located_for_coordinate.try_get(Coordinate{145, 5},
                                                                at_junction);
-            assert(!at_junction.contains(mq_a));
-            assert(!at_junction.contains(mq_b));
+            require(!at_junction.contains(mq_a));
+            require(!at_junction.contains(mq_b));
         }
 
         co_return;
@@ -1591,14 +1591,14 @@ namespace wry {
         co_await test_step_until(world, Time{200});
         {
             const Machine* m = test_machine_for(world, m0);
-            assert(m->_phase == Machine::PHASE_MINING);
-            assert((m->_new_location == Coordinate{0, 2}));
-            assert((m->_old_location == Coordinate{0, 2}));
-            assert(m->_old_time == Time{128});
-            assert(m->_new_time == Time{320});
-            assert(m->_on_arrival == OPCODE_MINE);
-            assert((test_stack_is(m, {})));
-            assert((test_located_only_at(world, m0, 0, 2,
+            require(m->_phase == Machine::PHASE_MINING);
+            require((m->_new_location == Coordinate{0, 2}));
+            require((m->_old_location == Coordinate{0, 2}));
+            require(m->_old_time == Time{128});
+            require(m->_new_time == Time{320});
+            require(m->_on_arrival == OPCODE_MINE);
+            require((test_stack_is(m, {})));
+            require((test_located_only_at(world, m0, 0, 2,
                                          {Coordinate{0, 1}, Coordinate{0, 3}})));
         }
 
@@ -1607,29 +1607,29 @@ namespace wry {
         co_await test_step_until(world, Time{330});
         {
             const Machine* m = test_machine_for(world, m0);
-            assert(m->_phase == Machine::PHASE_TRAVELLING);
-            assert((m->_new_location == Coordinate{0, 3}));
-            assert((test_stack_is(m, {term_make_matter(MATTER_GRASS)})));
+            require(m->_phase == Machine::PHASE_TRAVELLING);
+            require((m->_new_location == Coordinate{0, 3}));
+            require((test_stack_is(m, {term_make_matter(MATTER_GRASS)})));
         }
 
         co_await test_step_until(world, Time{1900});
         {
             const Machine* m = test_machine_for(world, m0);
-            assert(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
-            assert((m->_new_location == Coordinate{0, 11}));
-            assert(m->_new_time == Time{1792});
-            assert(m->_on_arrival == OPCODE_NOOP);
-            assert((test_stack_is(m, {term_make_matter(MATTER_ROCK)})));
-            assert((test_located_only_at(world, m0, 0, 11,
+            require(m->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            require((m->_new_location == Coordinate{0, 11}));
+            require(m->_new_time == Time{1792});
+            require(m->_on_arrival == OPCODE_NOOP);
+            require((test_stack_is(m, {term_make_matter(MATTER_ROCK)})));
+            require((test_located_only_at(world, m0, 0, 11,
                                          {Coordinate{0, 9}, Coordinate{0, 10}})));
         }
         // The dug cells' values are untouched: the dig reads the ground,
         // and the 7 was copied, not taken
         {
             Term t{};
-            CHECK(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
-            CHECK(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
-            assert(t._data == term_make_integer_with(7)._data);
+            require(!world._ptr->_term_for_coordinate.try_get(Coordinate{0, 2}, t));
+            require(world._ptr->_term_for_coordinate.try_get(Coordinate{0, 6}, t));
+            require(t._data == term_make_integer_with(7)._data);
         }
 
         co_return;
@@ -1655,7 +1655,7 @@ namespace wry {
             EntityIDSet s; s.set(ship->_entity_id);
             w->_located_for_coordinate.set(c, s);
         }
-        assert((ship->cell(2) == Coordinate{3, 4}));
+        require((ship->cell(2) == Coordinate{3, 4}));
         w->_waiting_on_time.set({Time{0}, ship->_entity_id});
 
         // Truck A: coal into hold 3 at (2, 4)
@@ -1691,21 +1691,21 @@ namespace wry {
         {
             const Machine* a = test_machine_for(world, ma);
             const Machine* b = test_machine_for(world, mb);
-            assert((a->_new_location == Coordinate{2, -1}));
-            assert((b->_new_location == Coordinate{3, -1}));
-            assert(a->_new_heading == HEADING_SOUTH);
-            assert(b->_new_heading == HEADING_SOUTH);
-            assert((test_stack_is(a, {})));
-            assert((test_stack_is(b, {})));
-            assert(world._ptr->_money == 8);
+            require((a->_new_location == Coordinate{2, -1}));
+            require((b->_new_location == Coordinate{3, -1}));
+            require(a->_new_heading == HEADING_SOUTH);
+            require(b->_new_heading == HEADING_SOUTH);
+            require((test_stack_is(a, {})));
+            require((test_stack_is(b, {})));
+            require(world._ptr->_money == 8);
             Term t{};
-            CHECK(!world._ptr->_term_for_coordinate.try_get(Coordinate{2, 4}, t));
-            CHECK(world._ptr->_term_for_coordinate.try_get(Coordinate{3, 4}, t));
-            assert(t._data == term_make_matter(MATTER_WATER)._data);
+            require(!world._ptr->_term_for_coordinate.try_get(Coordinate{2, 4}, t));
+            require(world._ptr->_term_for_coordinate.try_get(Coordinate{3, 4}, t));
+            require(t._data == term_make_matter(MATTER_WATER)._data);
             const Machine* c = test_machine_for(world, mc);
-            assert((c->_new_location == Coordinate{3, 5}));
-            assert(c->_phase == Machine::PHASE_WAITING_FOR_NEW);
-            assert((test_stack_is(c, {term_make_matter(MATTER_COAL)})));
+            require((c->_new_location == Coordinate{3, 5}));
+            require(c->_phase == Machine::PHASE_WAITING_FOR_NEW);
+            require((test_stack_is(c, {term_make_matter(MATTER_COAL)})));
         }
 
         co_return;
@@ -1728,32 +1728,32 @@ namespace wry {
             co_await test_step_until(world, Time{3500});
             const Machine* a = test_machine_for(world, m);
             const i32 x = a->_new_location.x;
-            assert(x > 3 * TERRAIN_CHUNK);   // it drove out of the made chunk
+            require(x > 3 * TERRAIN_CHUNK);   // it drove out of the made chunk
             const i32 cx = terrain_chunk_of(x);
             Terrain t = -1;
             const auto& terrain = world._ptr->_terrain_for_coordinate;
             if (!seed) {
-                CHECK(!terrain.try_get(Coordinate{x, 8}, t));
-                CHECK(!terrain.try_get(Coordinate{0, 0}, t));
+                require(!terrain.try_get(Coordinate{x, 8}, t));
+                require(!terrain.try_get(Coordinate{0, 0}, t));
                 continue;
             }
             // made: every cell of the chunks around the machine, rows
             // y = -16 .. 31, the next chunk east included
             for (i32 y = -TERRAIN_CHUNK; y < 2 * TERRAIN_CHUNK; ++y)
                 for (i32 xx = (cx - 1) * TERRAIN_CHUNK; xx < (cx + 2) * TERRAIN_CHUNK; ++xx)
-                    CHECK(terrain.try_get(Coordinate{xx, y}, t));
+                    require(terrain.try_get(Coordinate{xx, y}, t));
             // and equal to the generator's
             Terrain cells[TERRAIN_CHUNK * TERRAIN_CHUNK];
             generate_terrain_chunk(seed, cx + 1, 0, cells);
             for (i32 j = 0; j != TERRAIN_CHUNK; ++j)
                 for (i32 i = 0; i != TERRAIN_CHUNK; ++i) {
-                    CHECK(terrain.try_get(Coordinate{(cx + 1) * TERRAIN_CHUNK + i, j}, t));
-                    assert(t == cells[j * TERRAIN_CHUNK + i]);
+                    require(terrain.try_get(Coordinate{(cx + 1) * TERRAIN_CHUNK + i, j}, t));
+                    require(t == cells[j * TERRAIN_CHUNK + i]);
                 }
             // not made: two chunks ahead, and two rows of chunks off the track
-            CHECK(!terrain.try_get(Coordinate{(cx + 2) * TERRAIN_CHUNK, 8}, t));
-            CHECK(!terrain.try_get(Coordinate{x, 2 * TERRAIN_CHUNK}, t));
-            CHECK(!terrain.try_get(Coordinate{x, -TERRAIN_CHUNK - 1}, t));
+            require(!terrain.try_get(Coordinate{(cx + 2) * TERRAIN_CHUNK, 8}, t));
+            require(!terrain.try_get(Coordinate{x, 2 * TERRAIN_CHUNK}, t));
+            require(!terrain.try_get(Coordinate{x, -TERRAIN_CHUNK - 1}, t));
         }
         co_return;
     };
@@ -1798,7 +1798,7 @@ namespace wry {
                 machines += (dynamic_cast<const Machine*>(e) != nullptr);
             });
             // the racer plus at least two spawned
-            assert(machines >= 3);
+            require(machines >= 3);
         }
         printf("machine_spawner_survives_lost_spawn: the first spawn lost in %d of 8 runs\n",
                lost_somewhere);

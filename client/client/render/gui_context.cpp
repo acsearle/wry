@@ -1310,28 +1310,28 @@ namespace wry {
         // section 5: the keymap's stable ids are command names).
         for (uint32_t i = 0; i != gui::action_count; ++i) {
             StringView id = gui::id_from_action((gui::Action)i);
-            assert(gc.commands.find(id));
+            require(gc.commands.find(id));
         }
 
         // Issued lines are recorded with their origin and frame; lines
         // that do not bind are not.
         gc.frame = 7;
         auto o = gc.issue(Origin::console, "help help");
-        assert(o.reply.status == Reply::OK && !o.reply.text.empty());
-        assert(gc.history.size() == 1);
-        assert(gc.history[0].seq == 1 && gc.history[0].frame == 7);
-        assert(gc.history[0].origin == Origin::console);
-        assert(gc.history[0].line == StringView("help \"help\""));
+        require(o.reply.status == Reply::OK && !o.reply.text.empty());
+        require(gc.history.size() == 1);
+        require(gc.history[0].seq == 1 && gc.history[0].frame == 7);
+        require(gc.history[0].origin == Origin::console);
+        require(gc.history[0].line == StringView("help \"help\""));
 
         auto bad = gc.issue(Origin::console, "no-such-command");
-        assert(bad.reply.status == Reply::ERROR);
-        assert(gc.history.size() == 1);
+        require(bad.reply.status == Reply::ERROR);
+        require(gc.history.size() == 1);
 
         // The console's toggle is the toggle-console command.
-        assert(!gc.console_overlay.active());
+        require(!gc.console_overlay.active());
         gc.issue(Origin::binding, "toggle-console");
-        assert(gc.console_overlay.active());
-        assert(gc.history.back().origin == Origin::binding);
+        require(gc.console_overlay.active());
+        require(gc.history.back().origin == Origin::binding);
 
         // Typing into the console and pressing Enter issues the line.
         {
@@ -1345,13 +1345,13 @@ namespace wry {
             for (char ch : std::string_view("history 1"))
                 gc.console_overlay.on_event(key((uint32_t)ch, std::string(1, ch).c_str()));
             gc.console_overlay.on_event(key(gui::key::Enter, ""));
-            assert(gc.history.back().line == StringView("history 1"));
-            assert(gc.history.back().origin == Origin::console);
-            assert(gc.console_overlay.input().empty());
+            require(gc.history.back().line == StringView("history 1"));
+            require(gc.history.back().origin == Origin::console);
+            require(gc.console_overlay.input().empty());
             // Up recalls it, with the cursor at its end.
             gc.console_overlay.on_event(key(gui::key::ArrowUp, ""));
-            assert(gc.console_overlay.input().text() == StringView("history 1"));
-            assert(gc.console_overlay.input().cursor() == 9);
+            require(gc.console_overlay.input().text() == StringView("history 1"));
+            require(gc.console_overlay.input().cursor() == 9);
             // The line is edited at the cursor: Home, Delete x 7 and
             // typing turn it into "help 1".  An edited line is no longer
             // a history entry on show but a draft, with nothing newer
@@ -1361,15 +1361,15 @@ namespace wry {
                 gc.console_overlay.on_event(key(gui::key::Delete, ""));
             for (char ch : std::string_view("help"))
                 gc.console_overlay.on_event(key((uint32_t)ch, std::string(1, ch).c_str()));
-            assert(gc.console_overlay.input().text() == StringView("help 1"));
-            assert(gc.console_overlay.input().cursor() == 4);
+            require(gc.console_overlay.input().text() == StringView("help 1"));
+            require(gc.console_overlay.input().cursor() == 4);
             gc.console_overlay.on_event(key(gui::key::ArrowDown, ""));
-            assert(gc.console_overlay.input().text() == StringView("help 1"));
+            require(gc.console_overlay.input().text() == StringView("help 1"));
         }
 
         // History is printable as itself.
         auto h = gc.issue(Origin::console, "history 2");
-        assert(h.reply.status == Reply::OK);
+        require(h.reply.status == Reply::OK);
 
         co_return;
     };
@@ -1380,7 +1380,7 @@ namespace wry {
         GuiContext gc;
         gc.issue(Origin::binding, "toggle-console");
         auto& console = gc.console_overlay;
-        assert(console.active());
+        require(console.active());
 
         using gui::Modifiers;
         auto press = [&](uint32_t k, uint16_t mods = 0, const char* text = "") {
@@ -1390,7 +1390,7 @@ namespace wry {
             e.mods.bits = mods;
             std::strncpy(e.text, text, sizeof(e.text) - 1);
             const bool consumed = console.on_event(e);
-            assert(consumed);
+            require(consumed);
             (void) consumed;
         };
         auto type = [&](std::string_view text) {
@@ -1403,42 +1403,42 @@ namespace wry {
         auto clear = [&] {
             press('a', Modifiers::Cmd, "a");
             press(gui::key::Backspace);
-            assert(console.input().empty());
+            require(console.input().empty());
         };
 
         // ---- Tab.  As far as the candidates agree, then the list.
         type("tog");
         press(gui::key::Tab);
-        assert(shows("toggle-"));
+        require(shows("toggle-"));
         const size_t before_list = console.lines().size();
         press(gui::key::Tab);
-        assert(shows("toggle-") && console.lines().size() > before_list);
+        require(shows("toggle-") && console.lines().size() > before_list);
         // A single candidate completes whole, with a space after it.
         type("con");
         press(gui::key::Tab);
-        assert(shows("toggle-console "));
+        require(shows("toggle-console "));
         clear();
         // An argument: `help` takes a command, `quit` one of two words;
         // letter case is corrected.
         type("help TOGGLE-CON");
         press(gui::key::Tab);
-        assert(shows("help toggle-console "));
+        require(shows("help toggle-console "));
         clear();
         type("quit ");
         const size_t before_words = console.lines().size();
         press(gui::key::Tab);
-        assert(shows("quit ") && console.lines().size() == before_words + 1);
-        assert(console.lines().back() == StringView("clean  fast"));
+        require(shows("quit ") && console.lines().size() == before_words + 1);
+        require(console.lines().back() == StringView("clean  fast"));
         type("f");
         press(gui::key::Tab);
-        assert(shows("quit fast "));
+        require(shows("quit fast "));
         clear();
         // No candidates: the command's usage, once.
         type("frame ");
         const size_t before_usage = console.lines().size();
         press(gui::key::Tab);
         press(gui::key::Tab);
-        assert(shows("frame ") && console.lines().size() == before_usage + 1);
+        require(shows("frame ") && console.lines().size() == before_usage + 1);
         clear();
         // Mid-line: only the word before the cursor is replaced, and no
         // space is added where one already follows.
@@ -1446,79 +1446,79 @@ namespace wry {
         press(gui::key::Home);
         press(gui::key::ArrowRight, Modifiers::Alt);
         press(gui::key::Tab);
-        assert(shows("help toggle-console") && console.input().cursor() == 4);
+        require(shows("help toggle-console") && console.input().cursor() == 4);
         // ... and the completion is one undo step.
         press('z', Modifiers::Cmd, "z");
-        assert(shows("hel toggle-console"));
+        require(shows("hel toggle-console"));
         clear();
 
         // ---- The suggestion, from completion: what Tab would add.  As
         // far as several candidates agree ...
-        assert(console.suggestion().empty());
+        require(console.suggestion().empty());
         type("tog");
-        assert(console.suggestion() == StringView("gle-"));
+        require(console.suggestion() == StringView("gle-"));
         press(gui::key::ArrowRight);
-        assert(shows("toggle-") && console.suggestion().empty());
+        require(shows("toggle-") && console.suggestion().empty());
         // ... but never a correction of what was typed.
         clear();
         type("TOG");
-        assert(console.suggestion().empty());
+        require(console.suggestion().empty());
         clear();
         // The whole word where only one completes the line.
         type("hi");
-        assert(console.suggestion() == StringView("story"));
+        require(console.suggestion() == StringView("story"));
         // Not while the cursor is inside the line, nor with a selection.
         press(gui::key::ArrowLeft);
-        assert(console.suggestion().empty());
+        require(console.suggestion().empty());
         press(gui::key::ArrowRight);
-        assert(console.suggestion() == StringView("story"));
+        require(console.suggestion() == StringView("story"));
         press(gui::key::ArrowLeft, Modifiers::Shift);
-        assert(console.suggestion().empty());
+        require(console.suggestion().empty());
         press(gui::key::ArrowRight);
         // Right at the end of the line takes it.
         press(gui::key::ArrowRight);
-        assert(shows("history") && console.suggestion().empty());
+        require(shows("history") && console.suggestion().empty());
         type(" 1");
         press(gui::key::Enter);
-        assert(gc.history.back().line == StringView("history 1"));
+        require(gc.history.back().line == StringView("history 1"));
         type("help help");
         press(gui::key::Enter);
-        assert(console.history().entries().size() == 2);
+        require(console.history().entries().size() == 2);
 
         // ---- The suggestion, from history: the newest line that began
         // this way.  Alt-Right takes a word of it, End the rest.
         type("he");
-        assert(console.suggestion() == StringView("lp help"));
+        require(console.suggestion() == StringView("lp help"));
         press(gui::key::ArrowRight, Modifiers::Alt);
-        assert(shows("help") && console.suggestion() == StringView(" help"));
+        require(shows("help") && console.suggestion() == StringView(" help"));
         press(gui::key::End);
-        assert(shows("help help"));
+        require(shows("help help"));
         clear();
 
         // ---- Walking the history.  The typed line is the prefix
         // searched for, and comes back at the end of the walk.
         type("h");
         press(gui::key::ArrowUp);
-        assert(shows("help help") && console.input().cursor() == 9);
+        require(shows("help help") && console.input().cursor() == 9);
         press(gui::key::ArrowUp);
-        assert(shows("history 1"));
+        require(shows("history 1"));
         press(gui::key::ArrowUp);
-        assert(shows("history 1"));
+        require(shows("history 1"));
         press('n', Modifiers::Ctrl);
-        assert(shows("help help"));
+        require(shows("help help"));
         press(gui::key::ArrowDown);
-        assert(shows("h"));
+        require(shows("h"));
         type("i");
         press('p', Modifiers::Ctrl);
-        assert(shows("history 1"));
+        require(shows("history 1"));
         // A recalled line that is edited and submitted is a new entry;
         // the old one stands.
         press(gui::key::Backspace);
         type("2");
         press(gui::key::Enter);
-        assert(console.history().entries().size() == 3);
-        assert(console.history().entries()[0] == StringView("history 1"));
-        assert(console.history().entries()[2] == StringView("history 2"));
+        require(console.history().entries().size() == 3);
+        require(console.history().entries()[0] == StringView("history 1"));
+        require(console.history().entries()[2] == StringView("history 2"));
 
         // ---- Paste.  The clipboard is the context's own until a host
         // replaces it.  Each line break submits; the rest stays.
@@ -1526,15 +1526,15 @@ namespace wry {
         gc.clipboard.write("p help\r\n\n# a comment\nhistory 3\nhistory");
         type("hel");
         press('v', Modifiers::Cmd, "v");
-        assert(gc.history.size() == issued + 2);
-        assert(gc.history[issued].line == StringView("help \"help\""));
-        assert(gc.history.back().line == StringView("history 3"));
-        assert(shows("history"));
+        require(gc.history.size() == issued + 2);
+        require(gc.history[issued].line == StringView("help \"help\""));
+        require(gc.history.back().line == StringView("history 3"));
+        require(shows("history"));
         // Copy and cut go to the same clipboard.
         press('a', Modifiers::Cmd, "a");
         press('x', Modifiers::Cmd, "x");
-        assert(console.input().empty());
-        assert(gc.clipboard.read() == StringView("history"));
+        require(console.input().empty());
+        require(gc.clipboard.read() == StringView("history"));
 
         // ---- The widget tree (gui_widget.hpp ConsoleView): listed by
         // `widgets` while the console is open, the field showing the line
@@ -1542,22 +1542,22 @@ namespace wry {
         {
             auto listed = [&](const char* needle) {
                 auto o = gc.issue(Origin::gui, "widgets");
-                assert(o.reply.status == Reply::OK);
+                require(o.reply.status == Reply::OK);
                 const std::string_view text(o.reply.text.chars.begin(),
                                             o.reply.text.chars.size());
                 return text.find(needle) != std::string_view::npos;
             };
             type("tog");
-            CHECK(listed("ConsoleView"));
-            CHECK(listed("TextLog"));
-            CHECK(listed("LineField \"tog\""));
-            CHECK(listed("cursor 3 suggests \"gle-\""));
+            require(listed("ConsoleView"));
+            require(listed("TextLog"));
+            require(listed("LineField \"tog\""));
+            require(listed("cursor 3 suggests \"gle-\""));
             press(gui::key::ArrowLeft, Modifiers::Shift);
-            CHECK(listed("cursor 2 selected 2..3"));
+            require(listed("cursor 2 selected 2..3"));
             press(gui::key::Escape);
-            assert(!console.active());
-            assert(console.widget_root() == nullptr);
-            CHECK(!listed("ConsoleView"));
+            require(!console.active());
+            require(console.widget_root() == nullptr);
+            require(!listed("ConsoleView"));
             (void) listed;
         }
 
@@ -1576,40 +1576,40 @@ namespace wry {
         // issues when the first completes.
         gc.submit(gc.console_source, "frame 2");
         gc.submit(gc.console_source, "help frame");
-        assert(gc.console_source.pending && gc.console_source.queued.size() == 1);
-        assert(gc.history.back().line == StringView("frame 2"));
-        assert(gc.history.back().status == Reply::PENDING);
+        require(gc.console_source.pending && gc.console_source.queued.size() == 1);
+        require(gc.history.back().line == StringView("frame 2"));
+        require(gc.history.back().status == Reply::PENDING);
         ++gc.frame;
         gc.service_commands();
-        assert(gc.console_source.pending);
+        require(gc.console_source.pending);
         ++gc.frame;
         gc.service_commands();
-        assert(!gc.console_source.busy());
-        assert(gc.history.back().line == StringView("help \"frame\""));
-        assert(gc.history[gc.history.size() - 2].status == Reply::OK);
+        require(!gc.console_source.busy());
+        require(gc.history.back().line == StringView("help \"frame\""));
+        require(gc.history[gc.history.size() - 2].status == Reply::OK);
 
         // Other origins are not held up by a busy console.
         gc.submit(gc.console_source, "frame 100");
         gc.submit(gc.console_source, "help");
         auto gesture = gc.issue(Origin::gui, "help help");
-        assert(gesture.reply.status == Reply::OK);
+        require(gesture.reply.status == Reply::OK);
 
         // Cancel completes the pending one and drops the queue.
         gc.cancel(gc.console_source);
-        assert(!gc.console_source.busy());
+        require(!gc.console_source.busy());
         bool cancelled = false;
         for (auto const& e : gc.history)
             if (e.line == StringView("frame 100"))
                 cancelled = (e.status == Reply::CANCELLED);
-        assert(cancelled);
-        assert(gc.history.back().line != StringView("help \"\""));
+        require(cancelled);
+        require(gc.history.back().line != StringView("help \"\""));
 
         // A detached pending reply (a gesture's) is polled too.
         gc.issue(Origin::gui, "frame 1");
-        assert(gc.detached.size() == 1);
+        require(gc.detached.size() == 1);
         ++gc.frame;
         gc.service_commands();
-        assert(gc.detached.empty());
+        require(gc.detached.empty());
 
         // Coalescing: within a run of continuous events one of each kind
         // survives (moves keep the last position, scrolls sum); a discrete
@@ -1630,16 +1630,16 @@ namespace wry {
             q.push(ev(WryEventKindMouseDown, 5, 0));
             q.push(ev(WryEventKindMouseMove, 6, 0));
             q.push(ev(WryEventKindMouseMove, 7, 0));
-            assert(q.size() == 4);
+            require(q.size() == 4);
             gui::Event a = q.pop_front();
-            assert(a.kind == WryEventKindMouseMove && a.location.x == 3);
+            require(a.kind == WryEventKindMouseMove && a.location.x == 3);
             gui::Event b = q.pop_front();
-            assert(b.kind == WryEventKindScroll && b.scroll_delta.y == 3 && b.location.x == 4);
+            require(b.kind == WryEventKindScroll && b.scroll_delta.y == 3 && b.location.x == 4);
             gui::Event c = q.pop_front();
-            assert(c.kind == WryEventKindMouseDown);
+            require(c.kind == WryEventKindMouseDown);
             (void) c;
             gui::Event d = q.pop_front();
-            assert(d.location.x == 7);
+            require(d.location.x == 7);
             (void) d;
         }
 
@@ -1648,45 +1648,45 @@ namespace wry {
         gc.events.clear();
         {
             auto o = gc.issue(Origin::console, "key Shift+R");
-            assert(o.reply.status == Reply::OK);
-            assert(o.line == StringView("key KeyCombo(\"Shift+R\") \"press\""));
-            assert(gc.events.size() == 2);
+            require(o.reply.status == Reply::OK);
+            require(o.line == StringView("key KeyCombo(\"Shift+R\") \"press\""));
+            require(gc.events.size() == 2);
             gui::Event down = gc.events.pop_front();
-            assert(down.kind == WryEventKindKeyDown && down.key == 'r');
-            assert(down.mods.has(gui::Modifiers::Shift));
-            assert(std::strcmp(down.text, "R") == 0);
+            require(down.kind == WryEventKindKeyDown && down.key == 'r');
+            require(down.mods.has(gui::Modifiers::Shift));
+            require(std::strcmp(down.text, "R") == 0);
             gui::Event up = gc.events.pop_front();
-            assert(up.kind == WryEventKindKeyUp);
+            require(up.kind == WryEventKindKeyUp);
             (void) up;
 
             gc.issue(Origin::console, "type \"aB\\n\"");
-            assert(gc.events.size() == 6);
+            require(gc.events.size() == 6);
             gui::Event a = gc.events.pop_front();
-            assert(a.key == 'a' && std::strcmp(a.text, "a") == 0);
+            require(a.key == 'a' && std::strcmp(a.text, "a") == 0);
             (void) gc.events.pop_front();
             gui::Event b = gc.events.pop_front();
-            assert(b.key == 'b' && b.mods.has(gui::Modifiers::Shift) && std::strcmp(b.text, "B") == 0);
+            require(b.key == 'b' && b.mods.has(gui::Modifiers::Shift) && std::strcmp(b.text, "B") == 0);
             (void) gc.events.pop_front();
             gui::Event enter = gc.events.pop_front();
-            assert(enter.key == gui::key::Enter);
+            require(enter.key == gui::key::Enter);
             (void) enter;
             gc.events.clear();
 
             gc.issue(Origin::console, "click 10 20 right");
-            assert(gc.events.size() == 3);
+            require(gc.events.size() == 3);
             gui::Event m = gc.events.pop_front();
-            assert(m.kind == WryEventKindMouseMove && m.location.x == 10 && m.location.y == 20);
+            require(m.kind == WryEventKindMouseMove && m.location.x == 10 && m.location.y == 20);
             gui::Event d = gc.events.pop_front();
-            assert(d.kind == WryEventKindMouseDown && d.button == gui::MouseButton::Right);
+            require(d.kind == WryEventKindMouseDown && d.button == gui::MouseButton::Right);
             gui::Event released = gc.events.pop_front();
-            assert(released.kind == WryEventKindMouseUp);
+            require(released.kind == WryEventKindMouseUp);
             (void) released;
 
             auto sideways = gc.issue(Origin::console, "click 1 2 sideways");
-            assert(sideways.reply.status == Reply::ERROR);
+            require(sideways.reply.status == Reply::ERROR);
             (void) sideways;
             auto nonsense = gc.issue(Origin::console, "key Nonsense+Q");
-            assert(nonsense.reply.status == Reply::ERROR);
+            require(nonsense.reply.status == Reply::ERROR);
             (void) nonsense;
         }
 
@@ -1706,7 +1706,7 @@ namespace wry {
             gc.view_size_pt = float2{400.0f, 200.0f};
 
             auto listing = gc.issue(Origin::console, "widgets");
-            assert(listing.reply.status == Reply::OK);
+            require(listing.reply.status == Reply::OK);
             {
                 // The label, then the rect in points (the pixel rect
                 // halved) and no state words on an untouched button.
@@ -1718,25 +1718,25 @@ namespace wry {
                             return true;
                     return false;
                 };
-                assert(mentions("Button \"OK\""));
-                assert(mentions(" rect 0,0 "));
-                assert(!mentions("hover"));
+                require(mentions("Button \"OK\""));
+                require(mentions(" rect 0,0 "));
+                require(!mentions("hover"));
             }
 
             gc.events.clear();
             auto pressed = gc.issue(Origin::console, "press OK");
-            assert(pressed.reply.status == Reply::OK);
+            require(pressed.reply.status == Reply::OK);
             (void) pressed;
-            assert(gc.events.size() == 3);
+            require(gc.events.size() == 3);
             // Deliver as the pump would: points promoted to pixels.
             while (!gc.events.empty()) {
                 gui::Event e = gc.events.pop_front();
                 e.location *= 2.0f;
                 column.on_event(e);
             }
-            assert(clicked);
+            require(clicked);
             auto cancel = gc.issue(Origin::console, "press Cancel");
-            assert(cancel.reply.status == Reply::ERROR);
+            require(cancel.reply.status == Reply::ERROR);
             (void) cancel;
             gc.scene_widgets = nullptr;
         }
@@ -1747,19 +1747,19 @@ namespace wry {
         {
             gc.events.clear();
             auto esc = gc.issue(Origin::console, "key Escape");
-            assert(esc.reply.status == Reply::OK);
+            require(esc.reply.status == Reply::OK);
             (void) esc;
-            assert(gc.events.size() == 2);
-            CHECK(gc.events.pop_front().key == gui::key::Escape);
+            require(gc.events.size() == 2);
+            require(gc.events.pop_front().key == gui::key::Escape);
             gc.events.clear();
 
             bool quit_called = false;
             gc.on_quit = [&quit_called] { quit_called = true; };
             auto bad = gc.issue(Origin::console, "quit sideways");
-            assert(bad.reply.status == Reply::ERROR && !quit_called);
+            require(bad.reply.status == Reply::ERROR && !quit_called);
             (void) bad;
             auto fast = gc.issue(Origin::console, "quit fast");
-            assert(fast.reply.status == Reply::OK && quit_called && gc.quit_fast);
+            require(fast.reply.status == Reply::OK && quit_called && gc.quit_fast);
             (void) fast;
             gc.quit_fast = false;
             gc.on_quit = nullptr;
@@ -1770,13 +1770,13 @@ namespace wry {
         {
             std::error_code ec;
             auto dir = std::filesystem::temp_directory_path(ec);
-            assert(!ec);
+            require(!ec);
             std::string path = (dir / "wry-gui-context-test.png").string();
             String line("screenshot ");
             command::print_quoted(line, StringView(path.c_str()));
             gc.submit(gc.console_source, line);
-            assert(gc.console_source.pending);
-            assert(gc.screenshot_requests.size() == 1);
+            require(gc.console_source.pending);
+            require(gc.screenshot_requests.size() == 1);
             auto request = gc.screenshot_requests.front();
             gc.screenshot_requests.clear();
             request->width = 2;
@@ -1786,15 +1786,15 @@ namespace wry {
             std::memcpy(request->half_rgba.data(), halves, sizeof(halves));
             request->ready.store_release(true);
             gc.service_commands();
-            assert(!gc.console_source.busy());
-            assert(gc.history.back().status == Reply::OK);
-            assert(gc.history.back().reply == StringView(path.c_str()));
+            require(!gc.console_source.busy());
+            require(gc.history.back().status == Reply::OK);
+            require(gc.history.back().reply == StringView(path.c_str()));
             matrix<RGBA8Unorm_sRGB> image = from_png(StringView(path.c_str()));
-            assert(image.major() == 2 && image.minor() == 1);
+            require(image.major() == 2 && image.minor() == 1);
             RGBA8Unorm_sRGB const left = image[0, 0];
             RGBA8Unorm_sRGB const right = image[0, 1];
-            assert(left.r._ == 255 && left.g._ == 0);
-            assert(right.b._ == 255);
+            require(left.r._ == 255 && left.g._ == 0);
+            require(right.b._ == 255);
             std::filesystem::remove(path, ec);
         }
 
@@ -1819,7 +1819,7 @@ namespace wry {
         serving.soon(gc.control_socket->serve());
         testing::SocketPair pair;
         const int id = gc.control_socket->adopt(pair.release_server());
-        assert(id > 0);
+        require(id > 0);
         testing::StreamReader client{pair.client()};
 
         const std::string requests =
@@ -1832,7 +1832,7 @@ namespace wry {
             "{not json\n"
             "{\"id\": 8, \"command\": \"key\", \"args\": {\"combo\": \"Shift+R x=1\"}}\n";
         bool written = co_await testing::send_all(pair.client(), requests);
-        assert(written);
+        require(written);
 
         // Play the host: frames tick and commands are serviced, while the
         // client collects reply lines
@@ -1844,9 +1844,9 @@ namespace wry {
             auto more = co_await client.lines(8 - replies.size(), testing::soon(std::chrono::milliseconds(10)));
             for (auto& line : more)
                 replies.push_back(std::move(line));
-            assert(!client.ended);
+            require(!client.ended);
         }
-        assert(replies.size() == 8);
+        require(replies.size() == 8);
 
         // Replies in order, as JSON.  (Errors decoded before issue -- 6, 7
         // -- are answered at once, so may overtake the queue; check by id.)
@@ -1869,9 +1869,9 @@ namespace wry {
             status_by_id[field(r, "id")] = field(r, "status");
             line_by_id[field(r, "id")] = field(r, "line");
         }
-        assert(status_by_id["1"] == "ok" && line_by_id["1"] == "help \"help\"");
-        assert(status_by_id["two"] == "ok");
-        assert(line_by_id["two"] == "click 3 4 \"right\" \"press\"");
+        require(status_by_id["1"] == "ok" && line_by_id["1"] == "help \"help\"");
+        require(status_by_id["two"] == "ok");
+        require(line_by_id["two"] == "click 3 4 \"right\" \"press\"");
         // Two replies have id null: the bare line, and the request too
         // malformed to have an id.
         size_t null_ok = 0, null_error = 0;
@@ -1880,18 +1880,18 @@ namespace wry {
                 if (field(r, "status") == "ok" && field(r, "line") == "frame 2") ++null_ok;
                 if (field(r, "status") == "error") ++null_error;
             }
-        assert(null_ok == 1 && null_error == 1);
-        assert(status_by_id["4"] == "ok");
-        assert(status_by_id["5"] == "error");     // not an integer
-        assert(status_by_id["6"] == "error");     // neither line nor command
-        assert(status_by_id["8"] == "error");     // literal smuggling a second argument
+        require(null_ok == 1 && null_error == 1);
+        require(status_by_id["4"] == "ok");
+        require(status_by_id["5"] == "error");     // not an integer
+        require(status_by_id["6"] == "error");     // neither line nor command
+        require(status_by_id["8"] == "error");     // literal smuggling a second argument
         // The bare frame 2 was pending: 4 (queued behind it) came after.
         size_t frame_at = 0, four_at = 0;
         for (size_t i = 0; i != replies.size(); ++i) {
             if (field(replies[i], "line") == "frame 2") frame_at = i;
             if (field(replies[i], "id") == "4") four_at = i;
         }
-        assert(frame_at < four_at);
+        require(frame_at < four_at);
 
         // Socket invocations are recorded with their origin and the peer's
         // label: over a socket pair, this process, so the label ends with
@@ -1903,24 +1903,24 @@ namespace wry {
                 const std::string peer(e.peer.chars.begin(), e.peer.chars.end());
                 from_socket = (e.origin == Origin::socket) && peer.ends_with(pid_suffix);
             }
-        assert(from_socket);
+        require(from_socket);
 
         // Closing the connection with a command pending cancels it
         written = co_await testing::send_all(pair.client(), "frame 1000\n");
-        assert(written);
+        require(written);
         bool pending = co_await eventually([&] {
             gc.service_commands();
             return !gc.socket_sources.empty() && gc.socket_sources.begin()->second->pending;
         });
-        assert(pending);
+        require(pending);
         pair.close_client();
         bool cancelled = co_await eventually([&] {
             gc.service_commands();
             return gc.socket_sources.empty();
         });
-        assert(cancelled);
-        assert(gc.history.back().line == StringView("frame 1000"));
-        assert(gc.history.back().status == Reply::CANCELLED);
+        require(cancelled);
+        require(gc.history.back().line == StringView("frame 1000"));
+        require(gc.history.back().status == Reply::CANCELLED);
 
         co_await gc.control_socket->shutdown(std::chrono::milliseconds(100));
         (void) co_await serving.join();
@@ -1933,26 +1933,26 @@ namespace wry {
     define_test("gui_context_ui_scale") {
         char pattern[] = "ui-scale-test-XXXXXX";
         char* dir = mkdtemp(pattern);
-        assert(dir);
+        require(dir);
         GuiContext gc;
         gc.settings_paths = settings_paths(dir);
         gc.settings = load_settings(gc.settings_paths, nullptr);
         gc.backing_scale = 2.0f;
-        assert(gc.pixels_per_point() == 2.0f);
+        require(gc.pixels_per_point() == 2.0f);
 
         auto o = gc.issue(command::Origin::console, "ui-scale");
-        assert(o.reply.status == command::Reply::OK);
-        assert(o.reply.text == StringView("100% (2 pixels per point)"));
+        require(o.reply.status == command::Reply::OK);
+        require(o.reply.text == StringView("100% (2 pixels per point)"));
 
         o = gc.issue(command::Origin::console, "ui-scale 150");
-        assert(o.reply.status == command::Reply::OK);
-        assert(gc.settings.ui_scale == 1.5f);
-        assert(gc.pixels_per_point() == 3.0f);
-        assert(load_settings(gc.settings_paths, nullptr).ui_scale == 1.5f);
+        require(o.reply.status == command::Reply::OK);
+        require(gc.settings.ui_scale == 1.5f);
+        require(gc.pixels_per_point() == 3.0f);
+        require(load_settings(gc.settings_paths, nullptr).ui_scale == 1.5f);
 
         o = gc.issue(command::Origin::console, "ui-scale 20");
-        assert(o.reply.status != command::Reply::OK);
-        assert(gc.settings.ui_scale == 1.5f);
+        require(o.reply.status != command::Reply::OK);
+        require(gc.settings.ui_scale == 1.5f);
 
         std::error_code ec;
         std::filesystem::remove_all(dir, ec);

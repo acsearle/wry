@@ -199,20 +199,20 @@ namespace wry {
             preload.image(white, true);
         preload.image("no_such_asset_preload_test.png", false);
         [[maybe_unused]] std::ptrdiff_t cancelled = co_await scope.join();
-        assert(cancelled == 0);
+        require(cancelled == 0);
         if (have_white) {
             auto image = preload.take_image(white, true);
-            assert(image.has_value());
+            require(image.has_value());
             matrix<RGBA8Unorm_sRGB> direct = from_png(StringView(white.c_str()));
             multiply_alpha_inplace(direct);
-            assert(image->minor() == direct.minor() && image->major() == direct.major());
+            require(image->minor() == direct.minor() && image->major() == direct.major());
             for (std::size_t y = 0; y != direct.minor(); ++y)
-                assert(std::memcmp(&(*image)[(ptrdiff_t)y, 0], &direct[(ptrdiff_t)y, 0],
+                require(std::memcmp(&(*image)[(ptrdiff_t)y, 0], &direct[(ptrdiff_t)y, 0],
                                    direct.major() * sizeof(RGBA8Unorm_sRGB)) == 0);
-            CHECK(!preload.take_image(white, true).has_value());
+            require(!preload.take_image(white, true).has_value());
         }
-        CHECK(!preload.take_image("no_such_asset_preload_test.png", false).has_value());
-        CHECK(!preload.take_mesh("never_requested.obj").has_value());
+        require(!preload.take_image("no_such_asset_preload_test.png", false).has_value());
+        require(!preload.take_mesh("never_requested.obj").has_value());
         co_return;
     };
 

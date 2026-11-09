@@ -72,6 +72,26 @@ file(GLOB_RECURSE WRY_METAL_HEADERS CONFIGURE_DEPENDS ${WRY_SRC}/render/*.h)
 
 add_executable(client MACOSX_BUNDLE ${WRY_CXX_SOURCES} ${WRY_OBJCXX_SOURCES})
 
+# Lint: tests check with require(, never assert( (NDEBUG removes an assert's
+# whole expression, side effects included, and Release runs the suite too).
+# See CLAUDE.md "Assertions".  Reruns when any source or header changes.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(WRY_HEADER_GLOBS "")
+foreach(module ${WRY_MODULES})
+    list(APPEND WRY_HEADER_GLOBS ${WRY_SRC}/${module}/*.hpp ${WRY_SRC}/${module}/*.h)
+endforeach()
+file(GLOB_RECURSE WRY_HEADERS CONFIGURE_DEPENDS ${WRY_HEADER_GLOBS})
+set(WRY_LINT_SCRIPT ${CMAKE_SOURCE_DIR}/tools/lint_test_asserts.py)
+set(WRY_LINT_STAMP ${CMAKE_CURRENT_BINARY_DIR}/lint_test_asserts.stamp)
+add_custom_command(
+    OUTPUT ${WRY_LINT_STAMP}
+    COMMAND ${Python3_EXECUTABLE} ${WRY_LINT_SCRIPT} ${WRY_SRC} --stamp ${WRY_LINT_STAMP}
+    DEPENDS ${WRY_LINT_SCRIPT} ${WRY_CXX_SOURCES} ${WRY_OBJCXX_SOURCES} ${WRY_HEADERS}
+    COMMENT "Checking tests use require( not assert("
+    VERBATIM)
+add_custom_target(lint_test_asserts ALL DEPENDS ${WRY_LINT_STAMP})
+add_dependencies(client lint_test_asserts)
+
 # Headers are included by bare name across the module folders (the Xcode
 # project resolves them through its header map), so every folder is an
 # include directory.

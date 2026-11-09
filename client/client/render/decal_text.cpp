@@ -100,38 +100,38 @@ namespace wry {
         font.glyphs[' '].present = true;
         font.glyphs[' '].advance = 0.5f;
 
-        assert(decal_text_advance(font, "AB C") == 2.0f);
+        require(decal_text_advance(font, "AB C") == 2.0f);
         // Unknown characters take no room
-        assert(decal_text_advance(font, "A\x01" "B") == 1.0f);
+        require(decal_text_advance(font, "A\x01" "B") == 1.0f);
 
         // Cap 0.7 makes the em 1: "AB" is 1 wide, centred on the anchor
         DecalTextRun run = layout_decal_text(font, "AB", 0.7f, 0.0f, DecalAlign::centre);
-        assert(run.glyphs.size() == 2);
-        assert(run.scale == 1.0f && run.width == 1.0f);
-        assert(std::fabs(run.glyphs[0].centre.x - (-0.5f - 0.05f + 0.3f)) < 1e-6f);
-        assert(std::fabs(run.glyphs[1].centre.x - (0.0f - 0.05f + 0.3f)) < 1e-6f);
-        assert(std::fabs(run.glyphs[0].centre.y - 0.35f) < 1e-6f);
-        assert(run.glyphs[1].uv_rect.x == 1.0f / 32.0f);
+        require(run.glyphs.size() == 2);
+        require(run.scale == 1.0f && run.width == 1.0f);
+        require(std::fabs(run.glyphs[0].centre.x - (-0.5f - 0.05f + 0.3f)) < 1e-6f);
+        require(std::fabs(run.glyphs[1].centre.x - (0.0f - 0.05f + 0.3f)) < 1e-6f);
+        require(std::fabs(run.glyphs[0].centre.y - 0.35f) < 1e-6f);
+        require(run.glyphs[1].uv_rect.x == 1.0f / 32.0f);
         // The space is advance only
         run = layout_decal_text(font, "A B", 0.7f, 0.0f, DecalAlign::left);
-        assert(run.glyphs.size() == 2 && run.width == 1.5f);
-        assert(std::fabs(run.glyphs[1].centre.x - (1.0f - 0.05f + 0.3f)) < 1e-6f);
+        require(run.glyphs.size() == 2 && run.width == 1.5f);
+        require(std::fabs(run.glyphs[1].centre.x - (1.0f - 0.05f + 0.3f)) < 1e-6f);
         // Too wide: shrunk uniformly to the width, about the anchor
         run = layout_decal_text(font, "ABCD", 0.7f, 1.0f, DecalAlign::left);
-        assert(run.scale == 0.5f && run.width == 1.0f);
-        assert(std::fabs(run.glyphs[0].size.y - 0.5f) < 1e-6f);
+        require(run.scale == 0.5f && run.width == 1.0f);
+        require(std::fabs(run.glyphs[0].size.y - 0.5f) < 1e-6f);
 
         // The tile caption rule: short names keep one line at cap 2.3
         TileCaption c = tile_caption_layout(font, "ADD");
-        assert(c.lines.size() == 1 && c.cap == 2.3f && c.baselines[0] == 21.4f);
+        require(c.lines.size() == 1 && c.cap == 2.3f && c.baselines[0] == 21.4f);
         // 24 characters at 2.3 / 0.7 * 0.5 = 1.64 frame units each is
         // 39.4 wide, a shrink below 3/4: two lines at the middle space
         c = tile_caption_layout(font, "GREATER THAN OR EQUAL TO");
-        assert(c.lines.size() == 2 && c.cap == 1.7f);
-        assert(c.lines[0] == "GREATER THAN" && c.lines[1] == "OR EQUAL TO");
+        require(c.lines.size() == 2 && c.cap == 1.7f);
+        require(c.lines[0] == "GREATER THAN" && c.lines[1] == "OR EQUAL TO");
         // Too wide with no space: one line, shrunk by the layout
         c = tile_caption_layout(font, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        assert(c.lines.size() == 1 && c.cap == 2.3f);
+        require(c.lines.size() == 1 && c.cap == 2.3f);
         co_return;
     };
 

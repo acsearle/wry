@@ -2226,34 +2226,34 @@ namespace wry {
 
         auto near = [](float a, float b) { return std::abs(a - b) < 1e-4f; };
 
-        assert((ws._focus_tile == Coordinate{0, 0}));
-        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{0, 0}));
+        require((ws._focus_tile == Coordinate{0, 0}));
+        require(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{0, 0}));
 
         ws.pan_focus(float2{3.25f, -1.75f});
-        assert((ws._focus_tile == Coordinate{3, -2}));
-        assert(near(ws._focus_fraction.x, 0.25f) && near(ws._focus_fraction.y, 0.25f));
-        assert(near(ws.render_position(Coordinate{5, 1}).x, 2.0f));
-        assert(near(ws.render_position(Coordinate{5, 1}).y, 3.0f));
-        assert((ws.world_tile(float2{2.0f, 3.0f}) == Coordinate{5, 1}));
-        assert(!ws.world_tile(float2{NAN, 0.0f}));
-        assert(!ws.world_tile(float2{0.0f, 3e9f}));
+        require((ws._focus_tile == Coordinate{3, -2}));
+        require(near(ws._focus_fraction.x, 0.25f) && near(ws._focus_fraction.y, 0.25f));
+        require(near(ws.render_position(Coordinate{5, 1}).x, 2.0f));
+        require(near(ws.render_position(Coordinate{5, 1}).y, 3.0f));
+        require((ws.world_tile(float2{2.0f, 3.0f}) == Coordinate{5, 1}));
+        require(!ws.world_tile(float2{NAN, 0.0f}));
+        require(!ws.world_tile(float2{0.0f, 3e9f}));
         // The screen centre looks at the focus: with the fraction at
         // (0.25, 0.25), that rounds to the focus tile
-        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{3, -2}));
+        require(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{3, -2}));
         ws.pan_focus(float2{0.5f, 0.5f});
-        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{4, -1}));
+        require(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{4, -1}));
 
         // Far out: positions near the focus are exact, and the coordinates
         // wrap around the i32 range
         ws._focus_tile = Coordinate{INT32_MAX, INT32_MIN};
         ws._focus_fraction = float2{0.0f, 0.0f};
         ws._regenerate_uniforms();
-        assert(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).x, 1.0f));
-        assert(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).y, -1.0f));
-        assert((ws.world_tile(float2{1.0f, -1.0f}) == Coordinate{INT32_MIN, INT32_MAX}));
-        assert(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{INT32_MAX, INT32_MIN}));
+        require(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).x, 1.0f));
+        require(near(ws.render_position(Coordinate{INT32_MIN, INT32_MAX}).y, -1.0f));
+        require((ws.world_tile(float2{1.0f, -1.0f}) == Coordinate{INT32_MIN, INT32_MAX}));
+        require(ws.cursor_tile() && (*ws.cursor_tile() == Coordinate{INT32_MAX, INT32_MIN}));
         ws.pan_focus(float2{1.0f, -1.0f});
-        assert((ws._focus_tile == Coordinate{INT32_MIN, INT32_MAX}));
+        require((ws._focus_tile == Coordinate{INT32_MIN, INT32_MAX}));
 
         // A scroll event pans against its delta, 1024 pixels to the tile
         ws._focus_tile = Coordinate{0, 0};
@@ -2262,8 +2262,8 @@ namespace wry {
         e.kind = WryEventKindScroll;
         e.scroll_delta = float2{1024.0f, -2048.0f};
         ws.pump_legacy_event(e);
-        assert((ws._focus_tile == Coordinate{-1, -2}));
-        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+        require((ws._focus_tile == Coordinate{-1, -2}));
+        require(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
 
         // Zoomed, the same swipe traverses 1 / zoom as far: a tile per
         // 2048 pixels at the closest world view, 64 tiles per 1024 in the
@@ -2271,18 +2271,18 @@ namespace wry {
         ws._focus_tile = Coordinate{0, 0};
         ws._focus_fraction = float2{0.0f, 0.0f};
         ws.set_zoom(WorldState::ZOOM_MAX);
-        assert(!ws.show_map());
+        require(!ws.show_map());
         e.scroll_delta = float2{2048.0f, -2048.0f};
         ws.pump_legacy_event(e);
-        assert((ws._focus_tile == Coordinate{-1, -1}));
-        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+        require((ws._focus_tile == Coordinate{-1, -1}));
+        require(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
         ws._focus_tile = Coordinate{0, 0};
         ws.set_zoom(WorldState::ZOOM_MAP_DEFAULT);
-        assert(ws.show_map());
+        require(ws.show_map());
         e.scroll_delta = float2{1024.0f, 0.0f};
         ws.pump_legacy_event(e);
-        assert((ws._focus_tile == Coordinate{-64, 0}));
-        assert(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
+        require((ws._focus_tile == Coordinate{-64, 0}));
+        require(near(ws._focus_fraction.x, 0.0f) && near(ws._focus_fraction.y, 0.0f));
         ws.set_zoom(WorldState::ZOOM_DEFAULT);
 
         co_await ws.end_session(std::chrono::milliseconds(200));
@@ -2307,32 +2307,32 @@ namespace wry {
             return make<float3>(c.x - ws._focus_fraction.x, c.y - ws._focus_fraction.y, c.z);
         };
         const float3 c1 = camera();
-        assert(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
+        require(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
 
         // Dolly: half the distance at 2x, along the same line
         ws.set_zoom(2.0f);
-        assert(near(simd_length(camera()), 0.5f * simd_length(c1)));
-        assert(near(simd_length(simd_normalize(camera()) - simd_normalize(c1)), 0.0f));
+        require(near(simd_length(camera()), 0.5f * simd_length(c1)));
+        require(near(simd_length(simd_normalize(camera()) - simd_normalize(c1)), 0.0f));
         // Clamped at the ends
         ws.set_zoom(100.0f);
-        assert(ws._zoom == WorldState::ZOOM_MAX);
+        require(ws._zoom == WorldState::ZOOM_MAX);
         ws.set_zoom(0.0f);
-        assert(ws._zoom == WorldState::ZOOM_MIN && ws.show_map());
+        require(ws._zoom == WorldState::ZOOM_MIN && ws.show_map());
         // The threshold, and the default camera on the map side of it
         ws.set_zoom(WorldState::ZOOM_MAP);
-        assert(!ws.show_map());
-        assert(near(simd_length(camera()), 2.0f * simd_length(c1)));
+        require(!ws.show_map());
+        require(near(simd_length(camera()), 2.0f * simd_length(c1)));
         ws.set_zoom(std::nextafter(WorldState::ZOOM_MAP, 0.0f));
-        assert(ws.show_map());
-        assert(near(simd_length(camera() - c1), 0.0f));
+        require(ws.show_map());
+        require(near(simd_length(camera() - c1), 0.0f));
 
         // TAB classifies and jumps to the other view's default
         ws.set_zoom(1.7f);
         (void) gc.issue(command::Origin::binding, StringView("toggle-map"));
-        assert(ws._zoom == WorldState::ZOOM_MAP_DEFAULT && ws.show_map());
+        require(ws._zoom == WorldState::ZOOM_MAP_DEFAULT && ws.show_map());
         ws.set_zoom(WorldState::ZOOM_MIN);
         (void) gc.issue(command::Origin::binding, StringView("toggle-map"));
-        assert(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
+        require(ws._zoom == WorldState::ZOOM_DEFAULT && !ws.show_map());
 
         // The pinch anchors the ground under the cursor: the world point
         // there (focus tile plus the render-space point, as the handler
@@ -2359,20 +2359,20 @@ namespace wry {
                 ws.set_zoom(zoom);
                 simd_double2 before = under_cursor();
                 pinch(m);
-                assert(ws._zoom != zoom);
+                require(ws._zoom != zoom);
                 simd_double2 after = under_cursor();
-                assert(simd_length(after - before) < 1e-3);
+                require(simd_length(after - before) < 1e-3);
             }
         }
         // ... and across the boundary: from the world side into map view
         ws._focus_tile = Coordinate{5, -3};
         ws._focus_fraction = float2{0.0f, 0.0f};
         ws.set_zoom(0.55f);
-        assert(!ws.show_map());
+        require(!ws.show_map());
         simd_double2 before = under_cursor();
         pinch(-0.2f);
-        assert(ws.show_map());
-        assert(simd_length(under_cursor() - before) < 1e-3);
+        require(ws.show_map());
+        require(simd_length(under_cursor() - before) < 1e-3);
 
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
@@ -2398,14 +2398,14 @@ namespace wry {
                     float4 p = u.camera_position_world + ray * depth;
                     p.w = 1.0f;
                     float4 c = simd_mul(u.viewprojection_transform, p);
-                    assert(std::abs(c.w - depth) < 1e-3f * depth);
-                    assert(std::abs(c.x / c.w - x) < 1e-4f);
-                    assert(std::abs(c.y / c.w - y) < 1e-4f);
+                    require(std::abs(c.w - depth) < 1e-3f * depth);
+                    require(std::abs(c.x / c.w - x) < 1e-4f);
+                    require(std::abs(c.y / c.w - y) < 1e-4f);
                 }
             }
         }
         // The camera itself is at zero depth
-        assert(std::abs(simd_mul(u.viewprojection_transform, u.camera_position_world).w) < 1e-4f);
+        require(std::abs(simd_mul(u.viewprojection_transform, u.camera_position_world).w) < 1e-4f);
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
         co_return;
@@ -2427,20 +2427,20 @@ namespace wry {
         // off the ground and edits nothing (and must not trap).
         {
             WorldState ws(gc);
-            assert(!ws.cursor_tile());
+            require(!ws.cursor_tile());
             ws._holding_value = term_make_opcode(OPCODE_HALT);
             const size_t issued = gc.history.size();
             gui::Event e{};
             e.kind = WryEventKindMouseUp;
             ws.pump_legacy_event(e);
-            assert(gc.history.size() == issued);
+            require(gc.history.size() == issued);
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
 
         // A real viewport, cursor at its center: over the ground.
         gc.viewport_size = float2{1280.0f, 800.0f};
         WorldState ws(gc);
-        assert(ws.cursor_tile());
+        require(ws.cursor_tile());
 
         auto mouse_up = [](gui::MouseButton b) {
             gui::Event e{};
@@ -2467,53 +2467,53 @@ namespace wry {
         const String tile = command::to_string(*ws.cursor_tile());
 
         // Empty hand: left places nothing, right issues an erase.
-        assert(!ws.is_holding());
+        require(!ws.is_holding());
         size_t issued = gc.history.size();
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
-        assert(gc.history.size() == issued);
+        require(gc.history.size() == issued);
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
-        assert(gc.history.size() == issued + 1);
-        assert(gc.history.back().origin == command::Origin::gui);
+        require(gc.history.size() == issued + 1);
+        require(gc.history.back().origin == command::Origin::gui);
         {
             String expected("erase ");
             expected.append(tile);
-            assert(gc.history.back().line == expected);
+            require(gc.history.back().line == expected);
         }
 
         // Full hand: left writes what is held, at the cursor tile.
         ws._holding_value = term_make_opcode(OPCODE_HALT);
-        assert(ws.is_holding());
+        require(ws.is_holding());
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
         {
             String expected("write ");
             expected.append(tile);
             expected.append(StringView(" OPCODE::HALT"));
-            assert(gc.history.back().line == expected);
+            require(gc.history.back().line == expected);
         }
-        assert(last_issued_starts_with("write "));
+        require(last_issued_starts_with("write "));
 
         // Map view: neither button edits.
         ws.set_zoom(WorldState::ZOOM_MAP_DEFAULT);
-        assert(ws.show_map());
+        require(ws.show_map());
         issued = gc.history.size();
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Left));
         ws.pump_legacy_event(mouse_up(gui::MouseButton::Right));
-        assert(gc.history.size() == issued);
+        require(gc.history.size() == issued);
         ws.set_zoom(WorldState::ZOOM_DEFAULT);
-        assert(!ws.show_map());
+        require(!ws.show_map());
 
         // Escape: the first drops the hand without opening the menu, the
         // second opens the menu.
         const std::size_t depth = ws._stack.size();
         ws.pump_legacy_event(key_down(gui::key::Escape));
-        assert(!ws.is_holding());
-        assert(ws._stack.size() == depth);
-        assert(!ws._stack.contains(&ws._main_menu_overlay));
-        assert(ws._palette_overlay.selected_i() == -1);
-        assert(ws._palette_overlay.cursor_needs_refresh());
+        require(!ws.is_holding());
+        require(ws._stack.size() == depth);
+        require(!ws._stack.contains(&ws._main_menu_overlay));
+        require(ws._palette_overlay.selected_i() == -1);
+        require(ws._palette_overlay.cursor_needs_refresh());
         ws.pump_legacy_event(key_down(gui::key::Escape));
-        assert(ws._stack.size() == depth + 1);
-        assert(ws._stack.contains(&ws._main_menu_overlay));
+        require(ws._stack.size() == depth + 1);
+        require(ws._stack.contains(&ws._main_menu_overlay));
 
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
@@ -2533,20 +2533,20 @@ namespace wry {
         {
             WorldState ws(gc);
             auto has = [](std::string const& h, const char* s) { return h.find(s) != std::string::npos; };
-            assert(ws.hand_hint().empty());
+            require(ws.hand_hint().empty());
             ws.hold(term_make_opcode(OPCODE_TURN_NORTH));   // direction-like
             std::string h = ws.hand_hint();
-            assert(has(h, "[R] rotate") && has(h, "[Shift+R] rotate back"));
-            assert(has(h, "[V] mirror north-south") && !has(h, "east-west"));
+            require(has(h, "[R] rotate") && has(h, "[Shift+R] rotate back"));
+            require(has(h, "[V] mirror north-south") && !has(h, "east-west"));
             ws.hold(term_make_opcode(OPCODE_TURN_LEFT));    // handedness-like
             h = ws.hand_hint();
-            assert(!has(h, "rotate") && has(h, "[H] mirror") && !has(h, "north-south"));
+            require(!has(h, "rotate") && has(h, "[H] mirror") && !has(h, "north-south"));
             ws.hold(term_make_opcode(OPCODE_VALVE_NORTH_SOUTH));   // axis-like
             h = ws.hand_hint();
-            assert(has(h, "[R] rotate") && !has(h, "rotate back") && !has(h, "mirror"));
+            require(has(h, "[R] rotate") && !has(h, "rotate back") && !has(h, "mirror"));
             ws.hold(term_make_opcode(OPCODE_ADD));          // invariant
             h = ws.hand_hint();
-            assert(!has(h, "rotate") && !has(h, "mirror") && has(h, "[click] place"));
+            require(!has(h, "rotate") && !has(h, "mirror") && has(h, "[click] place"));
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
         (void) co_await scope.join();
@@ -2561,43 +2561,43 @@ namespace wry {
         WorldState ws(gc);
 
         // An empty tile: nothing happens.
-        CHECK(!ws.pipette_at(Coordinate{50, 50}));
-        assert(!ws.is_holding());
+        require(!ws.pipette_at(Coordinate{50, 50}));
+        require(!ws.is_holding());
 
         // A number, then an opcode, are copied into the hand.
-        CHECK(ws.pipette_at(Coordinate{-2, -2}));
-        assert(ws._holding_value._value._data == term_make_integer_with(7)._data);
-        CHECK(ws.pipette_at(Coordinate{0, 4}));
-        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
-        assert(ws._palette_overlay.cursor_needs_refresh());
+        require(ws.pipette_at(Coordinate{-2, -2}));
+        require(ws._holding_value._value._data == term_make_integer_with(7)._data);
+        require(ws.pipette_at(Coordinate{0, 4}));
+        require(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+        require(ws._palette_overlay.cursor_needs_refresh());
 
         // Matter is not: the hand keeps what it had.
-        CHECK(!ws.pipette_at(Coordinate{-2, 2}));
-        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
+        require(!ws.pipette_at(Coordinate{-2, 2}));
+        require(ws._holding_value._value._data == term_make_opcode(OPCODE_FLIP_FLOP)._data);
 
         // The command: a full hand drops, an empty hand picks up at the
         // given tile (or, by default, the tile under the cursor).
         gc.issue(command::Origin::console, "pipette");
-        assert(!ws.is_holding());
+        require(!ws.is_holding());
         gc.issue(command::Origin::console, "pipette Coordinate(-2, -2)");
-        assert(ws._holding_value._value._data == term_make_integer_with(7)._data);
-        assert(gc.history.back().line == StringView("pipette Coordinate(-2, -2)"));
+        require(ws._holding_value._value._data == term_make_integer_with(7)._data);
+        require(gc.history.back().line == StringView("pipette Coordinate(-2, -2)"));
 
         // hold / drop / get.
         gc.issue(command::Origin::console, "hold OPCODE::SWAP");
-        assert(ws._holding_value._value._data == term_make_opcode(OPCODE_SWAP)._data);
+        require(ws._holding_value._value._data == term_make_opcode(OPCODE_SWAP)._data);
         gc.issue(command::Origin::console, "drop");
-        assert(!ws.is_holding());
+        require(!ws.is_holding());
         {
             auto o = gc.issue(command::Origin::console, "get Coordinate(0, 4)");
-            assert(o.reply.text == StringView("OPCODE::FLIP_FLOP"));
+            require(o.reply.text == StringView("OPCODE::FLIP_FLOP"));
             auto empty = gc.issue(command::Origin::console, "get Coordinate(50, 50)");
-            assert(empty.reply.text == StringView("null"));
+            require(empty.reply.text == StringView("null"));
         }
 
         // A binding issues its command with defaults resolved.
         gc.issue(command::Origin::binding, "rotate");
-        assert(gc.history.back().origin == command::Origin::binding);
+        require(gc.history.back().origin == command::Origin::binding);
 
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
@@ -2623,7 +2623,7 @@ namespace wry {
         {
             WorldState ws(gc);
             using command::Reply;
-            assert(ws._host);
+            require(ws._host);
             Relay& relay = ws._host->relay();
 
             // Apply every step that has arrived, as update() would
@@ -2646,47 +2646,47 @@ namespace wry {
                         co_return;
                     co_await cancelable_sleep(0.005);
                 }
-                assert(!"did not catch up");
+                require(!"did not catch up");
             };
 
             gc.issue(command::Origin::console, "pause");
             bool paused = co_await eventually([&] { return relay.clock().paused; });
-            assert(paused);
+            require(paused);
             (void) paused;
             co_await catch_up(relay.clock().head);
             const uint64_t before = ws._steps_taken;
-            assert(before >= 1);                            // the PAUSED step at least
+            require(before >= 1);                            // the PAUSED step at least
 
             gc.submit(gc.console_source, "step 2");
             gc.submit(gc.console_source, "help step");
             const uint64_t step_seq = gc.history.back().seq;
-            assert(gc.history.back().status == Reply::PENDING);
-            assert(gc.console_source.queued.size() == 1);   // help waits
+            require(gc.history.back().status == Reply::PENDING);
+            require(gc.console_source.queued.size() == 1);   // help waits
 
             // The relay finalized two steps at once; applying them completes
             // the command, and nothing else arrives while paused
             co_await catch_up(before + 2);
-            assert(ws._steps_taken == before + 2);
+            require(ws._steps_taken == before + 2);
             ++gc.frame;
             gc.service_commands();
-            assert(!gc.console_source.pending);
-            assert(gc.history.back().line == StringView("help \"step\""));
+            require(!gc.console_source.pending);
+            require(gc.history.back().line == StringView("help \"step\""));
             for (auto const& e : gc.history)
                 if (e.seq == step_seq)
-                    assert(e.status == Reply::OK && e.completed_frame == gc.frame);
+                    require(e.status == Reply::OK && e.completed_frame == gc.frame);
 
             // Cancel: the wait ends; the steps still come
             gc.submit(gc.console_source, "step 5");
-            assert(gc.history.back().status == Reply::PENDING);
+            require(gc.history.back().status == Reply::PENDING);
             gc.cancel(gc.console_source);
-            assert(gc.history.back().status == Reply::CANCELLED);
+            require(gc.history.back().status == Reply::CANCELLED);
             co_await catch_up(before + 7);
-            assert(ws._steps_taken == before + 7);
+            require(ws._steps_taken == before + 7);
 
             // Resume: the clock runs again
             gc.issue(command::Origin::console, "resume");
             bool running = co_await eventually([&] { return !relay.clock().paused && relay.clock().head > before + 7; });
-            assert(running);
+            require(running);
             (void) running;
 
             co_await ws.end_session(std::chrono::milliseconds(200));
@@ -2737,8 +2737,8 @@ namespace wry {
                    label, steps, us, hash_us, (long long)r._ptr->_time,
                    r._ptr->_entity_for_entity_id.kv.size(), (unsigned long long)live,
                    (unsigned long long)oracle, oracle == live ? "" : " MISMATCH");
-            assert(recomputed == live * (uint64_t)reps);
-            assert(oracle == live);
+            require(recomputed == live * (uint64_t)reps);
+            require(oracle == live);
         };
         co_await bench(make_starting_world(), 200, "starting world");
         if (std::getenv("WRY_BENCH"))
@@ -2755,11 +2755,11 @@ namespace wry {
         WorldState ws(gc);
         auto reply_hash = [&gc]() -> Hash {
             auto o = gc.issue(command::Origin::console, "state-hash");
-            assert(o.reply.status == command::Reply::OK);
+            require(o.reply.status == command::Reply::OK);
             auto node = command::parse_node(o.reply.text);
-            assert(node);
+            require(node);
             auto h = command::Type<Hash>::read(*node);
-            assert(h);
+            require(h);
             return *h;
         };
         uint64_t h0 = 0;
@@ -2768,19 +2768,19 @@ namespace wry {
             // Side effects stay outside assert: the suite also runs in a
             // Release build (the GUI's background test run).
             const bool popped = ws._worlds.try_pop_front(w);
-            assert(popped);
+            require(popped);
             if (!popped)
                 co_return;
             h0 = w._ptr->content_hash();
             ws._worlds.push_front(std::move(w));
         }
-        CHECK(reply_hash() == (Hash{h0}));
-        CHECK(reply_hash() == (Hash{h0}));
+        require(reply_hash() == (Hash{h0}));
+        require(reply_hash() == (Hash{h0}));
         // Step the displayed world as update() does.
         {
             Root<World const*> old_world;
             const bool popped = ws._worlds.try_pop_front(old_world);
-            assert(popped);
+            require(popped);
             if (!popped)
                 co_return;
             epoch::Epoch pin = pin_global_epoch();
@@ -2788,7 +2788,7 @@ namespace wry {
             unpin_global_epoch(pin);
             ws._worlds.emplace_back(next);
         }
-        CHECK(reply_hash() != (Hash{h0}));
+        require(reply_hash() != (Hash{h0}));
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
         co_return;
@@ -2813,7 +2813,7 @@ namespace wry {
         {
             WorldState ws(gc);
             using command::Reply;
-            assert(ws._host && ws._log && ws._log->path().empty());
+            require(ws._host && ws._log && ws._log->path().empty());
             // The session's log in `dir`: the one opened at construction
             // has no file yet
             ws._log_directory = dir;
@@ -2838,7 +2838,7 @@ namespace wry {
                         co_return;
                     co_await cancelable_sleep(0.005);
                 }
-                assert(!"did not catch up");
+                require(!"did not catch up");
             };
             auto displayed = [&]() -> World const* { return ws._world_to_render._ptr; };
             auto tile = [&](Coordinate at) -> Term {
@@ -2861,7 +2861,7 @@ namespace wry {
                     ++gc.frame;
                     gc.service_commands();
                 }
-                assert(!gc.console_source.pending);
+                require(!gc.console_source.pending);
             };
             auto last_reply = [&]() -> std::string {
                 return narrow(gc.history.back().reply);
@@ -2869,7 +2869,7 @@ namespace wry {
 
             issue("pause");
             bool paused = co_await eventually([&] { return relay.clock().paused; });
-            assert(paused);
+            require(paused);
             (void) paused;
             co_await catch_up(relay.clock().head);
 
@@ -2880,41 +2880,41 @@ namespace wry {
                 relay.step(1);
                 co_await catch_up(ws._steps_taken + 1);
             }
-            assert(tile(Coordinate{4, 4}).is_opcode());
+            require(tile(Coordinate{4, 4}).is_opcode());
             relay.step(3);
             co_await catch_up(ws._steps_taken + 3);
             const uint64_t end_time = (uint64_t)displayed()->_time;
             const uint64_t end_hash = displayed()->content_hash();
-            assert(end_time >= 4);
+            require(end_time >= 4);
             const std::filesystem::path log = ws._log->path();
-            assert(!log.empty() && std::filesystem::exists(log));
+            require(!log.empty() && std::filesystem::exists(log));
             {
                 auto o = issue("session");
-                assert(contains(narrow(o.reply.text), " log " + log.string()));
+                require(contains(narrow(o.reply.text), " log " + log.string()));
             }
             co_await ws.end_session(std::chrono::milliseconds(200));
-            assert(!ws._log && !ws._server);
-            CHECK(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
+            require(!ws._log && !ws._server);
+            require(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
 
             // The whole log replays to the same World
             co_await run_to_completion("replay \"" + log.string() + "\"");
-            assert(gc.history.back().status == Reply::OK);
-            assert(contains(last_reply(), "replayed steps 1 to " + std::to_string(end_time) + ": consistent"));
-            assert((uint64_t)displayed()->_time == end_time);
-            assert(displayed()->content_hash() == end_hash);
-            assert(tile(Coordinate{4, 4}).is_opcode());
-            assert(!ws._server && ws._replay && ws._replay->result);
-            CHECK(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
+            require(gc.history.back().status == Reply::OK);
+            require(contains(last_reply(), "replayed steps 1 to " + std::to_string(end_time) + ": consistent"));
+            require((uint64_t)displayed()->_time == end_time);
+            require(displayed()->content_hash() == end_hash);
+            require(tile(Coordinate{4, 4}).is_opcode());
+            require(!ws._server && ws._replay && ws._replay->result);
+            require(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
 
             // ... or to an earlier step
             co_await run_to_completion("replay \"" + log.string() + "\" " + std::to_string(end_time - 2));
-            assert(contains(last_reply(), "consistent"));
-            assert((uint64_t)displayed()->_time == end_time - 2);
+            require(contains(last_reply(), "consistent"));
+            require((uint64_t)displayed()->_time == end_time - 2);
 
             // A log whose record of one step's hash was tampered with:
             // the replay diverges there and stops, that World displayed
             auto contents = read_session_log(log);
-            assert(contents && contents->head == 0 && contents->entries.size() == end_time);
+            require(contents && contents->head == 0 && contents->entries.size() == end_time);
             const uint64_t tampered = end_time - 1;
             contents->entries[(size_t)(tampered - 1)].hash ^= 1;
             const std::filesystem::path forged = dir / "forged.wrylog";
@@ -2924,47 +2924,47 @@ namespace wry {
                 out.write(bytes.data(), (std::streamsize)bytes.size());
             }
             co_await run_to_completion("replay \"" + forged.string() + "\"");
-            assert(gc.history.back().status == Reply::OK);
-            assert(contains(last_reply(), "diverged at step " + std::to_string(tampered) + ":"));
-            assert((uint64_t)displayed()->_time == tampered);
+            require(gc.history.back().status == Reply::OK);
+            require(contains(last_reply(), "diverged at step " + std::to_string(tampered) + ":"));
+            require((uint64_t)displayed()->_time == tampered);
 
             // compare: the original against the forgery names the step
             {
                 auto o = issue("compare \"" + log.string() + "\" \"" + forged.string() + "\"");
-                assert(o.reply.status == Reply::OK);
-                assert(contains(narrow(o.reply.text), "streams identical"));
-                assert(contains(narrow(o.reply.text), "hashes differ at step " + std::to_string(tampered)));
+                require(o.reply.status == Reply::OK);
+                require(contains(narrow(o.reply.text), "streams identical"));
+                require(contains(narrow(o.reply.text), "hashes differ at step " + std::to_string(tampered)));
             }
             // Not a log: an error at once; a step the log does not hold too
-            CHECK(issue("replay \"" + (dir / "absent.wrylog").string() + "\"").reply.status == Reply::ERROR);
-            CHECK(issue("replay \"" + log.string() + "\" " + std::to_string(end_time + 5)).reply.status == Reply::ERROR);
+            require(issue("replay \"" + (dir / "absent.wrylog").string() + "\"").reply.status == Reply::ERROR);
+            require(issue("replay \"" + log.string() + "\" " + std::to_string(end_time + 5)).reply.status == Reply::ERROR);
 
             // dump: the displayed World as text, the same twice
             {
                 auto a = issue("dump");
                 auto b = issue("dump");
-                assert(a.reply.status == Reply::OK);
-                assert(narrow(a.reply.text) == narrow(b.reply.text));
-                assert(contains(narrow(a.reply.text), "Coordinate(4, 4): OPCODE::SWAP"));
+                require(a.reply.status == Reply::OK);
+                require(narrow(a.reply.text) == narrow(b.reply.text));
+                require(contains(narrow(a.reply.text), "Coordinate(4, 4): OPCODE::SWAP"));
                 const std::filesystem::path file = dir / "dump.txt";
                 auto c = issue("dump \"" + file.string() + "\"");
-                assert(c.reply.status == Reply::OK && std::filesystem::exists(file));
+                require(c.reply.status == Reply::OK && std::filesystem::exists(file));
             }
 
             // A replayed World becomes a game: host starts a session from
             // it, with a new log
             {
                 auto o = issue("host 0");
-                assert(o.reply.status == Reply::OK);
-                assert(ws._host && ws._log && !ws._replay);
-                assert((uint64_t)displayed()->_time == tampered);
+                require(o.reply.status == Reply::OK);
+                require(ws._host && ws._log && !ws._replay);
+                require((uint64_t)displayed()->_time == tampered);
             }
             // corrupt: the displayed World changes, off the stream
             {
                 const uint64_t before = displayed()->content_hash();
-                CHECK(issue("corrupt Coordinate(9, 9) 1").reply.status == Reply::OK);
-                assert(displayed()->content_hash() != before);
-                CHECK(narrow(issue("get Coordinate(9, 9)").reply.text) == "1");
+                require(issue("corrupt Coordinate(9, 9) 1").reply.status == Reply::OK);
+                require(displayed()->content_hash() != before);
+                require(narrow(issue("get Coordinate(9, 9)").reply.text) == "1");
             }
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
@@ -2998,11 +2998,11 @@ namespace wry {
         // Issued outside assert: the suite also runs in a Release build
         auto expect = [&](const char* line, Reply::Status want) {
             [[maybe_unused]] const Reply::Status got = issue(line).reply.status;
-            assert(got == want);
+            require(got == want);
         };
         auto expect_load = [&](String const& name) {
             [[maybe_unused]] const Reply::Status got = gc.issue_with(Origin::console, "load", name).reply.status;
-            assert(got == Reply::OK);
+            require(got == Reply::OK);
         };
         auto displayed_hash = [&] { return narrow(issue("state-hash").reply.text); };
 
@@ -3011,11 +3011,11 @@ namespace wry {
         expect("main-menu", Reply::ERROR);
         expect("load \"no-such-save.wry\"", Reply::ERROR);
         expect("list-saves", Reply::OK);
-        assert(!shown && !gc.world);
+        require(!shown && !gc.world);
 
         // new-game from the menu: the host is handed the world to show
         expect("new-game", Reply::OK);
-        assert(shown && gc.world == shown.get());
+        require(shown && gc.world == shown.get());
         WorldState* ws = shown.get();
         [[maybe_unused]] const std::string start = displayed_hash();
 
@@ -3023,7 +3023,7 @@ namespace wry {
         // once it is written
         expect("corrupt Coordinate(5, 5) OPCODE::SWAP", Reply::OK);
         [[maybe_unused]] const std::string edited = displayed_hash();
-        assert(edited != start);
+        require(edited != start);
         expect("save", Reply::PENDING);
         const uint64_t save_seq = gc.history.back().seq;
         auto save_entry = [&]() -> command::HistoryEntry const* {
@@ -3033,52 +3033,52 @@ namespace wry {
             return nullptr;
         };
         for (const auto deadline = testing::soon(); save_entry()->status == Reply::PENDING;) {
-            assert(std::chrono::steady_clock::now() < deadline);
+            require(std::chrono::steady_clock::now() < deadline);
             ++gc.frame;
             gc.service_commands();
             co_await testing::pause(std::chrono::milliseconds(1));
         }
-        assert(save_entry()->status == Reply::OK);
+        require(save_entry()->status == Reply::OK);
         const String name = save_entry()->reply;
         const std::optional<int> id = save_named(name);
-        assert(id);
+        require(id);
         if (!id)
             co_return;
         {
             [[maybe_unused]] const std::string listed = "\n" + narrow(issue("list-saves").reply.text) + "\n";
-            assert(listed.find("\n" + narrow(name) + "\n") != std::string::npos);
+            require(listed.find("\n" + narrow(name) + "\n") != std::string::npos);
         }
 
         // new-game and load in place: the same WorldState, its world
         // replaced, the session ended and hosted afresh
         co_await ws->end_session(std::chrono::milliseconds(200));
         expect("new-game", Reply::OK);
-        assert(gc.world == ws && ws->_host);
+        require(gc.world == ws && ws->_host);
         [[maybe_unused]] const std::string renewed = displayed_hash();
-        assert(renewed == start);
+        require(renewed == start);
         co_await ws->end_session(std::chrono::milliseconds(200));
         expect_load(name);
-        assert(gc.world == ws && ws->_host);
+        require(gc.world == ws && ws->_host);
         [[maybe_unused]] const std::string reloaded = displayed_hash();
-        assert(reloaded == edited);
+        require(reloaded == edited);
 
         // main-menu: the host is asked to drop the world; doing so leaves
         // no world for the commands, and load from the menu builds one
         // from the save
         expect("main-menu", Reply::OK);
-        assert(to_menu);
+        require(to_menu);
         co_await ws->end_session(std::chrono::milliseconds(200));
         shown.reset();
-        assert(!gc.world);
+        require(!gc.world);
         expect_load(name);
-        assert(shown && gc.world == shown.get() && shown->_host);
+        require(shown && gc.world == shown.get() && shown->_host);
         [[maybe_unused]] const std::string menu_loaded = displayed_hash();
-        assert(menu_loaded == edited);
+        require(menu_loaded == edited);
 
         co_await shown->end_session(std::chrono::milliseconds(200));
         shown.reset();
         delete_game(*id);
-        assert(!save_named(name));
+        require(!save_named(name));
         (void) co_await scope.join();
         co_return;
     };
@@ -3089,27 +3089,27 @@ namespace wry {
         gc.scope = &scope;
         {
             WorldState ws(gc);
-            assert(ws._host);
+            require(ws._host);
             ws.join(String("127.0.0.1"), 1);            // nothing listens on port 1
-            assert(ws._remote && ws._awaiting_save);
+            require(ws._remote && ws._awaiting_save);
             bool refused = co_await eventually([&] {
                 (void) ws._server->take_steps();
                 return ws._remote->state() == RemoteServer::State::DISCONNECTED;
             });
-            assert(refused);
+            require(refused);
             (void) refused;
-            assert(ws._awaiting_save);                  // the save never came
+            require(ws._awaiting_save);                  // the save never came
             ws._donations.push_back({7, 7});            // and suppose one was pending
             co_await ws.end_session(std::chrono::milliseconds(200));
-            assert(!ws._awaiting_save && ws._donations.empty());
+            require(!ws._awaiting_save && ws._donations.empty());
 
             // A new game after it runs: its steps are applied
             ws.new_game();
-            assert(ws._host && !ws._awaiting_save);
+            require(ws._host && !ws._awaiting_save);
             Relay& relay = ws._host->relay();
             relay.pause();
             bool paused = co_await eventually([&] { return relay.clock().paused; });
-            assert(paused);
+            require(paused);
             (void) paused;
             relay.step(2);
             bool applied = co_await eventually([&] {
@@ -3117,14 +3117,14 @@ namespace wry {
                     ws._backlog.push_back(std::move(s));
                 return ws._backlog.size() + ws._steps_taken >= 3 && relay.clock().head >= 3;
             });
-            assert(applied);
+            require(applied);
             (void) applied;
             while (!ws._backlog.empty()) {
                 Step step = std::move(ws._backlog.front());
                 ws._backlog.pop_front();
                 co_await ws._apply_step_async(step);
             }
-            assert(ws._steps_taken >= 3);
+            require(ws._steps_taken >= 3);
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
         (void) co_await scope.join();

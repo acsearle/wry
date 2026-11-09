@@ -45,12 +45,12 @@ namespace wry::coroutine {
         // Set before the await: completes at once, and set is idempotent
         {
             SingleConsumerEvent event;
-            assert(!event.is_set());
+            require(!event.is_set());
             event.set();
             event.set();
-            assert(event.is_set());
+            require(event.is_set());
             co_await event;
-            assert(event.is_set());
+            require(event.is_set());
         }
 
         // Parked: the waiter parks, a later set from another frame wakes it
@@ -63,10 +63,10 @@ namespace wry::coroutine {
                 co_await TransferToPoolExecutor{};
             nursery.soon(late_setter(&event));
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 0);
-            assert(resumed.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(event.is_set());
+            require(cancelled == 0);
+            require(resumed.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(event.is_set());
         }
 
         // Under a deadline: the deadline path is nullopt, the set path is
@@ -75,13 +75,13 @@ namespace wry::coroutine {
             using namespace std::chrono;
             SingleConsumerEvent event;
             auto nothing = co_await with_deadline(steady_clock::now() + milliseconds(20), event);
-            assert(!nothing.has_value());
+            require(!nothing.has_value());
             Nursery nursery;
             nursery.soon(late_setter(&event));
             auto something = co_await with_deadline(steady_clock::now() + seconds(5), event);
-            assert(something.has_value());
+            require(something.has_value());
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 0);
+            require(cancelled == 0);
         }
 
         co_return;
@@ -101,13 +101,13 @@ namespace wry::coroutine {
                 co_await TransferToPoolExecutor{};
             co_await cancelable_sleep(0.010);  // let it park
             nursery.request_stop();
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(resumed.load(std::memory_order_relaxed) == 0);
-            assert(event._state.load(std::memory_order_relaxed) == nullptr);
+            require(cancelled == 1);
+            require(resumed.load(std::memory_order_relaxed) == 0);
+            require(event._state.load(std::memory_order_relaxed) == nullptr);
             event.set();
-            assert(event.is_set());
+            require(event.is_set());
         }
 
         // Cancel before park: the token is requested when the waiter
@@ -120,10 +120,10 @@ namespace wry::coroutine {
             nursery.request_stop();
             nursery.soon(event_waiter(&event, &started, &resumed, &destroyed));
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(started.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed.load(std::memory_order_relaxed) == 0);
+            require(cancelled == 1);
+            require(started.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed.load(std::memory_order_relaxed) == 0);
             // The mark is stale now; a fresh waiter under a live token
             // clears it and sees the event unset until set
             Nursery again;
@@ -133,8 +133,8 @@ namespace wry::coroutine {
                 co_await TransferToPoolExecutor{};
             event.set();
             cancelled = co_await again.join();
-            assert(cancelled == 0);
-            assert(resumed2.load(std::memory_order_relaxed) == 1);
+            require(cancelled == 0);
+            require(resumed2.load(std::memory_order_relaxed) == 1);
         }
 
         // Set and requested: cancellation wins, as for the queue
@@ -146,9 +146,9 @@ namespace wry::coroutine {
             nursery.request_stop();
             nursery.soon(event_waiter(&event, &started, &resumed, &destroyed));
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(resumed.load(std::memory_order_relaxed) == 0);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(cancelled == 1);
+            require(resumed.load(std::memory_order_relaxed) == 0);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         co_return;

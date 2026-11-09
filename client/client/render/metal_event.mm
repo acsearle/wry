@@ -312,7 +312,7 @@ namespace wry {
         f.event.signaledValue = 5;
         co_await shared_event_wait(f.event, 3);
         co_await shared_event_wait(f.event, 5);
-        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 0);
+        require(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 0);
 
         // Reached later, from the CPU on another coroutine
         std::atomic<int> started{0}, destroyed{0}, resumed_past{0};
@@ -321,12 +321,12 @@ namespace wry {
         while (started.load(std::memory_order_acquire) != 1)
             co_await coroutine::TransferToPoolExecutor{};
         co_await cancelable_sleep(0.005);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
         f.event.signaledValue = 6;
         std::ptrdiff_t cancelled = co_await nursery.join();
-        assert(cancelled == 0);
-        assert(resumed_past.load(std::memory_order_relaxed) == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
+        require(cancelled == 0);
+        require(resumed_past.load(std::memory_order_relaxed) == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
         co_await wait_states_drained();
     };
 
@@ -346,11 +346,11 @@ namespace wry {
         [command_buffer commit];
         auto r = co_await with_deadline(steady_clock::now() + seconds(30),
                                         shared_event_wait(f.event, 1));
-        assert(r.has_value());
-        assert(!on_listener_queue());
+        require(r.has_value());
+        require(!on_listener_queue());
         unsigned char const* p = (unsigned char const*)buffer.contents;
         for (int i = 0; i != 256; ++i)
-            assert(p[i] == 0xAB);
+            require(p[i] == 0xAB);
         (void) p;
 
         // A run of waits, each on the next GPU signal
@@ -358,7 +358,7 @@ namespace wry {
             gpu_signal(f, value);
             auto s = co_await with_deadline(steady_clock::now() + seconds(30),
                                             shared_event_wait(f.event, value));
-            assert(s.has_value());
+            require(s.has_value());
         }
         co_await wait_states_drained();
     };
@@ -370,9 +370,9 @@ namespace wry {
         auto t0 = steady_clock::now();
         auto r = co_await with_deadline(steady_clock::now() + milliseconds(20),
                                         shared_event_wait(f.event, 1));
-        assert(!r.has_value());
-        assert(steady_clock::now() - t0 < seconds(10));
-        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 1);
+        require(!r.has_value());
+        require(steady_clock::now() - t0 < seconds(10));
+        require(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 1);
         // A late signal fires the leftover block, which resumes nothing
         f.event.signaledValue = 1;
         co_await wait_states_drained();
@@ -385,14 +385,14 @@ namespace wry {
         for (uint64_t value : {10ull, 1000ull, UINT64_MAX - 1}) {
             auto r = co_await with_deadline(steady_clock::now() + milliseconds(5),
                                             shared_event_wait(f.event, value));
-            assert(!r.has_value());
+            require(!r.has_value());
         }
-        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 3);
+        require(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 3);
         shared_event_abandon(f.event);
         co_await wait_states_drained();
         // and a wait after abandonment does not suspend
         co_await shared_event_wait(f.event, UINT64_MAX);
-        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 0);
+        require(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 0);
     };
 
     define_test("metal_event_cancel_before_park") {
@@ -402,10 +402,10 @@ namespace wry {
         nursery.request_stop();
         nursery.soon(event_child(f.event, 1, &started, &destroyed, &resumed_past));
         std::ptrdiff_t cancelled = co_await nursery.join();
-        assert(cancelled == 1);
-        assert(started.load(std::memory_order_relaxed) == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(cancelled == 1);
+        require(started.load(std::memory_order_relaxed) == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
         // Stopped before registering: nothing was left with Metal
         co_await wait_states_drained();
     };
@@ -420,13 +420,13 @@ namespace wry {
         co_await cancelable_sleep(0.005);
         nursery.request_stop();
         std::ptrdiff_t cancelled = co_await nursery.join();
-        assert(cancelled == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(cancelled == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
         // The notification outlives the stop; the signal retires it
         gpu_signal(f, 1);
         co_await wait_states_drained();
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
     };
 
     define_test("metal_event_fire_stop_race") {
@@ -452,8 +452,8 @@ namespace wry {
             nursery.request_stop();
             std::ptrdiff_t cancelled = co_await nursery.join();
             int resumed = resumed_past.load(std::memory_order_relaxed);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed + cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed + cancelled == 1);
             completed += resumed;
             stopped += (int) cancelled;
         }

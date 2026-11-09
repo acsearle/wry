@@ -730,7 +730,7 @@ namespace wry {
                              cancelable_task(CancelableProbe{&destroyed}, &ran));
             while (ran.load(std::memory_order_relaxed) == 0)
                 co_await coroutine::TransferToPoolExecutor{};
-            assert(steady_clock::now() - t0 >= milliseconds(15));
+            require(steady_clock::now() - t0 >= milliseconds(15));
             while (destroyed.load(std::memory_order_relaxed) == 0)
                 co_await coroutine::TransferToPoolExecutor{};
             // The load-bearing property: the Frame dies promptly after the
@@ -751,11 +751,11 @@ namespace wry {
             // cancel, not the install race
             co_await cancelable_sleep(0.005);
             source.request_stop();
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(ran.load(std::memory_order_relaxed) == 0);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(ran.load(std::memory_order_relaxed) == 0);
             // The whole structure -- knote withdrawn, frame freed -- retired
             // synchronously inside request_stop
-            assert(census.quiet());
+            require(census.quiet());
         }
 
         // Cancel before spawn: an already-requested token destroys the task
@@ -767,12 +767,12 @@ namespace wry {
             std::atomic<int> destroyed{0};
             cancelable_after(source.get_token(), seconds(10),
                              cancelable_task(CancelableProbe{&destroyed}, &ran));
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(ran.load(std::memory_order_relaxed) == 0);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(ran.load(std::memory_order_relaxed) == 0);
             // The doomed-timer cleanup: the knote armed after the inline
             // cancellation is withdrawn inside spawn itself, so the frame is
             // gone before cancelable_after returns -- not at the deadline
-            assert(census.quiet());
+            require(census.quiet());
         }
 
         // Early fire vs install: a zero deadline races delivery against
@@ -827,18 +827,18 @@ namespace wry {
         SocketPair sockets;
         char message[] = "hello";
         [[maybe_unused]] ssize_t sent = ::send(sockets.writer(), message, 5, 0);
-        assert(sent == 5);
+        require(sent == 5);
 
         std::byte buffer[16];
         auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                         recv_some(sockets.reader(), buffer, sizeof buffer, 0));
-        assert(r.has_value() && (*r == 5) && (std::memcmp(buffer, "hello", 5) == 0));
+        require(r.has_value() && (*r == 5) && (std::memcmp(buffer, "hello", 5) == 0));
 
         // Peer close is readability; recv returns 0 (end of stream), engaged
         sockets.close_writer();
         auto r2 = co_await with_deadline(steady_clock::now() + seconds(10),
                                          recv_some(sockets.reader(), buffer, sizeof buffer, 0));
-        assert(r2.has_value() && (*r2 == 0));
+        require(r2.has_value() && (*r2 == 0));
         co_return;
     };
 
@@ -851,11 +851,11 @@ namespace wry {
         auto t0 = steady_clock::now();
         auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                         recv_some(sockets.reader(), buffer, sizeof buffer, 0));
-        assert(r.has_value() && (*r == 5) && (std::memcmp(buffer, "later", 5) == 0));
-        assert(steady_clock::now() - t0 < seconds(5));
+        require(r.has_value() && (*r == 5) && (std::memcmp(buffer, "later", 5) == 0));
+        require(steady_clock::now() - t0 < seconds(5));
 
         [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-        assert(cancelled == 0);
+        require(cancelled == 0);
         co_return;
     };
 
@@ -867,9 +867,9 @@ namespace wry {
                                         recv_some(sockets.reader(), buffer, sizeof buffer, 0));
         auto elapsed = steady_clock::now() - t0;
         // Timeout is the nullopt channel
-        assert(!r.has_value());
-        assert(elapsed >= milliseconds(45));
-        assert(elapsed < seconds(5));
+        require(!r.has_value());
+        require(elapsed >= milliseconds(45));
+        require(elapsed < seconds(5));
         co_return;
     };
 
@@ -879,7 +879,7 @@ namespace wry {
                                         recv_some(-1, buffer, sizeof buffer, 0));
         // A synchronous registration error is a completion, NOT a timeout:
         // engaged (unlike the deadline path), carrying -errno
-        assert(r.has_value() && (*r == -EBADF));
+        require(r.has_value() && (*r == -EBADF));
         co_return;
     };
 
@@ -903,10 +903,10 @@ namespace wry {
         std::ptrdiff_t cancelled = co_await nursery.join();
         auto elapsed = steady_clock::now() - t0;
 
-        assert(cancelled == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
-        assert(elapsed < seconds(2));
+        require(cancelled == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(elapsed < seconds(2));
         // Both CancelableKEventFrames (recv leaf + deadline timer) retired
         co_await census.drained();
         co_return;
@@ -920,12 +920,12 @@ namespace wry {
         // in milliseconds despite a 10 second deadline.
         SocketPair sockets;
         [[maybe_unused]] ssize_t sent = ::send(sockets.writer(), "x", 1, 0);
-        assert(sent == 1);
+        require(sent == 1);
 
         std::byte buffer[16];
         auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                         recv_some(sockets.reader(), buffer, sizeof buffer, 0));
-        assert(r.has_value() && (*r == 1));
+        require(r.has_value() && (*r == 1));
 
         // If the timer is only reaped when it fires, this is still 1 after
         // the census's one-second bound
@@ -1013,8 +1013,8 @@ namespace wry {
             auto t0 = steady_clock::now();
             auto r = co_await with_deadline(t0 + milliseconds(20), StopToValueSender{42 + i});
             // Completed at the deadline, and with the inner's value
-            assert(steady_clock::now() - t0 >= milliseconds(15));
-            assert(r.has_value() && (*r == 42 + i));
+            require(steady_clock::now() - t0 >= milliseconds(15));
+            require(r.has_value() && (*r == 42 + i));
         }
         co_await census.drained();
         co_return;
@@ -1029,16 +1029,16 @@ namespace wry {
         // A sender that completes inside start wins at once; the timer
         // entrant starts under the already-requested interior token
         auto r = co_await with_deadline(steady_clock::now() + seconds(10), execution::just(5));
-        assert(r.has_value() && (*r == 5));
+        require(r.has_value() && (*r == 5));
 
         // An inner that stops of its own accord is nullopt, delivered
         // without waiting for the deadline (the outer was not requested)
         auto s = co_await with_deadline(steady_clock::now() + seconds(10), wd_self_stopping());
-        assert(!s.has_value());
+        require(!s.has_value());
 
         // A void inner yields optional<monostate>
         auto v = co_await with_deadline(steady_clock::now() + seconds(10), cancelable_sleep(0.001));
-        assert(v.has_value());
+        require(v.has_value());
 
         // An error wins like a value
         bool caught = false;
@@ -1047,13 +1047,13 @@ namespace wry {
         } catch (std::runtime_error const&) {
             caught = true;
         }
-        assert(caught);
+        require(caught);
 
         // sync_wait takes it as a sender directly
         auto o = execution::sync_wait(with_deadline(steady_clock::now() + seconds(10), execution::just(7)));
-        assert(o.value() == std::optional<int>{7});
+        require(o.value() == std::optional<int>{7});
 
-        assert(steady_clock::now() - t0 < seconds(5));
+        require(steady_clock::now() - t0 < seconds(5));
         co_await census.drained();
         co_return;
     };
@@ -1100,8 +1100,8 @@ namespace wry {
             auto t0 = steady_clock::now();
             co_await cancelable_sleep(0.020);
             auto elapsed = steady_clock::now() - t0;
-            assert(elapsed >= milliseconds(15));
-            assert(elapsed < seconds(5));
+            require(elapsed >= milliseconds(15));
+            require(elapsed < seconds(5));
             co_await census.drained();
         }
 
@@ -1132,10 +1132,10 @@ namespace wry {
             std::ptrdiff_t cancelled = co_await nursery.join();
             auto elapsed = steady_clock::now() - t0;
 
-            assert(cancelled == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
-            assert(elapsed < seconds(2));
+            require(cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(elapsed < seconds(2));
             co_await census.drained();
         }
 
@@ -1150,10 +1150,10 @@ namespace wry {
             nursery.request_stop();  // interior source requested before the fork
             nursery.soon(sleep_child(10.0, &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(started.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(cancelled == 1);
+            require(started.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
             // The nursery retires inside the child's destroy, which spawn
             // runs before it releases the Frame: spin rather than assert
             co_await census.drained();
@@ -1283,10 +1283,10 @@ namespace wry {
             char message[] = "hello";
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                             send_some(sockets.writer(), message, 5, 0));
-            assert(r.has_value() && (*r == 5));
+            require(r.has_value() && (*r == 5));
             std::byte buffer[16];
             ssize_t n = ::recv(sockets.reader(), buffer, sizeof buffer, 0);
-            assert((n == 5) && (std::memcmp(buffer, "hello", 5) == 0));
+            require((n == 5) && (std::memcmp(buffer, "hello", 5) == 0));
             (void) n;
         }
 
@@ -1297,17 +1297,17 @@ namespace wry {
             make_nonblocking(sockets.writer());
             make_nonblocking(sockets.reader());
             size_t filled = fill_send_buffer(sockets.writer());
-            assert(filled > 0);
+            require(filled > 0);
             coroutine::Nursery nursery;
             nursery.soon(reactor_late_drain(sockets.reader(), filled + 5));
             char message[] = "later";
             auto t0 = steady_clock::now();
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                             send_some(sockets.writer(), message, 5, 0));
-            assert(r.has_value() && (*r == 5));
-            assert(steady_clock::now() - t0 < seconds(5));
+            require(r.has_value() && (*r == 5));
+            require(steady_clock::now() - t0 < seconds(5));
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 0);
+            require(cancelled == 0);
         }
 
         // Peer close: writability with EV_EOF, and send reports EPIPE in
@@ -1320,7 +1320,7 @@ namespace wry {
             char message[] = "x";
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                             send_some(sockets.writer(), message, 1, 0));
-            assert(r.has_value() && (*r == -EPIPE));
+            require(r.has_value() && (*r == -EPIPE));
         }
 
         // Bad descriptor: the registration fails synchronously, -EBADF
@@ -1328,7 +1328,7 @@ namespace wry {
             char message[] = "x";
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                             send_some(-1, message, 1, 0));
-            assert(r.has_value() && (*r == -EBADF));
+            require(r.has_value() && (*r == -EBADF));
         }
 
         // Parked cancel: a child blocked on a full socket unwinds promptly
@@ -1346,10 +1346,10 @@ namespace wry {
             auto t0 = steady_clock::now();
             nursery.request_stop();
             std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
-            assert(steady_clock::now() - t0 < seconds(2));
+            require(cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(steady_clock::now() - t0 < seconds(2));
             co_await census.drained();
         }
 
@@ -1371,29 +1371,29 @@ namespace wry {
             auto t0 = steady_clock::now();
             auto r = co_await with_deadline(steady_clock::now() + seconds(10),
                                             accept_one(listener._fd, nullptr, nullptr));
-            assert(r.has_value() && (*r >= 0));
-            assert(steady_clock::now() - t0 < seconds(5));
+            require(r.has_value() && (*r >= 0));
+            require(steady_clock::now() - t0 < seconds(5));
             int server = *r;
             [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 0);
-            assert(connect_result.load(std::memory_order_acquire) == 0);
-            assert(client != -1);
+            require(cancelled == 0);
+            require(connect_result.load(std::memory_order_acquire) == 0);
+            require(client != -1);
 
             char ping[] = "ping";
             auto s = co_await with_deadline(steady_clock::now() + seconds(10),
                                             send_some(client, ping, 4, 0));
-            assert(s.has_value() && (*s == 4));
+            require(s.has_value() && (*s == 4));
             std::byte buffer[16];
             auto v = co_await with_deadline(steady_clock::now() + seconds(10),
                                             recv_some(server, buffer, sizeof buffer, 0));
-            assert(v.has_value() && (*v == 4) && (std::memcmp(buffer, "ping", 4) == 0));
+            require(v.has_value() && (*v == 4) && (std::memcmp(buffer, "ping", 4) == 0));
             char pong[] = "pong";
             s = co_await with_deadline(steady_clock::now() + seconds(10),
                                        send_some(server, pong, 4, 0));
-            assert(s.has_value() && (*s == 4));
+            require(s.has_value() && (*s == 4));
             v = co_await with_deadline(steady_clock::now() + seconds(10),
                                        recv_some(client, buffer, sizeof buffer, 0));
-            assert(v.has_value() && (*v == 4) && (std::memcmp(buffer, "pong", 4) == 0));
+            require(v.has_value() && (*v == 4) && (std::memcmp(buffer, "pong", 4) == 0));
             ::close(client);
             ::close(server);
         }
@@ -1406,10 +1406,10 @@ namespace wry {
             std::string path = "/tmp/wry-kqueue-nobody-" + std::to_string(::getpid()) + ".sock";
             std::memcpy(address.sun_path, path.data(), path.size());
             int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-            assert(fd != -1);
+            require(fd != -1);
             make_nonblocking(fd);
             int r = co_await connect_to(fd, (sockaddr const*)&address, sizeof address);
-            assert(r == -ENOENT);
+            require(r == -ENOENT);
             ::close(fd);
         }
 
@@ -1419,9 +1419,9 @@ namespace wry {
             auto t0 = steady_clock::now();
             auto r = co_await with_deadline(t0 + milliseconds(50),
                                             accept_one(listener._fd, nullptr, nullptr));
-            assert(!r.has_value());
+            require(!r.has_value());
             auto elapsed = steady_clock::now() - t0;
-            assert((elapsed >= milliseconds(45)) && (elapsed < seconds(5)));
+            require((elapsed >= milliseconds(45)) && (elapsed < seconds(5)));
         }
 
         // Parked cancel: a child blocked in accept unwinds promptly
@@ -1436,10 +1436,10 @@ namespace wry {
             auto t0 = steady_clock::now();
             nursery.request_stop();
             std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
-            assert(steady_clock::now() - t0 < seconds(2));
+            require(cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(steady_clock::now() - t0 < seconds(2));
             co_await census.drained();
         }
 
@@ -1459,10 +1459,10 @@ namespace wry {
             nursery.request_stop();
             nursery.soon(recv_child(sockets.reader(), &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(started.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(cancelled == 1);
+            require(started.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
             co_await census.drained();
         }
 
@@ -1474,10 +1474,10 @@ namespace wry {
             nursery.soon(wd_recv_child(sockets.reader(), steady_clock::now() + seconds(10),
                                        &started, &destroyed, &resumed_past));
             std::ptrdiff_t cancelled = co_await nursery.join();
-            assert(cancelled == 1);
-            assert(started.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(cancelled == 1);
+            require(started.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
             co_await census.drained();
         }
 

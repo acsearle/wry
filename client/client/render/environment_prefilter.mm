@@ -276,7 +276,7 @@ namespace wry {
 
         id<MTLTexture> cube = prefilter_environment(device, library, queue, sky, @"test sky");
         auto levels = co_await read_back_cube(device, queue, cube);
-        assert(levels.size() == kEnvironmentPrefilterLevels);
+        require(levels.size() == kEnvironmentPrefilterLevels);
 
         for (size_t level = 0; level != levels.size(); ++level) {
             size_t nonfinite = 0;
@@ -292,9 +292,9 @@ namespace wry {
             if (nonfinite || worst_green > 1e-4f || worst_sum > 1e-3f)
                 printf("environment_prefilter: level %zu: %zu non-finite, |g - 1/4| <= %g, |r + b - 1| <= %g\n",
                        level, nonfinite, worst_green, worst_sum);
-            assert(nonfinite == 0);
-            assert(worst_green <= 1e-4f);
-            assert(worst_sum <= 1e-3f);   // fp32 sums of 16384 samples
+            require(nonfinite == 0);
+            require(worst_green <= 1e-4f);
+            require(worst_sum <= 1e-3f);   // fp32 sums of 16384 samples
         }
 
         // Level 0 against the source
@@ -323,7 +323,7 @@ namespace wry {
                 printf("environment_prefilter: level 0 face means of red off the source by %g "
                        "(poles %g %g, expected %g %g)\n",
                        worst, measured[0], measured[5], expected[0], expected[5]);
-            assert(worst <= 2e-3);
+            require(worst <= 2e-3);
         }
     };
 

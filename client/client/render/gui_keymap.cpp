@@ -354,39 +354,39 @@ namespace wry::gui {
     {
         // Printables: letters fold to the lowercase Event code but name
         // as the uppercase keycap.
-        assert(name_from_key('r') == StringView("R"));
-        assert(key_from_name(StringView("R")) == (uint32_t)'r');
-        assert(key_from_name(StringView("r")) == (uint32_t)'r');
-        assert(name_from_key('7') == StringView("7"));
-        assert(key_from_name(StringView("7")) == (uint32_t)'7');
-        assert(name_from_key('`') == StringView("`"));
-        assert(name_from_key('+') == StringView("+"));
+        require(name_from_key('r') == StringView("R"));
+        require(key_from_name(StringView("R")) == (uint32_t)'r');
+        require(key_from_name(StringView("r")) == (uint32_t)'r');
+        require(name_from_key('7') == StringView("7"));
+        require(key_from_name(StringView("7")) == (uint32_t)'7');
+        require(name_from_key('`') == StringView("`"));
+        require(name_from_key('+') == StringView("+"));
 
         // Space is spelled out.
-        assert(name_from_key(' ') == StringView("Space"));
-        assert(key_from_name(StringView("Space")) == (uint32_t)' ');
-        assert(key_from_name(StringView("space")) == (uint32_t)' ');
+        require(name_from_key(' ') == StringView("Space"));
+        require(key_from_name(StringView("Space")) == (uint32_t)' ');
+        require(key_from_name(StringView("space")) == (uint32_t)' ');
 
         // Named keys, case-insensitive parse.
-        assert(name_from_key(key::Tab) == StringView("Tab"));
-        assert(key_from_name(StringView("tab")) == key::Tab);
-        assert(name_from_key(key::ArrowUp) == StringView("Up"));
-        assert(key_from_name(StringView("UP")) == key::ArrowUp);
-        assert(name_from_key(key::PageDown) == StringView("PageDown"));
-        assert(key_from_name(StringView("pagedown")) == key::PageDown);
+        require(name_from_key(key::Tab) == StringView("Tab"));
+        require(key_from_name(StringView("tab")) == key::Tab);
+        require(name_from_key(key::ArrowUp) == StringView("Up"));
+        require(key_from_name(StringView("UP")) == key::ArrowUp);
+        require(name_from_key(key::PageDown) == StringView("PageDown"));
+        require(key_from_name(StringView("pagedown")) == key::PageDown);
 
         // Function keys.
-        assert(name_from_key(key::F1) == StringView("F1"));
-        assert(name_from_key(key::F1 + 11) == StringView("F12"));
-        assert(key_from_name(StringView("F12")) == key::F1 + 11);
-        assert(key_from_name(StringView("f1")) == key::F1);
-        assert(!key_from_name(StringView("F13")));
-        assert(!key_from_name(StringView("F0")));
+        require(name_from_key(key::F1) == StringView("F1"));
+        require(name_from_key(key::F1 + 11) == StringView("F12"));
+        require(key_from_name(StringView("F12")) == key::F1 + 11);
+        require(key_from_name(StringView("f1")) == key::F1);
+        require(!key_from_name(StringView("F13")));
+        require(!key_from_name(StringView("F0")));
 
         // Unnameable.
-        assert(name_from_key(key::Unknown).empty());
-        assert(!key_from_name(StringView("NoSuchKey")));
-        assert(!key_from_name(StringView("")));
+        require(name_from_key(key::Unknown).empty());
+        require(!key_from_name(StringView("NoSuchKey")));
+        require(!key_from_name(StringView("")));
 
         co_return;
     };
@@ -398,14 +398,14 @@ namespace wry::gui {
         // Round-trip a plain key and a modified key.
         {
             std::optional<KeyCombo> c = combo_from_string(StringView("R"));
-            assert(c && c->key == 'r' && c->mods == 0);
-            assert(string_from_combo(*c) == StringView("R"));
+            require(c && c->key == 'r' && c->mods == 0);
+            require(string_from_combo(*c) == StringView("R"));
         }
         {
             std::optional<KeyCombo> c =
                 combo_from_string(StringView("Shift+R"));
-            assert(c && c->key == 'r' && c->mods == M::Shift);
-            assert(string_from_combo(*c) == StringView("Shift+R"));
+            require(c && c->key == 'r' && c->mods == M::Shift);
+            require(string_from_combo(*c) == StringView("Shift+R"));
         }
 
         // Canonical emission order regardless of parse order; alias and
@@ -413,49 +413,49 @@ namespace wry::gui {
         {
             std::optional<KeyCombo> c =
                 combo_from_string(StringView("shift+control+p"));
-            assert(c && c->mods == (M::Shift | M::Ctrl));
-            assert(string_from_combo(*c) == StringView("Ctrl+Shift+P"));
+            require(c && c->mods == (M::Shift | M::Ctrl));
+            require(string_from_combo(*c) == StringView("Ctrl+Shift+P"));
         }
         {
             std::optional<KeyCombo> c =
                 combo_from_string(StringView("COMMAND+option+Tab"));
-            assert(c && c->key == key::Tab &&
+            require(c && c->key == key::Tab &&
                    c->mods == (M::Cmd | M::Alt));
-            assert(string_from_combo(*c) == StringView("Alt+Cmd+Tab"));
+            require(string_from_combo(*c) == StringView("Alt+Cmd+Tab"));
         }
 
         // The '+' key itself.
         {
             std::optional<KeyCombo> c =
                 combo_from_string(StringView("Shift++"));
-            assert(c && c->key == '+' && c->mods == M::Shift);
-            assert(string_from_combo(*c) == StringView("Shift++"));
+            require(c && c->key == '+' && c->mods == M::Shift);
+            require(string_from_combo(*c) == StringView("Shift++"));
         }
         {
             std::optional<KeyCombo> c = combo_from_string(StringView("+"));
-            assert(c && c->key == '+' && c->mods == 0);
+            require(c && c->key == '+' && c->mods == 0);
         }
 
         // Rejections: unknown key, unknown modifier, reserved, empty,
         // trailing '+'.
-        assert(!combo_from_string(StringView("")));
-        assert(!combo_from_string(StringView("Shift+")));
-        assert(!combo_from_string(StringView("Hyper+R")));
-        assert(!combo_from_string(StringView("Escape")));
-        assert(!combo_from_string(StringView("Shift+Escape")));
-        assert(!combo_from_string(StringView("Bogus")));
+        require(!combo_from_string(StringView("")));
+        require(!combo_from_string(StringView("Shift+")));
+        require(!combo_from_string(StringView("Hyper+R")));
+        require(!combo_from_string(StringView("Escape")));
+        require(!combo_from_string(StringView("Shift+Escape")));
+        require(!combo_from_string(StringView("Bogus")));
 
         // As a keystroke, the reserved key parses; the unnameable still
         // don't.
         {
             std::optional<KeyCombo> c = parse_combo(StringView("Escape"));
-            assert(c && c->key == key::Escape && c->mods == 0);
-            assert(string_from_combo(*c) == StringView("Escape"));
-            assert(!combo_is_bindable(*c));
+            require(c && c->key == key::Escape && c->mods == 0);
+            require(string_from_combo(*c) == StringView("Escape"));
+            require(!combo_is_bindable(*c));
         }
-        assert(parse_combo(StringView("Shift+R")) == combo_from_string(StringView("Shift+R")));
-        assert(!parse_combo(StringView("Bogus")));
-        assert(!parse_combo(StringView("Hyper+R")));
+        require(parse_combo(StringView("Shift+R")) == combo_from_string(StringView("Shift+R")));
+        require(!parse_combo(StringView("Bogus")));
+        require(!parse_combo(StringView("Hyper+R")));
 
         // combo_from_event masks Caps / Fn out.
         {
@@ -464,8 +464,8 @@ namespace wry::gui {
             e.key = 'r';
             e.mods.bits = M::Shift | M::Caps | M::Fn;
             KeyCombo c = combo_from_event(e);
-            assert(c.key == 'r' && c.mods == M::Shift);
-            assert(combo_is_bindable(c));
+            require(c.key == 'r' && c.mods == M::Shift);
+            require(combo_is_bindable(c));
         }
 
         co_return;
@@ -479,59 +479,59 @@ namespace wry::gui {
         for (size_t i = 0; i != action_count; ++i) {
             Action a = (Action)i;
             std::vector<KeyCombo> combos = m.combos_from_action(a);
-            assert(combos.size() == 1);
-            assert(m.action_from_combo(combos[0]) == a);
+            require(combos.size() == 1);
+            require(m.action_from_combo(combos[0]) == a);
         }
 
         // Ids round-trip.
         for (size_t i = 0; i != action_count; ++i) {
             Action a = (Action)i;
-            assert(action_from_id(id_from_action(a)) == a);
-            assert(!display_name_from_action(a).empty());
+            require(action_from_id(id_from_action(a)) == a);
+            require(!display_name_from_action(a).empty());
         }
-        assert(!action_from_id(StringView("no-such-action")));
+        require(!action_from_id(StringView("no-such-action")));
 
         // R activates rotate; Shift+R activates reverse_rotate; exact
         // modifier matching keeps them distinct.
         KeyCombo r = *combo_from_string(StringView("R"));
         KeyCombo shift_r = *combo_from_string(StringView("Shift+R"));
-        assert(m.action_from_combo(r) == Action::rotate);
-        assert(m.action_from_combo(shift_r) == Action::reverse_rotate);
+        require(m.action_from_combo(r) == Action::rotate);
+        require(m.action_from_combo(shift_r) == Action::reverse_rotate);
 
         // Binding steals: bind R to flip_horizontal and rotate loses it.
         m.bind(r, Action::flip_horizontal);
-        assert(m.action_from_combo(r) == Action::flip_horizontal);
-        assert(m.combos_from_action(Action::rotate).empty());
+        require(m.action_from_combo(r) == Action::flip_horizontal);
+        require(m.combos_from_action(Action::rotate).empty());
         // flip_horizontal now has both its default H and the stolen R.
-        assert(m.combos_from_action(Action::flip_horizontal).size() == 2);
+        require(m.combos_from_action(Action::flip_horizontal).size() == 2);
 
         // One action, several keys: add F5 to rotate as well.
         KeyCombo f5 = *combo_from_string(StringView("F5"));
         m.bind(f5, Action::rotate);
         KeyCombo f6 = *combo_from_string(StringView("F6"));
         m.bind(f6, Action::rotate);
-        assert(m.combos_from_action(Action::rotate).size() == 2);
-        assert(m.action_from_combo(f5) == Action::rotate);
-        assert(m.action_from_combo(f6) == Action::rotate);
+        require(m.combos_from_action(Action::rotate).size() == 2);
+        require(m.action_from_combo(f5) == Action::rotate);
+        require(m.action_from_combo(f6) == Action::rotate);
 
         // unbind / clear_action.
         m.unbind(f5);
-        assert(!m.action_from_combo(f5));
-        assert(m.combos_from_action(Action::rotate).size() == 1);
+        require(!m.action_from_combo(f5));
+        require(m.combos_from_action(Action::rotate).size() == 1);
         m.clear_action(Action::flip_horizontal);
-        assert(m.combos_from_action(Action::flip_horizontal).empty());
-        assert(!m.action_from_combo(r));
+        require(m.combos_from_action(Action::flip_horizontal).empty());
+        require(!m.action_from_combo(r));
 
         // Unbindable combos are refused.
         KeyCombo esc{key::Escape, 0};
         m.bind(esc, Action::rotate);
-        assert(!m.action_from_combo(esc));
+        require(!m.action_from_combo(esc));
 
         // Repeat policy: cycles repeat, toggles don't.
-        assert(action_fires_on_repeat(Action::rotate));
-        assert(action_fires_on_repeat(Action::reverse_rotate));
-        assert(!action_fires_on_repeat(Action::toggle_map));
-        assert(!action_fires_on_repeat(Action::toggle_console));
+        require(action_fires_on_repeat(Action::rotate));
+        require(action_fires_on_repeat(Action::reverse_rotate));
+        require(!action_fires_on_repeat(Action::toggle_map));
+        require(!action_fires_on_repeat(Action::toggle_console));
 
         co_return;
     };

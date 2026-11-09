@@ -92,9 +92,9 @@ namespace wry {
         HeapString const* a{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &a_emplaced)};
         HeapString const* b{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &b_emplaced)};
 
-        assert(a == b);
-        assert(a_emplaced);
-        assert(!b_emplaced);
+        require(a == b);
+        require(a_emplaced);
+        require(!b_emplaced);
 
         co_await coroutine::DebugWaitForCollectionCycles{3};
         // SAFETY: a and b are now dangling
@@ -104,8 +104,8 @@ namespace wry {
         HeapString const* c{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &c_emplaced)};
         HeapString const* d{_heap_string_ctrie_mutator_find_upgrade_or_emplace("one", &d_emplaced)};
 
-        assert(c == d);
-        assert(!d_emplaced);
+        require(c == d);
+        require(!d_emplaced);
 
         // The first "one" was collected iff the re-intern EMPLACED rather
         // than upgraded.  Comparing addresses (the old assert(a != c)) is
@@ -113,7 +113,7 @@ namespace wry {
         // the same block straight back for c -- routine now that
         // reclamation is prompt, and masked in Debug only by ASan's
         // free-quarantine.
-        assert(c_emplaced);
+        require(c_emplaced);
 
         co_return;
     };

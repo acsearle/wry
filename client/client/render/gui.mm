@@ -2116,7 +2116,7 @@ namespace wry {
         {
             char pattern[] = "keybind-test-XXXXXX";
             char* dir = mkdtemp(pattern);
-            assert(dir);
+            require(dir);
 
             wry::GuiContext gc;
             gc.settings_paths = wry::settings_paths(dir);
@@ -2139,55 +2139,55 @@ namespace wry {
             // event is consumed and capture disarms.
             KeyCombo f5 = *combo_from_string(StringView("F5"));
             overlay.begin_capture(Action::toggle_points);
-            assert(overlay.is_capturing());
-            CHECK(overlay.on_event(key_event(key::F1 + 4, 0)));   // F5
-            assert(!overlay.is_capturing());
-            assert(keymap.action_from_combo(f5) == Action::toggle_points);
+            require(overlay.is_capturing());
+            require(overlay.on_event(key_event(key::F1 + 4, 0)));   // F5
+            require(!overlay.is_capturing());
+            require(keymap.action_from_combo(f5) == Action::toggle_points);
 
             // Persisted: reload the file and F5 -> toggle_points survives.
             {
                 String text = string_from_file(gc.settings_paths.settings);
                 Settings reloaded = settings_from_json(text, nullptr);
-                assert(reloaded.keymap.action_from_combo(f5) ==
+                require(reloaded.keymap.action_from_combo(f5) ==
                        Action::toggle_points);
             }
 
             // Escape cancels without binding.
             overlay.begin_capture(Action::toggle_points);
-            CHECK(overlay.on_event(key_event(key::Escape, 0)));
-            assert(!overlay.is_capturing());
+            require(overlay.on_event(key_event(key::Escape, 0)));
+            require(!overlay.is_capturing());
             KeyCombo f6 = *combo_from_string(StringView("F6"));
-            assert(!keymap.action_from_combo(f6));
+            require(!keymap.action_from_combo(f6));
 
             // A key auto-repeat while armed is swallowed but does not bind.
             overlay.begin_capture(Action::toggle_points);
-            CHECK(overlay.on_event(key_event(key::F1 + 5, 0, /*repeat*/true)));
-            assert(overlay.is_capturing());   // still waiting for a real press
-            assert(!keymap.action_from_combo(f6));
+            require(overlay.on_event(key_event(key::F1 + 5, 0, /*repeat*/true)));
+            require(overlay.is_capturing());   // still waiting for a real press
+            require(!keymap.action_from_combo(f6));
             overlay.on_event(key_event(key::Escape, 0));
 
             // Capture steals a combo from another action.  R defaults to
             // rotate; bind it to flip_vertical via capture.
             KeyCombo r = *combo_from_string(StringView("R"));
-            assert(keymap.action_from_combo(r) == Action::rotate);
+            require(keymap.action_from_combo(r) == Action::rotate);
             overlay.begin_capture(Action::flip_vertical);
-            CHECK(overlay.on_event(key_event('r', 0)));
-            assert(keymap.action_from_combo(r) == Action::flip_vertical);
-            assert(keymap.combos_from_action(Action::rotate).empty());
+            require(overlay.on_event(key_event('r', 0)));
+            require(keymap.action_from_combo(r) == Action::flip_vertical);
+            require(keymap.combos_from_action(Action::rotate).empty());
 
             // A mouse click while armed cancels.
             overlay.begin_capture(Action::rotate);
             Event click{};
             click.kind = WryEventKindMouseDown;
             click.button = MouseButton::Left;
-            CHECK(overlay.on_event(click));
-            assert(!overlay.is_capturing());
+            require(overlay.on_event(click));
+            require(!overlay.is_capturing());
 
             // Reserved key (Escape is handled as cancel; try a truly
             // unmapped key): capture stays armed, nothing bound.
             overlay.begin_capture(Action::rotate);
-            CHECK(overlay.on_event(key_event(key::Unknown, 0)));
-            assert(overlay.is_capturing());
+            require(overlay.on_event(key_event(key::Unknown, 0)));
+            require(overlay.is_capturing());
             overlay.on_event(key_event(key::Escape, 0));
 
             std::error_code ec;

@@ -21,9 +21,9 @@ namespace wry {
         // empty stack
         {
             S const* s = nullptr;
-            assert(S::is_empty(s));
-            assert(S::size(s) == 0);
-            assert(S::drop(s, 3) == nullptr);
+            require(S::is_empty(s));
+            require(S::size(s) == 0);
+            require(S::drop(s, 3) == nullptr);
         }
 
         mutator_repin();
@@ -35,22 +35,22 @@ namespace wry {
             s = S::push(s, 2);
             s = S::push(s, 3);          // [3, 2, 1]
 
-            assert(!S::is_empty(s));
-            assert(S::size(s) == 3);
-            assert(S::peek(s) == 3);
+            require(!S::is_empty(s));
+            require(S::size(s) == 3);
+            require(S::peek(s) == 3);
 
             // at() indexes from the top outward
-            assert(S::at(s, 0) == 3);
-            assert(S::at(s, 1) == 2);
-            assert(S::at(s, 2) == 1);
+            require(S::at(s, 0) == 3);
+            require(S::at(s, 1) == 2);
+            require(S::at(s, 2) == 1);
 
             // tail walks toward the bottom, last-in-first-out
             s = S::tail(s);
-            assert(S::peek(s) == 2);
+            require(S::peek(s) == 2);
             s = S::tail(s);
-            assert(S::peek(s) == 1);
+            require(S::peek(s) == 1);
             s = S::tail(s);
-            assert(S::is_empty(s));
+            require(S::is_empty(s));
         }
 
         mutator_repin();
@@ -62,16 +62,16 @@ namespace wry {
             a = S::push(a, 20);         // a = [20, 10]
 
             S const* b = S::tail(a);    // b shares the [10] tail of a
-            assert(S::size(b) == 1);
-            assert(S::peek(b) == 10);
-            assert(S::size(a) == 2);    // a is unaffected
-            assert(S::peek(a) == 20);
+            require(S::size(b) == 1);
+            require(S::peek(b) == 10);
+            require(S::size(a) == 2);    // a is unaffected
+            require(S::peek(a) == 20);
 
             // drop is the n-step tail
-            assert(S::drop(a, 0) == a);
-            assert(S::size(S::drop(a, 1)) == 1);
-            assert(S::is_empty(S::drop(a, 2)));
-            assert(S::is_empty(S::drop(a, 100)));
+            require(S::drop(a, 0) == a);
+            require(S::size(S::drop(a, 1)) == 1);
+            require(S::is_empty(S::drop(a, 2)));
+            require(S::is_empty(S::drop(a, 100)));
         }
 
         co_return;

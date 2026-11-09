@@ -20,9 +20,9 @@ namespace wry {
 
         {
             Table<int, int> t;
-            assert(t.empty());
-            assert(t.size() == 0);
-            assert(t.begin() == t.end());
+            require(t.empty());
+            require(t.size() == 0);
+            require(t.begin() == t.end());
         }
         
         {
@@ -33,11 +33,11 @@ namespace wry {
             t._inner._invariant();
 
             for (int k = 0; k != N; ++k) {
-                assert(t.size() == k);
+                require(t.size() == k);
                 auto v = k % 3;
                 auto [p, f] = t.insert_or_assign(k, v);
-                assert((*p == std::pair<const int, int>(k, v)));
-                assert(f);
+                require((*p == std::pair<const int, int>(k, v)));
+                require(f);
             }
 
             t._inner._invariant();
@@ -45,14 +45,14 @@ namespace wry {
             [[maybe_unused]] auto x = t._inner.total_displacement();
             //printf("avg disp %g\n", x / (double) t.size());
 
-            assert(t.size() == N);
+            require(t.size() == N);
 
             for (int k = 0; k != N; ++k) {
                 auto v = k % 3;
                 auto p = t.find(k);
-                assert(p != t.end());
-                assert((*p == std::pair<const int, int>(k, v)));
-                assert(t.size() == N);
+                require(p != t.end());
+                require((*p == std::pair<const int, int>(k, v)));
+                require(t.size() == N);
                
                 /*
                 printf("{%llu, {%d, %d}} [%zd]/%llu\n",
@@ -66,8 +66,8 @@ namespace wry {
             
             for (int k = N; k != 2 * N; ++k) {
                 auto p = t.find(k);
-                assert(p == t.end());
-                assert(t.size() == N);
+                require(p == t.end());
+                require(t.size() == N);
             }
             
             t._inner._invariant();
@@ -77,15 +77,15 @@ namespace wry {
                 
                 t._inner._invariant();
 
-                assert(t.size() == N - k);
+                require(t.size() == N - k);
                 auto n = t.erase(k);
-                assert(n == 1);
+                require(n == 1);
             }
             
             t._inner._invariant();
             
-            assert(t.size() == 0);
-            assert(t.empty());
+            require(t.size() == 0);
+            require(t.empty());
             
         }
         
@@ -101,14 +101,14 @@ namespace wry {
                 t.insert_or_assign(k, k % 3);
                 k = j;
                 auto n = t.erase(k);
-                assert(n == 1);
+                require(n == 1);
             }
-            assert(t.size() == N);
+            require(t.size() == N);
             for (int k = N; k != 2*N; ++k) {
                 auto n = t.erase(k);
-                assert(n == 1);
+                require(n == 1);
             }
-            assert(t.size() == 0);
+            require(t.size() == 0);
 
         }
         
@@ -118,18 +118,18 @@ namespace wry {
             for (int j = 0; j != N; ++j) {
                 int k = j >> 1;
                 auto [p, f] = t.insert_or_assign(k, j);
-                assert(f != (bool) (j & 1)); // insert when even, assign when odd
+                require(f != (bool) (j & 1)); // insert when even, assign when odd
             }
-            assert(t.size() == N/2);
+            require(t.size() == N/2);
             int n = 0;
             for (auto [k, v] : t) {
-                assert(k == (v >> 1));
-                assert(v & 1); // we did overwrite
+                require(k == (v >> 1));
+                require(v & 1); // we did overwrite
                 ++n;
             }
-            assert(n == t.size());
+            require(n == t.size());
             t.clear();
-            assert(t.empty());
+            require(t.empty());
         }
         
         {
@@ -138,18 +138,18 @@ namespace wry {
             for (int j = 0; j != N; ++j) {
                 int k = j >> 1;
                 auto [p, f] = t.insert(std::pair<const int, int>(k, j));
-                assert(f != (bool) (j & 1)); // insert when even, nothing when odd
+                require(f != (bool) (j & 1)); // insert when even, nothing when odd
             }
-            assert(t.size() == N/2);
+            require(t.size() == N/2);
             int n = 0;
             for (auto [k, v] : t) {
-                assert(k == (v >> 1));
-                assert(!(v & 1)); // we did not overwite
+                require(k == (v >> 1));
+                require(!(v & 1)); // we did not overwite
                 ++n;
             }
-            assert(n == t.size());
+            require(n == t.size());
             t.clear();
-            assert(t.empty());
+            require(t.empty());
         }
         
         co_return;

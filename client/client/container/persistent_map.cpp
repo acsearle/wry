@@ -43,24 +43,24 @@ namespace wry {
         // in core/hash.hpp; regenerate the same way if they are ever
         // deliberately changed).
         {
-            assert(A::entry_hash_of(1, 2) == 0xbcd9dbb49673066bull);
+            require(A::entry_hash_of(1, 2) == 0xbcd9dbb49673066bull);
             std::map<uint64_t, int> m{{1, 2}, {3, 4}, {((uint64_t)1 << 40) | 5, 6}};
-            assert(oracle_hash<A>(m) == 0xc0f6fb6c039ed651ull);
+            require(oracle_hash<A>(m) == 0xc0f6fb6c039ed651ull);
             const A* t = nullptr;
             for (auto [k, v] : m)
                 t = A::insert(t, k, v);
-            assert(content_hash(t) == 0xc0f6fb6c039ed651ull);
+            require(content_hash(t) == 0xc0f6fb6c039ed651ull);
             __uint128_t codes[] = { (__uint128_t)7,
                                     ((__uint128_t)5 << 64) | 9,
                                     ((__uint128_t)1 << 70) | 3 };
             const S* s = S::build_from_sorted(std::begin(codes), std::end(codes));
-            assert(content_hash(s) == 0x41e0cf37b76bd5fbull);
+            require(content_hash(s) == 0x41e0cf37b76bd5fbull);
         }
 
         // Empty is zero; a singleton is its entry.
-        assert(content_hash((const A*)nullptr) == 0);
-        assert((PersistentMap<uint64_t, int>{}.hash() == 0));
-        assert(content_hash(A::make_singleton(5, 50)) == A::entry_hash_of(5, 50));
+        require(content_hash((const A*)nullptr) == 0);
+        require((PersistentMap<uint64_t, int>{}.hash() == 0));
+        require(content_hash(A::make_singleton(5, 50)) == A::entry_hash_of(5, 50));
 
         // Non-linearity: moving one unit from cell a to cell b changes the
         // sum, in both directions and for the degenerate equal case; and a
@@ -78,18 +78,18 @@ namespace wry {
                 int v = std::rand() % 1000, w = std::rand() % 1000;
                 std::map<uint64_t, int> x{{a, v + 1}, {b, w}};
                 std::map<uint64_t, int> y{{a, v}, {b, w + 1}};
-                assert(content_hash(build(x)) != content_hash(build(y)));
+                require(content_hash(build(x)) != content_hash(build(y)));
                 // and against the key-swapped form
                 std::map<uint64_t, int> z{{a, w}, {b, v + 1}};
                 if (v + 1 != w)
-                    assert(content_hash(build(x)) != content_hash(build(z)));
+                    require(content_hash(build(x)) != content_hash(build(z)));
             }
             // Two sets differing by one member differ.
             const S* s1 = S::insert(nullptr, 1, std::monostate{});
             const S* s2 = S::insert(s1, 2, std::monostate{});
             const S* s3 = S::insert(s1, 3, std::monostate{});
-            assert(content_hash(s1) != content_hash(s2));
-            assert(content_hash(s2) != content_hash(s3));
+            require(content_hash(s1) != content_hash(s2));
+            require(content_hash(s2) != content_hash(s3));
         }
 
         // Random history against the oracle at every step: the map and
@@ -108,11 +108,11 @@ namespace wry {
                     int victim = -1;
                     bool did_erase = p.try_erase(k, victim);
                     auto it = oracle.find(k);
-                    assert(did_erase == (it != oracle.end()));
+                    require(did_erase == (it != oracle.end()));
                     if (did_erase)
                         oracle.erase(it);
                 }
-                assert(p.hash() == oracle_hash<A>(oracle));
+                require(p.hash() == oracle_hash<A>(oracle));
                 if (!(i & 63))
                     A::assert_canonical(p._inner ? &*p._inner : nullptr);
                 if (!(i & 255))
@@ -128,9 +128,9 @@ namespace wry {
             const A* shuffled = nullptr;
             for (auto [k, v] : entries)
                 shuffled = A::insert(shuffled, k, v);
-            assert(content_hash(shuffled) == p.hash());
+            require(content_hash(shuffled) == p.hash());
             const A* sorted = A::build_from_sorted(oracle.begin(), oracle.end());
-            assert(content_hash(sorted) == p.hash());
+            require(content_hash(sorted) == p.hash());
             {
                 auto guard = pin_global_epoch();
                 std::vector<std::pair<uint64_t, int>> mods(oracle.begin(), oracle.end());
@@ -140,7 +140,7 @@ namespace wry {
                 };
                 const A* rebuilt = co_await A::coroutine_parallel_rebuild(
                     nullptr, std::span(std::as_const(mods)), 0, mods.size(), combine);
-                assert(content_hash(rebuilt) == p.hash());
+                require(content_hash(rebuilt) == p.hash());
                 // and a rebuild that erases half of it, against the oracle
                 std::map<uint64_t, int> half = oracle;
                 std::vector<std::pair<uint64_t, bool>> erasures;
@@ -150,12 +150,12 @@ namespace wry {
                         half.erase(k);
                     }
                 auto erase = [](const int* old, const bool&) -> std::optional<int> {
-                    assert(old);
+                    require(old);
                     return std::nullopt;
                 };
                 const A* halved = co_await A::coroutine_parallel_rebuild(
                     sorted, std::span(std::as_const(erasures)), 0, erasures.size(), erase);
-                assert(content_hash(halved) == oracle_hash<A>(half));
+                require(content_hash(halved) == oracle_hash<A>(half));
                 A::assert_canonical(halved);
                 unpin_global_epoch(guard);
             }
@@ -170,15 +170,15 @@ namespace wry {
             Inner i1; i1.set(3); i1.set(1); i1.set(2);
             Inner i2; i2.set(1); i2.set(2); i2.set(3);
             Inner i3; i3.set(1); i3.set(2); i3.set(4);
-            assert(i1.hash() == i2.hash());
-            assert(i1.hash() != i3.hash());
-            assert(i1.hash() == Inner::hash_of(1) + Inner::hash_of(2) + Inner::hash_of(3));
+            require(i1.hash() == i2.hash());
+            require(i1.hash() != i3.hash());
+            require(i1.hash() == Inner::hash_of(1) + Inner::hash_of(2) + Inner::hash_of(3));
             Outer o1; o1.set(10, i1); o1.set(20, i3);
             Outer o2; o2.set(20, i3); o2.set(10, i2);
             Outer o3; o3.set(10, i3); o3.set(20, i1);
-            assert(o1.hash() == o2.hash());
-            assert(o1.hash() != o3.hash());
-            assert(o1.hash() == Outer::AMT::entry_hash_of(10, i1) + Outer::AMT::entry_hash_of(20, i3));
+            require(o1.hash() == o2.hash());
+            require(o1.hash() != o3.hash());
+            require(o1.hash() == Outer::AMT::entry_hash_of(10, i1) + Outer::AMT::entry_hash_of(20, i3));
         }
 
         co_return;
@@ -193,8 +193,8 @@ namespace wry {
             PersistentMap<uint64_t, int> m;
             m.set(k, v);
             
-            assert(m.contains(k));
-            assert(!m.contains(k+1));            
+            require(m.contains(k));
+            require(!m.contains(k+1));            
         }
         
         mutator_repin();
@@ -240,21 +240,21 @@ namespace wry {
                     ref = A::insert(ref, k, v);
                 const A* actual = p._inner ? &*p._inner : nullptr;
                 A::assert_canonical(actual);
-                assert(A::same_shape(actual, ref));
-                assert(p.size() == m.size());
-                assert(p.hash() == oracle_hash<A>(m));
-                assert(p.hash() == content_hash(ref));
+                require(A::same_shape(actual, ref));
+                require(p.size() == m.size());
+                require(p.hash() == oracle_hash<A>(m));
+                require(p.hash() == content_hash(ref));
             }
             for (uint64_t k = 0; k != N; ++k) {
                 if (m.count(k)) {
                     int v = {};
                     bool result = p.try_get(k, v);
-                    assert(result);
-                    assert(v == m[k]);
+                    require(result);
+                    require(v == m[k]);
                 } else {
                     int v = {};
                     bool present = p.try_get(k, v);
-                    assert(!present);
+                    require(!present);
                     (void) present;
                 }
                 if (!(k & 255))
@@ -330,16 +330,16 @@ namespace wry {
                 int v = 0;
                 bool has = result && result->try_get(k, v);
                 auto it = expect.find(k);
-                assert(has == (it != expect.end()));
+                require(has == (it != expect.end()));
                 if (has)
-                    assert(v == it->second);
+                    require(v == it->second);
                 // source must be untouched by the rebuild
                 int sv = 0;
                 bool shas = src && src->try_get(k, sv);
                 auto sit = oracle.find(k);
-                assert(shas == (sit != oracle.end()));
+                require(shas == (sit != oracle.end()));
                 if (shas)
-                    assert(sv == sit->second);
+                    require(sv == sit->second);
             }
 
             // Canonical shape: whichever mix of serial and parallel paths the
@@ -350,11 +350,11 @@ namespace wry {
                 const A* ref = nullptr;
                 for (auto [k, v] : expect)
                     ref = A::insert(ref, k, v);
-                assert(A::same_shape(result, ref));
-                assert(content_hash(result) == content_hash(ref));
+                require(A::same_shape(result, ref));
+                require(content_hash(result) == content_hash(ref));
             }
-            assert((result ? result->size() : 0) == expect.size());
-            assert(content_hash(result) == oracle_hash<A>(expect));
+            require((result ? result->size() : 0) == expect.size());
+            require(content_hash(result) == oracle_hash<A>(expect));
 
             if (!(iter & 7))
                 mutator_repin();
@@ -422,15 +422,15 @@ namespace wry {
                 int v = 0;
                 bool has = result.try_get(k, v);
                 auto it = expect.find(k);
-                assert(has == (it != expect.end()));
+                require(has == (it != expect.end()));
                 if (has)
-                    assert(v == it->second);
+                    require(v == it->second);
                 int sv = 0;
                 bool shas = src.try_get(k, sv);
                 auto sit = oracle.find(k);
-                assert(shas == (sit != oracle.end()));
+                require(shas == (sit != oracle.end()));
                 if (shas)
-                    assert(sv == sit->second);
+                    require(sv == sit->second);
             }
 
             // Canonical shape, as in amt_parallel_rebuild.
@@ -441,11 +441,11 @@ namespace wry {
                     ref = A::insert(ref, k, v);
                 const A* actual = result._inner ? &*result._inner : nullptr;
                 A::assert_canonical(actual);
-                assert(A::same_shape(actual, ref));
-                assert(result.hash() == content_hash(ref));
+                require(A::same_shape(actual, ref));
+                require(result.hash() == content_hash(ref));
             }
-            assert(result.size() == expect.size());
-            assert(result.hash() == oracle_hash<PM::AMT>(expect));
+            require(result.size() == expect.size());
+            require(result.hash() == oracle_hash<PM::AMT>(expect));
 
             if (!(iter & 7))
                 mutator_repin();
@@ -476,8 +476,8 @@ namespace wry {
         auto erase = [](const A* root, uint64_t k) -> const A* {
             int victim = -1;
             auto [next, did_erase] = root->clone_and_erase_key(k, victim);
-            assert(did_erase);
-            assert(victim == (int)k);
+            require(did_erase);
+            require(victim == (int)k);
             return next;
         };
 
@@ -485,7 +485,7 @@ namespace wry {
         {
             const A* t = build({7});
             const A* u = erase(t, 7);
-            assert(u == nullptr);
+            require(u == nullptr);
             (void) u;
         }
 
@@ -497,15 +497,15 @@ namespace wry {
             const A* t = build({0, 32});
             const A* u = erase(t, 32);
             A::assert_canonical(u);
-            assert(A::same_shape(u, build({0})));
-            assert(!A::same_shape(u, t));
-            assert(t->size() == 2 && u->size() == 1);
+            require(A::same_shape(u, build({0})));
+            require(!A::same_shape(u, t));
+            require(t->size() == 2 && u->size() == 1);
             int v = 0;
             bool in_t = t->try_get(32, v);
-            assert(in_t && v == 32);
+            require(in_t && v == 32);
             (void) in_t;
             bool in_u = u->try_get(32, v);
-            assert(!in_u);
+            require(!in_u);
             (void) in_u;
         }
 
@@ -514,7 +514,7 @@ namespace wry {
             const A* t = build({0, 32, 64});
             const A* u = erase(t, 32);
             A::assert_canonical(u);
-            assert(A::same_shape(u, build({0, 64})));
+            require(A::same_shape(u, build({0, 64})));
         }
 
         // Collapse across levels.  Emptying the far leaf collapses the root
@@ -524,14 +524,14 @@ namespace wry {
             uint64_t far = (uint64_t)1 << 40;
             const A* t = build({0, 32, far});
             A::assert_canonical(t);
-            assert(t->size() == 3);
+            require(t->size() == 3);
             const A* u = erase(t, far);
             A::assert_canonical(u);
-            assert(A::same_shape(u, build({0, 32})));
-            assert(u->size() == 2);
+            require(A::same_shape(u, build({0, 32})));
+            require(u->size() == 2);
             const A* w = erase(erase(t, 0), 32);
             A::assert_canonical(w);
-            assert(A::same_shape(w, build({far})));
+            require(A::same_shape(w, build({far})));
         }
 
         // Partial leaf erase keeps the leaf.
@@ -539,7 +539,7 @@ namespace wry {
             const A* t = build({3, 5});
             const A* u = erase(t, 3);
             A::assert_canonical(u);
-            assert(A::same_shape(u, build({5})));
+            require(A::same_shape(u, build({5})));
         }
 
         // Insertion order does not matter.
@@ -547,7 +547,7 @@ namespace wry {
             const A* a = build({1, 40, 3000, 9, (uint64_t)1 << 50, 41});
             const A* b = build({41, (uint64_t)1 << 50, 9, 3000, 40, 1});
             A::assert_canonical(a);
-            assert(A::same_shape(a, b));
+            require(A::same_shape(a, b));
         }
 
         // Randomized: interleaved sets and erases through a rooted
@@ -567,9 +567,9 @@ namespace wry {
                     int victim = -1;
                     bool did_erase = p.try_erase(k, victim);
                     auto it = oracle.find(k);
-                    assert(did_erase == (it != oracle.end()));
+                    require(did_erase == (it != oracle.end()));
                     if (did_erase) {
-                        assert(victim == it->second);
+                        require(victim == it->second);
                         oracle.erase(it);
                     }
                 }
@@ -578,9 +578,9 @@ namespace wry {
                     ref = A::insert(ref, ok, ov);
                 const A* actual = p._inner ? &*p._inner : nullptr;
                 A::assert_canonical(actual);
-                assert(A::same_shape(actual, ref));
-                assert(p.size() == oracle.size());
-                assert(p.hash() == oracle_hash<A>(oracle));
+                require(A::same_shape(actual, ref));
+                require(p.size() == oracle.size());
+                require(p.hash() == oracle_hash<A>(oracle));
                 if (!(i & 255))
                     mutator_repin();
             }
@@ -623,48 +623,48 @@ namespace wry {
                 b.push(k, v);
             const A* built = b.finish();
             A::assert_canonical(built);
-            assert((built ? built->size() : 0) == oracle.size());
+            require((built ? built->size() : 0) == oracle.size());
 
             std::vector<std::pair<uint64_t, int>> entries(oracle.begin(), oracle.end());
             shuffle(entries);
             const A* ref = nullptr;
             for (auto [k, v] : entries)
                 ref = A::insert(ref, k, v);
-            assert(A::same_shape(built, ref));
-            assert(content_hash(built) == oracle_hash<A>(oracle));
-            assert(content_hash(built) == content_hash(ref));
+            require(A::same_shape(built, ref));
+            require(content_hash(built) == oracle_hash<A>(oracle));
+            require(content_hash(built) == content_hash(ref));
 
             for (auto [k, v] : oracle) {
                 int u = 0;
                 bool present = built->try_get(k, u);
-                assert(present && u == v);
+                require(present && u == v);
                 (void) present;
             }
 
             std::vector<uint64_t> walked;
             if (built)
                 built->for_each([&walked](uint64_t k, int) { walked.push_back(k); });
-            assert(walked.size() == oracle.size());
+            require(walked.size() == oracle.size());
             size_t i = 0;
             for (auto [k, v] : oracle) {
-                assert(walked[i] == k);
+                require(walked[i] == k);
                 ++i;
             }
 
             std::vector<std::pair<uint64_t, int>> sorted(oracle.begin(), oracle.end());
-            assert(A::same_shape(A::build_from_sorted(sorted.begin(), sorted.end()), built));
+            require(A::same_shape(A::build_from_sorted(sorted.begin(), sorted.end()), built));
 
             A::SortedBuilder b2;
             if (built)
                 built->for_each([&b2](uint64_t k, int v) { b2.push(k, v); });
-            CHECK(A::same_shape(b2.finish(), built));
+            require(A::same_shape(b2.finish(), built));
         };
 
         // Edges: empty, singleton, one block, sibling leaves, divergence at
         // the top symbol (4 bits wide at shift 60), the top bit alone.
         {
             A::SortedBuilder b;
-            assert(b.finish() == nullptr);
+            require(b.finish() == nullptr);
             check_map({});
             check_map({{5, 50}});
             check_map({{0, 1}, {31, 2}});
@@ -724,22 +724,22 @@ namespace wry {
             std::vector<__uint128_t> codes(oracle.begin(), oracle.end());
             const S* built = S::build_from_sorted(codes.begin(), codes.end());
             S::assert_canonical(built);
-            assert((built ? built->size() : 0) == oracle.size());
+            require((built ? built->size() : 0) == oracle.size());
             shuffle(codes);
             const S* ref = nullptr;
             for (__uint128_t k : codes)
                 ref = S::insert(ref, k, std::monostate{});
-            assert(S::same_shape(built, ref));
+            require(S::same_shape(built, ref));
             {
                 uint64_t sum = 0;
                 for (__uint128_t k : oracle)
                     sum += S::entry_hash_of(k, std::monostate{});
-                assert(content_hash(built) == sum);
-                assert(content_hash(ref) == sum);
+                require(content_hash(built) == sum);
+                require(content_hash(ref) == sum);
             }
             for (__uint128_t k : oracle)
-                assert(built->contains(k));
-            assert(!built || !built->contains(((__uint128_t)9 << 64) | 1));
+                require(built->contains(k));
+            require(!built || !built->contains(((__uint128_t)9 << 64) | 1));
             if (!(iter & 7))
                 mutator_repin();
         }

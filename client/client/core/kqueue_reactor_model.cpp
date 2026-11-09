@@ -1135,21 +1135,21 @@ namespace wry {
                             ra ? "RA" : "SC", t.states, t.transitions, t.terminals,
                             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
                             t.events);
-            assert(!t.failed);
+            require(!t.failed);
             uint32_t const expected =
                 EV_C_INLINE | EV_C_ON_K | EV_C_DEL_WON | EV_C_DEL_ENOENT |
                 EV_S_DEL_WON | EV_S_DEL_ENOENT | EV_R_INVOKE | EV_S_INVOKE |
                 EV_DESTROYED | EV_RETURNED | EV_WAITED_COMPLETED |
                 EV_K_DESTROYED_FLAG | EV_PARKED | EV_ADD_FAILED |
                 EV_R_SAW_UNSTARTED;
-            assert((t.events & expected) == expected);
+            require((t.events & expected) == expected);
             // The garnish never has a choice of message: after the
             // Callback's fetch_or nothing else writes _state until it has
             // finished (spawn's STARTED is already before it when the
             // garnish runs, and static_resume's reset waits on
             // __completed_), so it always reads the Callback's own RMW
-            assert(!(t.events & EV_GARNISH_STALE));
-            assert(t.states > 100);
+            require(!(t.events & EV_GARNISH_STALE));
+            require(t.states > 100);
             (void)t;
         }
         co_return;
@@ -1207,10 +1207,10 @@ namespace wry {
                             sc.failed ? sc.first_violation.c_str() : "pass",
                             ra.failed ? ra.first_violation.c_str() : "pass",
                             as_expected ? "" : "  <-- NOT AS EXPECTED");
-            assert(sc.failed == e.sc_fails);
-            assert(ra.failed == e.ra_fails);
+            require(sc.failed == e.sc_fails);
+            require(ra.failed == e.ra_fails);
             if (e.ra_violation)
-                assert(contains(ra.first_violation, e.ra_violation));
+                require(contains(ra.first_violation, e.ra_violation));
             (void)sc; (void)ra;
         }
         co_return;

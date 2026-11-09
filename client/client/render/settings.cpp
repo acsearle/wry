@@ -413,42 +413,42 @@ namespace wry {
         String text = json_from_settings(a);
         std::vector<String> warnings;
         Settings b = settings_from_json(text, &warnings);
-        assert(warnings.empty());
+        require(warnings.empty());
 
-        assert(a.keymap.bindings().size() == b.keymap.bindings().size());
+        require(a.keymap.bindings().size() == b.keymap.bindings().size());
         for (auto const& binding : a.keymap.bindings())
-            assert(b.keymap.action_from_combo(binding.combo) ==
+            require(b.keymap.action_from_combo(binding.combo) ==
                    binding.action);
-        assert(b.keymap.combos_from_action(Action::toggle_points).empty());
-        assert(b.keymap.combos_from_action(Action::rotate).size() == 2);
+        require(b.keymap.combos_from_action(Action::toggle_points).empty());
+        require(b.keymap.combos_from_action(Action::rotate).size() == 2);
 
         // The emitted text is well-formed JSON with the expected shape.
         json::Json document = json::Json::from(StringView(text));
-        assert(document.is_object());
-        assert(document[StringView("version")].as_number() == 1.0);
+        require(document.is_object());
+        require(document[StringView("version")].as_number() == 1.0);
         json::Json const& kb = document[StringView("key_bindings")];
-        assert(kb.is_object());
-        assert(kb.size() == action_count);   // every action listed
+        require(kb.is_object());
+        require(kb.size() == action_count);   // every action listed
 
         // The interface group round-trips.
         a.ui_scale = 1.25f;
         Settings c = settings_from_json(json_from_settings(a), &warnings);
-        assert(warnings.empty());
-        assert(c.ui_scale == 1.25f);
-        assert(document[StringView("interface")].is_object());
+        require(warnings.empty());
+        require(c.ui_scale == 1.25f);
+        require(document[StringView("interface")].is_object());
 
         // Absent, malformed and out-of-range ui_scale.
         {
             std::vector<String> w;
             Settings d = settings_from_json(StringView("{\"key_bindings\": {}}"), &w);
-            assert(w.empty() && d.ui_scale == 1.0f);
+            require(w.empty() && d.ui_scale == 1.0f);
             d = settings_from_json(
                 StringView("{\"interface\": {\"ui_scale\": \"big\"}}"), &w);
-            assert(w.size() == 1 && d.ui_scale == 1.0f);
+            require(w.size() == 1 && d.ui_scale == 1.0f);
             w.clear();
             d = settings_from_json(
                 StringView("{\"interface\": {\"ui_scale\": 9}}"), &w);
-            assert(w.size() == 1 && d.ui_scale == Settings::max_ui_scale);
+            require(w.size() == 1 && d.ui_scale == Settings::max_ui_scale);
         }
 
         co_return;
@@ -466,8 +466,8 @@ namespace wry {
             std::vector<String> w;
             Settings s = settings_from_json(
                 StringView("{\"version\": 1, \"key_bindings\": {}}"), &w);
-            assert(w.empty());
-            assert(s.keymap.action_from_combo(r) == Action::rotate);
+            require(w.empty());
+            require(s.keymap.action_from_combo(r) == Action::rotate);
         }
 
         // Explicit []: unbound, distinct from absent.
@@ -475,11 +475,11 @@ namespace wry {
             std::vector<String> w;
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": {\"rotate\": []}}"), &w);
-            assert(w.empty());
-            assert(!s.keymap.action_from_combo(r));
-            assert(s.keymap.combos_from_action(Action::rotate).empty());
+            require(w.empty());
+            require(!s.keymap.action_from_combo(r));
+            require(s.keymap.combos_from_action(Action::rotate).empty());
             // Everything else still at defaults.
-            assert(s.keymap.action_from_combo(tab) == Action::toggle_map);
+            require(s.keymap.action_from_combo(tab) == Action::toggle_map);
         }
 
         // Unknown action id: warned, ignored.
@@ -488,8 +488,8 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": {\"frobnicate\": [\"Q\"]}}"),
                 &w);
-            assert(w.size() == 1);
-            assert(s.keymap.action_from_combo(r) == Action::rotate);
+            require(w.size() == 1);
+            require(s.keymap.action_from_combo(r) == Action::rotate);
         }
 
         // Unparseable combo: warned, the rest of the entry applies.
@@ -498,11 +498,11 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": "
                            "{\"rotate\": [\"NotAKey\", \"T\"]}}"), &w);
-            assert(w.size() == 1);
+            require(w.size() == 1);
             std::vector<KeyCombo> combos =
                 s.keymap.combos_from_action(Action::rotate);
-            assert(combos.size() == 1);
-            assert(combos[0] == *combo_from_string(StringView("T")));
+            require(combos.size() == 1);
+            require(combos[0] == *combo_from_string(StringView("T")));
         }
 
         // Reserved key: warned, refused (and the entry still replaced
@@ -512,8 +512,8 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": {\"rotate\": [\"Escape\"]}}"),
                 &w);
-            assert(w.size() == 1);
-            assert(s.keymap.combos_from_action(Action::rotate).empty());
+            require(w.size() == 1);
+            require(s.keymap.combos_from_action(Action::rotate).empty());
         }
 
         // A combo claimed away from a defaulted action: stolen, warned.
@@ -522,11 +522,11 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": {\"toggle-map\": [\"R\"]}}"),
                 &w);
-            assert(w.size() == 1);
-            assert(s.keymap.action_from_combo(r) == Action::toggle_map);
-            assert(s.keymap.combos_from_action(Action::rotate).empty());
+            require(w.size() == 1);
+            require(s.keymap.action_from_combo(r) == Action::toggle_map);
+            require(s.keymap.combos_from_action(Action::rotate).empty());
             // toggle-map's default Tab was replaced, not appended to.
-            assert(!s.keymap.action_from_combo(tab));
+            require(!s.keymap.action_from_combo(tab));
         }
 
         // Wrong entry type: warned, default kept.
@@ -534,8 +534,8 @@ namespace wry {
             std::vector<String> w;
             Settings s = settings_from_json(
                 StringView("{\"key_bindings\": {\"rotate\": \"R\"}}"), &w);
-            assert(w.size() == 1);
-            assert(s.keymap.action_from_combo(r) == Action::rotate);
+            require(w.size() == 1);
+            require(s.keymap.action_from_combo(r) == Action::rotate);
         }
 
         // Unknown version: warned, still loads.
@@ -544,8 +544,8 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"version\": 2, \"key_bindings\": "
                            "{\"rotate\": [\"T\"]}}"), &w);
-            assert(w.size() == 1);
-            assert(s.keymap.combos_from_action(Action::rotate).size() == 1);
+            require(w.size() == 1);
+            require(s.keymap.combos_from_action(Action::rotate).size() == 1);
         }
 
         // Unknown top-level groups from a future binary: silently fine.
@@ -554,8 +554,8 @@ namespace wry {
             Settings s = settings_from_json(
                 StringView("{\"version\": 1, \"audio\": {\"volume\": 0.5}, "
                            "\"key_bindings\": {}}"), &w);
-            assert(w.empty());
-            assert(s.keymap.action_from_combo(r) == Action::rotate);
+            require(w.empty());
+            require(s.keymap.action_from_combo(r) == Action::rotate);
         }
 
         // Document-level failures throw.
@@ -566,7 +566,7 @@ namespace wry {
             } catch (json::JsonParseError const&) {
                 threw = true;
             }
-            assert(threw);
+            require(threw);
         }
         {
             bool threw = false;
@@ -575,7 +575,7 @@ namespace wry {
             } catch (json::JsonParseError const&) {
                 threw = true;
             }
-            assert(threw);
+            require(threw);
         }
 
         co_return;
@@ -589,7 +589,7 @@ namespace wry {
         // real "config" directory belongs to the app.
         char pattern[] = "settings-test-XXXXXX";
         char* made = mkdtemp(pattern);
-        assert(made);
+        require(made);
         SettingsPaths paths = settings_paths(made);
 
         // First load: creates the directory contents -- a defaults
@@ -598,15 +598,15 @@ namespace wry {
         {
             std::vector<String> w;
             Settings s = load_settings(paths, &w);
-            assert(w.empty());
-            assert(std::filesystem::exists(paths.settings));
-            assert(std::filesystem::exists(paths.defaults));
-            assert(s.keymap.action_from_combo(
+            require(w.empty());
+            require(std::filesystem::exists(paths.settings));
+            require(std::filesystem::exists(paths.defaults));
+            require(s.keymap.action_from_combo(
                 *combo_from_string(StringView("R"))) == Action::rotate);
             // The two files are byte-identical (settings is a copy).
             String a = string_from_file(paths.settings);
             String b = string_from_file(paths.defaults);
-            assert(StringView(a) == StringView(b));
+            require(StringView(a) == StringView(b));
         }
 
         // Rebind, save, reload.
@@ -615,10 +615,10 @@ namespace wry {
             Settings s = load_settings(paths, &w);
             s.keymap.bind(*combo_from_string(StringView("F5")),
                           Action::rotate);
-            CHECK(save_settings(s, paths));
+            require(save_settings(s, paths));
             Settings t = load_settings(paths, &w);
-            assert(w.empty());
-            assert(t.keymap.action_from_combo(
+            require(w.empty());
+            require(t.keymap.action_from_combo(
                 *combo_from_string(StringView("F5"))) == Action::rotate);
         }
 
@@ -627,14 +627,14 @@ namespace wry {
         {
             std::vector<String> w;
             Settings s = reset_settings(paths, &w);
-            assert(w.empty());
-            assert(s.keymap.combos_from_action(Action::rotate).size() == 1);
+            require(w.empty());
+            require(s.keymap.combos_from_action(Action::rotate).size() == 1);
             std::filesystem::path backup =
                 paths.directory / "settings-backup-1.json";
-            assert(std::filesystem::exists(backup));
+            require(std::filesystem::exists(backup));
             String text = string_from_file(backup);
             Settings b = settings_from_json(text, nullptr);
-            assert(b.keymap.action_from_combo(
+            require(b.keymap.action_from_combo(
                 *combo_from_string(StringView("F5"))) == Action::rotate);
         }
 
@@ -642,28 +642,28 @@ namespace wry {
         {
             std::vector<String> w;
             reset_settings(paths, &w);
-            assert(std::filesystem::exists(
+            require(std::filesystem::exists(
                 paths.directory / "settings-backup-2.json"));
         }
 
         // A corrupt settings.json: load warns, runs on defaults, and
         // leaves the broken file in place for repair.
         {
-            CHECK(_text_to_file_atomic(paths.settings,
+            require(_text_to_file_atomic(paths.settings,
                                         StringView("{ garbage")));
             std::vector<String> w;
             Settings s = load_settings(paths, &w);
-            assert(!w.empty());
-            assert(s.keymap.action_from_combo(
+            require(!w.empty());
+            require(s.keymap.action_from_combo(
                 *combo_from_string(StringView("R"))) == Action::rotate);
             String text = string_from_file(paths.settings);
-            assert(StringView(text) == StringView("{ garbage"));
+            require(StringView(text) == StringView("{ garbage"));
         }
 
         // Self-cleaning.
         std::error_code ec;
         std::filesystem::remove_all(paths.directory, ec);
-        assert(!std::filesystem::exists(paths.directory));
+        require(!std::filesystem::exists(paths.directory));
 
         co_return;
     };

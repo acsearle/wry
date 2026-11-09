@@ -51,12 +51,12 @@ namespace wry::coroutine {
         nursery.soon(ok_result, unwind_ok_child(7));
         std::ptrdiff_t cancelled = co_await nursery.join();
 
-        assert(cancelled == 1);
-        assert(reached.load(std::memory_order_relaxed) == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(target.is_stopped());
+        require(cancelled == 1);
+        require(reached.load(std::memory_order_relaxed) == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
+        require(target.is_stopped());
         [[maybe_unused]] int ok = co_await ok_result;
-        assert(ok == 7);
+        require(ok == 7);
 
         // A nursery that absorbed a cancellation is not reusable
         co_return;
@@ -81,16 +81,16 @@ namespace wry::coroutine {
         Nursery nursery;
         nursery.soon(result, rethrow_child());
         [[maybe_unused]] std::ptrdiff_t cancelled = co_await nursery.join();
-        assert(cancelled == 0);
-        assert(result.has_error());
+        require(cancelled == 0);
+        require(result.has_error());
         bool caught = false;
         try {
             [[maybe_unused]] int never = co_await result;
         } catch (std::runtime_error const& e) {
             caught = (std::string_view(e.what()) == "boom");
         }
-        assert(caught);
-        assert(result._variant.index() == 0);
+        require(caught);
+        require(result._variant.index() == 0);
         co_return;
     };
 
@@ -140,10 +140,10 @@ namespace wry::coroutine {
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
-        assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-        assert(reached.load(std::memory_order_relaxed) == 1);
-        assert(destroyed.load(std::memory_order_relaxed) == 2);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(fence._outcome.load(std::memory_order_relaxed) == 2);
+        require(reached.load(std::memory_order_relaxed) == 1);
+        require(destroyed.load(std::memory_order_relaxed) == 2);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
 
         co_return;
     };
@@ -213,9 +213,9 @@ namespace wry::coroutine {
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
-        assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-        assert(destroyed.load(std::memory_order_relaxed) == 1);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(fence._outcome.load(std::memory_order_relaxed) == 2);
+        require(destroyed.load(std::memory_order_relaxed) == 1);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
 
         co_return;
     };
@@ -236,10 +236,10 @@ namespace wry::coroutine {
         global_work_queue_schedule(handle_from_future(std::move(task)));
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
-        assert(fence._outcome.load(std::memory_order_relaxed) == 1);
-        assert(started.load(std::memory_order_relaxed) == 2);
-        assert(destroyed.load(std::memory_order_relaxed) == 3);
-        assert(tally.load(std::memory_order_relaxed) == 2);
+        require(fence._outcome.load(std::memory_order_relaxed) == 1);
+        require(started.load(std::memory_order_relaxed) == 2);
+        require(destroyed.load(std::memory_order_relaxed) == 3);
+        require(tally.load(std::memory_order_relaxed) == 2);
 
         co_return;
     };
@@ -265,9 +265,9 @@ namespace wry::coroutine {
         source.request_stop();
         while (fence._outcome.load(std::memory_order_acquire) == 0)
             co_await TransferToPoolExecutor{};
-        assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-        assert(destroyed.load(std::memory_order_relaxed) == 3);
-        assert(resumed_past.load(std::memory_order_relaxed) == 0);
+        require(fence._outcome.load(std::memory_order_relaxed) == 2);
+        require(destroyed.load(std::memory_order_relaxed) == 3);
+        require(resumed_past.load(std::memory_order_relaxed) == 0);
 
         co_return;
     };
@@ -305,19 +305,19 @@ namespace wry::coroutine {
         // nursery sees that nursery's interior token, and a nursery given a
         // token bridges rather than shares it
         std::stop_token mine = co_await GetStopToken{};
-        assert(!mine.stop_possible());
+        require(!mine.stop_possible());
         std::atomic<int> result{0};
         Nursery scope;
         scope.soon(scope_token_probe(&scope, &result));
         [[maybe_unused]] std::ptrdiff_t cancelled = co_await scope.join();
-        assert(cancelled == 0);
-        assert(result.load(std::memory_order_acquire) == 1);
+        require(cancelled == 0);
+        require(result.load(std::memory_order_acquire) == 1);
         std::stop_token outer = scope._inner_stop_source.get_token();
         Nursery nursery{outer};
-        assert(nursery._outer_stop_token == outer);
-        assert(nursery._inner_stop_source.get_token() != outer);
+        require(nursery._outer_stop_token == outer);
+        require(nursery._inner_stop_source.get_token() != outer);
         cancelled = co_await nursery.join();
-        assert(cancelled == 0);
+        require(cancelled == 0);
         co_return;
     };
 
@@ -331,7 +331,7 @@ namespace wry::coroutine {
         co_await nursery.fork(results[1], value_child(2));
         co_await nursery.fork(results[2], value_child(14));
         co_await nursery.join();
-        assert((results[0] == 1) && (results[1] == 2) && (results[2] == 14));
+        require((results[0] == 1) && (results[1] == 2) && (results[2] == 14));
         co_return;
     };
 

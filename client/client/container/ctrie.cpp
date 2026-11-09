@@ -100,7 +100,7 @@ namespace wry {
                         if (w) {
                             f = false;
                         } else {
-                            assert(*x == v);
+                            require(*x == v);
                         }
                     }
                 }
@@ -119,10 +119,10 @@ namespace wry {
             co_await nursery.fork([](auto trie, std::span<T> s) -> coroutine::Future<> {
                 for (auto [k, f, v] : s) {
                     auto w = trie->find(k);
-                    assert(w.has_value() == f);
+                    require(w.has_value() == f);
                     if (f) {
                         // printf("[%zu] -> %zu expect %zu (hash() -> %0.16zx\n", k.data, w->data, v.data, k.hash());
-                        assert(*w == v);
+                        require(*w == v);
                     }
                 }
                 co_return;
@@ -140,9 +140,9 @@ namespace wry {
                     auto [w, x] = trie->alter(k, [](std::optional<ValueType> const& in) {
                         return AlterChoice::erase();
                     });
-                    assert((bool)w.has_value() == f);
+                    require((bool)w.has_value() == f);
                     if (f) {
-                        assert(*w == v);
+                        require(*w == v);
                     }
                 }
                 co_return;
@@ -328,7 +328,7 @@ namespace wry {
                mismatches,
                got_present, expected_present,
                got_absent,  expected_absent);
-        assert(mismatches == 0);
+        require(mismatches == 0);
 
         trie = nullptr;
         co_await coroutine::DebugWaitForCollectionCycles{1};

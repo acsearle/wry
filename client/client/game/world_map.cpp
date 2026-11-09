@@ -124,12 +124,12 @@ namespace wry {
         coroutine::Nursery scope;
         scope.soon(world_map_build(Root<const World*>{w}, handoff));
         [[maybe_unused]] std::ptrdiff_t cancelled = co_await scope.join();
-        assert(cancelled == 0);
-        assert(!handoff->in_flight.load_acquire());
+        require(cancelled == 0);
+        require(!handoff->in_flight.load_acquire());
 
         WorldMap* m = handoff->take_finished();
-        assert(m);
-        assert(m->rgba.size() == (size_t)WorldMap::EXTENT * WorldMap::EXTENT * 4);
+        require(m);
+        require(m->rgba.size() == (size_t)WorldMap::EXTENT * WorldMap::EXTENT * 4);
 
         auto px = [m](int32_t x, int32_t y) -> const uint8_t* {
             size_t i = (size_t)(x - WorldMap::X0);
@@ -140,15 +140,15 @@ namespace wry {
             return std::memcmp(p, c, 4) == 0;
         };
 
-        assert(is(px(0, 0), TERRAIN_COLOR_SRGB[TERRAIN_GRASS]));
-        assert(is(px(-128, -128), TERRAIN_COLOR_SRGB[TERRAIN_WATER]));
-        assert(is(px(127, 127), TERRAIN_COLOR_SRGB[TERRAIN_ROCK]));
-        assert(is(px(5, 0), MAP_TERM_SRGB));      // term over sand
-        assert(is(px(6, 1), MAP_ENTITY_SRGB));    // entity over sand
-        assert(px(100, -100)[3] == 0);            // unmapped: transparent
-        assert(px(127, 0)[3] == 0);               // {128,0} clipped, no wrap
-        assert(px(-128, 0)[3] == 0);              // {-129,0} clipped, no wrap
-        assert(px(0, 127)[3] == 0);               // {0,128} clipped, no wrap
+        require(is(px(0, 0), TERRAIN_COLOR_SRGB[TERRAIN_GRASS]));
+        require(is(px(-128, -128), TERRAIN_COLOR_SRGB[TERRAIN_WATER]));
+        require(is(px(127, 127), TERRAIN_COLOR_SRGB[TERRAIN_ROCK]));
+        require(is(px(5, 0), MAP_TERM_SRGB));      // term over sand
+        require(is(px(6, 1), MAP_ENTITY_SRGB));    // entity over sand
+        require(px(100, -100)[3] == 0);            // unmapped: transparent
+        require(px(127, 0)[3] == 0);               // {128,0} clipped, no wrap
+        require(px(-128, 0)[3] == 0);              // {-129,0} clipped, no wrap
+        require(px(0, 127)[3] == 0);               // {0,128} clipped, no wrap
 
         delete m;
         co_return;

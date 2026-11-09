@@ -38,21 +38,21 @@ namespace wry {
 
         auto check_and_record = [&](std::size_t size, std::size_t alignment) {
             Core::Allocation a = core.allocate(size, completed, alignment);
-            assert(a.chunk < core.chunks.size());
-            assert(a.offset % alignment == 0);
-            assert(a.offset <= core.chunks[a.chunk].length);
-            assert(size <= core.chunks[a.chunk].length - a.offset);
+            require(a.chunk < core.chunks.size());
+            require(a.offset % alignment == 0);
+            require(a.offset <= core.chunks[a.chunk].length);
+            require(size <= core.chunks[a.chunk].length - a.offset);
             for (Live const& l : live) {
                 if (l.stamp <= completed || l.chunk != a.chunk)
                     continue;
-                assert(a.offset + size <= l.begin || l.end <= a.offset);
+                require(a.offset + size <= l.begin || l.end <= a.offset);
             }
             live.push_back(Live{ frame, a.chunk, a.offset, a.offset + size });
         };
 
         auto end_frame = [&]() {
             const std::uint64_t stamp = core.end_frame();
-            assert(stamp == frame);
+            require(stamp == frame);
             ++frame;
             // Advance the simulated GPU: monotone, at most kMaxLag behind.
             const std::uint64_t floor = (frame - 1 > kMaxLag) ? frame - 1 - kMaxLag : 0;
@@ -88,7 +88,7 @@ namespace wry {
                     check_and_record(C / 3, 256);
                 check_and_record(C * 3, 256);
                 const std::uint64_t stamp = core.end_frame();
-                assert(stamp == frame);
+                require(stamp == frame);
                 ++frame;
                 completed = (frame - 1 > kMaxLag) ? frame - 1 - kMaxLag : 0;
                 std::erase_if(live, [&](Live const& l) { return l.stamp <= completed; });
@@ -98,7 +98,7 @@ namespace wry {
             const std::size_t steady = core.chunks.size();
             for (int f = 0; f != 100; ++f)
                 fixed_frame();
-            assert(core.chunks.size() == steady);
+            require(core.chunks.size() == steady);
         }
 
         co_return;

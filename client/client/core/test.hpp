@@ -96,6 +96,19 @@ namespace wry {
     
 } // namespace wry
 
+// The check for test bodies.  Unlike assert it is evaluated in every build
+// (the Release build runs the suite too, and an assert there is a check that
+// silently isn't made, or worse, a side effect that silently isn't done).  On
+// failure it prints the expression and location, then aborts.  `assert` is
+// banned inside define_test bodies; tools/lint_test_asserts.py enforces that
+// at build time.  An expression, so it composes like assert (e.g. in a comma
+// fold); variadic so template commas need no extra parentheses.
+namespace wry::detail {
+    [[noreturn]] void require_failed(const char* expression, const char* file, int line);
+}
+#define require(...) \
+    ((__VA_ARGS__) ? (void)0 : ::wry::detail::require_failed(#__VA_ARGS__, __FILE__, __LINE__))
+
 #define define_test(...) static ::wry::detail::test_t WRY_CONCATENATE_TOKENS(_wry_detail_test_, __LINE__) = ::wry::detail::test_metadata_t{__VA_ARGS__} % []() -> wry::Task
 
 #endif /* test_hpp */

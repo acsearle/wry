@@ -367,49 +367,49 @@ namespace wry::command {
             Coordinate c{(i32)rng(), (i32)rng()};
             if (i == 0) c = {std::numeric_limits<i32>::min(), std::numeric_limits<i32>::max()};
             auto r = read_as<Coordinate>(to_string(c));
-            assert(r && *r == c);
+            require(r && *r == c);
         }
-        assert(read_as<Coordinate>("Coordinate( 1 ,-2 )").value() == (Coordinate{1, -2}));
+        require(read_as<Coordinate>("Coordinate( 1 ,-2 )").value() == (Coordinate{1, -2}));
         for (const char* bad : {"Coordinate(1)", "Coordinate(1, 2, 3)", "Coordinate(0x80000000, 0)",
                                 "Coordinate(1, x)", "Coord(1, 2)", "1", "\"Coordinate(1, 2)\""})
-            assert(!read_as<Coordinate>(StringView(bad)));
+            require(!read_as<Coordinate>(StringView(bad)));
 
         // EntityID.
         for (int i = 0; i != 10000; ++i) {
             EntityID e{rng() >> 4};
             auto r = read_as<EntityID>(to_string(e));
-            assert(r && *r == e);
+            require(r && *r == e);
         }
         for (const char* bad : {"EntityID(-1)", "EntityID(0x1000000000000000)", "EntityID()", "7"})
-            assert(!read_as<EntityID>(StringView(bad)));
+            require(!read_as<EntityID>(StringView(bad)));
 
         // Hash: full 64 bits, top bit included, round-trip in canonical form.
         for (int i = 0; i != 10000; ++i) {
             Hash h{rng()};
             auto r = read_as<Hash>(to_string(h));
-            assert(r && *r == h);
+            require(r && *r == h);
         }
-        assert(to_string(Hash{0x9e3779b97f4a7c15ull}) == StringView("Hash(0x9e3779b97f4a7c15)"));
-        assert(read_as<Hash>("Hash(0xFFFFFFFFFFFFFFFF)").value() == (Hash{~(uint64_t)0}));
-        assert(read_as<Hash>("Hash(0x0)").value() == (Hash{0}));
+        require(to_string(Hash{0x9e3779b97f4a7c15ull}) == StringView("Hash(0x9e3779b97f4a7c15)"));
+        require(read_as<Hash>("Hash(0xFFFFFFFFFFFFFFFF)").value() == (Hash{~(uint64_t)0}));
+        require(read_as<Hash>("Hash(0x0)").value() == (Hash{0}));
         for (const char* bad : {"Hash(7)", "Hash(0x)", "Hash(0x10000000000000000)", "Hash(-0x1)",
                                 "Hash(0x1, 0x2)", "Hash()", "0x1", "Hash(\"0x1\")"})
-            assert(!read_as<Hash>(StringView(bad)));
+            require(!read_as<Hash>(StringView(bad)));
 
         // Enums: every enumerator, qualified (canonical) and bare
         // (contextual); wrong qualifiers and unknown names rejected.
         for (auto const& [value, spelling] : OPCODE_NAMES) {
             String canonical = to_string(value);
-            assert(read_as<OPCODE>(canonical).value() == value);
+            require(read_as<OPCODE>(canonical).value() == value);
             String bare(spelling + 7);
-            assert(read_as<OPCODE>(bare).value() == value);
+            require(read_as<OPCODE>(bare).value() == value);
         }
         for (auto const& [value, spelling] : MATTER_NAMES)
-            assert(read_as<MATTER>(to_string(value)).value() == value);
-        assert(read_as<OPCODE>("OPCODE::SWAP").value() == OPCODE_SWAP);
+            require(read_as<MATTER>(to_string(value)).value() == value);
+        require(read_as<OPCODE>("OPCODE::SWAP").value() == OPCODE_SWAP);
         for (const char* bad : {"MATTER::SWAP", "OPCODE::", "OPCODE::NOPE", "NOPE",
                                 "\"SWAP\"", "OPCODE(SWAP)", "OPCODE::SWAP::X"})
-            assert(!read_as<OPCODE>(StringView(bad)));
+            require(!read_as<OPCODE>(StringView(bad)));
 
         // Term: every printable kind round-trips through the canonical
         // form, as a Term.
@@ -435,12 +435,12 @@ namespace wry::command {
             for (int i = 0; i != 2000; ++i)
                 terms.push_back(term_make_integer_with((int64_t)rng()));
             for (Term t : terms) {
-                assert(Type<Term>::printable(t));
+                require(Type<Term>::printable(t));
                 String printed = to_string(t);
                 auto r = read_as<Term>(printed);
-                assert(r);
-                assert(same_term(*r, t));
-                assert(to_string(*r) == printed);
+                require(r);
+                require(same_term(*r, t));
+                require(to_string(*r) == printed);
             }
         }
 
@@ -449,16 +449,16 @@ namespace wry::command {
         for (Term t : {term_make_error(), term_make_character_with('x'), term_make_OK(),
                        term_make_string_with(std::string_view("\xff", 1)),
                        term_make_opcode(123456), term_make_matter(123456)})
-            assert(!Type<Term>::printable(t));
+            require(!Type<Term>::printable(t));
 
         // Term: self-describing only.  Bare enumerators and bare words are
         // errors; non-Term tags are errors.
         for (const char* bad : {"SWAP", "probe", "Coordinate(1, 2)", "OPCODE::NOPE",
                                 "FOO::BAR", "-", "0x"})
-            assert(!read_as<Term>(StringView(bad)));
+            require(!read_as<Term>(StringView(bad)));
         {
             auto e = read_as<Term>("SWAP");
-            assert(!e);
+            require(!e);
             // The suggestion names the qualified form.
             String const& message = e.error().message;
             StringView m = message;
@@ -466,7 +466,7 @@ namespace wry::command {
             for (auto it = m.chars.begin(); it + 12 <= m.chars.end(); ++it)
                 if (std::memcmp(it, "OPCODE::SWAP", 12) == 0)
                     mentions = true;
-            assert(mentions);
+            require(mentions);
         }
 
         co_return;
@@ -574,26 +574,26 @@ namespace wry::command {
             for (int i = 0; i != 20; ++i) {
                 Coordinate at{(i32)rng(), (i32)rng()};
                 Player::Action a = make_write_action(at, t);
-                assert(printable(a));
+                require(printable(a));
                 std::optional<String> line = format_action(a);
-                assert(line);
+                require(line);
                 auto r = parse_action(*line);
-                assert(r);
-                assert(r->tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
-                assert(r->coordinate == at);
-                assert(same_term(r->value._value, t));
-                assert(format_action(*r) == line);
+                require(r);
+                require(r->tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
+                require(r->coordinate == at);
+                require(same_term(r->value._value, t));
+                require(format_action(*r) == line);
                 auto q = read_as<Player::Action>(to_string(a));
-                assert(q && q->coordinate == at && same_term(q->value._value, t));
+                require(q && q->coordinate == at && same_term(q->value._value, t));
             }
         }
         {
             Player::Action none;
-            assert(format_action(none) == String("nop"));
+            require(format_action(none) == String("nop"));
             auto r = parse_action("nop");
-            assert(r && r->tag == Player::Action::NONE);
-            assert(format_action(make_write_action(Coordinate{1, 2}, term_make_null())) == String("erase Coordinate(1, 2)"));
-            assert(format_action(make_write_action(Coordinate{1, 2}, term_make_opcode(OPCODE_SWAP)))
+            require(r && r->tag == Player::Action::NONE);
+            require(format_action(make_write_action(Coordinate{1, 2}, term_make_null())) == String("erase Coordinate(1, 2)"));
+            require(format_action(make_write_action(Coordinate{1, 2}, term_make_opcode(OPCODE_SWAP)))
                    == String("write Coordinate(1, 2) OPCODE::SWAP"));
         }
 
@@ -601,14 +601,14 @@ namespace wry::command {
         // form is what prints
         {
             auto r = parse_action("write term=OPCODE::SWAP at=Coordinate(3, 4)");
-            assert(r && r->coordinate == (Coordinate{3, 4}));
-            assert(format_action(*r) == String("write Coordinate(3, 4) OPCODE::SWAP"));
+            require(r && r->coordinate == (Coordinate{3, 4}));
+            require(format_action(*r) == String("write Coordinate(3, 4) OPCODE::SWAP"));
             auto e = parse_action("erase Coordinate(3,4)");
-            assert(e && term_is_null(e->value._value));
+            require(e && term_is_null(e->value._value));
         }
 
         // An unprintable Term makes an unprintable action
-        assert(!printable(make_write_action(Coordinate{0, 0}, term_make_error())));
+        require(!printable(make_write_action(Coordinate{0, 0}, term_make_error())));
 
         // Anything else is an error, never a crash
         for (const char* bad : {"", "   # only a comment", "step 10", "write", "write Coordinate(1, 2)",
@@ -616,10 +616,10 @@ namespace wry::command {
                                 "erase Coordinate(1, 2) 3", "nop 1", "write Coordinate(1, 2) OPCODE::SWAP extra",
                                 "write at=Coordinate(1, 2) at=Coordinate(3, 4) OPCODE::SWAP",
                                 "\"write Coordinate(1, 2) OPCODE::SWAP\"", "write Coordinate(1, 2) \"unterminated"})
-            assert(!parse_action(StringView(bad)));
-        assert(!Type<Player::Action>::read(parse_node("write").value()));           // unquoted: a word
-        assert(!Type<Player::Action>::read(parse_node("Action(write)").value()));   // not a string
-        assert(read_as<Player::Action>("\"write Coordinate(1, 2) OPCODE::SWAP\""));
+            require(!parse_action(StringView(bad)));
+        require(!Type<Player::Action>::read(parse_node("write").value()));           // unquoted: a word
+        require(!Type<Player::Action>::read(parse_node("Action(write)").value()));   // not a string
+        require(read_as<Player::Action>("\"write Coordinate(1, 2) OPCODE::SWAP\""));
 
         co_return;
     };
@@ -657,27 +657,27 @@ namespace wry::command {
 
         {
             auto o = registry.run(context, StringView("write Coordinate(3,4) term=OPCODE::SWAP"));
-            assert(o.reply.status == Reply::OK);
-            assert(o.line == StringView("write Coordinate(3, 4) OPCODE::SWAP"));
+            require(o.reply.status == Reply::OK);
+            require(o.line == StringView("write Coordinate(3, 4) OPCODE::SWAP"));
         }
         {
             auto o = registry.run(context, StringView("write Coordinate(-1, 0) \"hello world\""));
-            assert(o.line == StringView("write Coordinate(-1, 0) \"hello world\""));
+            require(o.line == StringView("write Coordinate(-1, 0) \"hello world\""));
         }
         {
             // Contextual: bare SWAP where an OPCODE is expected.
             auto o = registry.run(context, StringView("hold SWAP"));
-            assert(o.reply.status == Reply::OK);
-            assert(o.line == StringView("hold OPCODE::SWAP"));
+            require(o.reply.status == Reply::OK);
+            require(o.line == StringView("hold OPCODE::SWAP"));
         }
         {
             // Not contextual: a Term parameter needs the qualifier.
             auto o = registry.run(context, StringView("write Coordinate(0, 0) SWAP"));
-            assert(o.reply.status == Reply::ERROR && o.line.empty());
+            require(o.reply.status == Reply::ERROR && o.line.empty());
         }
-        assert(context.log.size() == 3);
-        assert(context.log[0] == StringView("Coordinate(3, 4) OPCODE::SWAP"));
-        assert(context.log[2] == StringView("OPCODE::SWAP"));
+        require(context.log.size() == 3);
+        require(context.log[0] == StringView("Coordinate(3, 4) OPCODE::SWAP"));
+        require(context.log[2] == StringView("OPCODE::SWAP"));
 
         co_return;
     };

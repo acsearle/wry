@@ -939,26 +939,26 @@ namespace wry::command {
         // Blank and comment-only lines.
         {
             auto a = parse_line("");
-            assert(a && a->command.empty());
+            require(a && a->command.empty());
             auto b = parse_line("   # nothing");
-            assert(b && b->command.empty());
+            require(b && b->command.empty());
         }
 
         // Shapes.
         {
             auto line = parse_line("write Coordinate(12, -34) term=OPCODE::SWAP \"a b\" # comment");
-            assert(line);
-            assert(line->command == StringView("write"));
-            assert(line->arguments.size() == 3);
+            require(line);
+            require(line->command == StringView("write"));
+            require(line->arguments.size() == 3);
             Node const& c = line->arguments[0].node;
-            assert(c.kind == Node::TAGGED && c.text == StringView("Coordinate"));
-            assert(c.children.size() == 2);
-            assert(c.children[1].kind == Node::WORD && c.children[1].text == StringView("-34"));
-            assert(line->arguments[1].name == StringView("term"));
-            assert(line->arguments[1].node.text == StringView("OPCODE::SWAP"));
-            assert(line->arguments[2].node.kind == Node::STRING);
-            assert(line->arguments[2].node.text == StringView("a b"));
-            assert(print_line(*line)
+            require(c.kind == Node::TAGGED && c.text == StringView("Coordinate"));
+            require(c.children.size() == 2);
+            require(c.children[1].kind == Node::WORD && c.children[1].text == StringView("-34"));
+            require(line->arguments[1].name == StringView("term"));
+            require(line->arguments[1].node.text == StringView("OPCODE::SWAP"));
+            require(line->arguments[2].node.kind == Node::STRING);
+            require(line->arguments[2].node.text == StringView("a b"));
+            require(print_line(*line)
                    == StringView("write Coordinate(12, -34) term=OPCODE::SWAP \"a b\""));
         }
 
@@ -966,16 +966,16 @@ namespace wry::command {
         {
             auto a = parse_line("f  x = T ( 1 ,U( ) )");
             auto b = parse_line("f x=T(1, U())");
-            assert(a && b && equivalent(*a, *b));
+            require(a && b && equivalent(*a, *b));
         }
 
         // Escapes.
         {
             auto line = parse_line("s \"q\\\"b\\\\n\\n\\t\\r\\u{41}\\u{e9}\"");
-            assert(line);
+            require(line);
             String expected("q\"b\\n\n\t\rA");
             expected.push_back((char32_t)0xE9);
-            assert(line->arguments[0].node.text == expected);
+            require(line->arguments[0].node.text == expected);
         }
 
         // Malformed input is rejected with an offset, never a crash.
@@ -988,8 +988,8 @@ namespace wry::command {
             };
             for (const char* text : bad) {
                 auto line = parse_line(StringView(text));
-                assert(!line);
-                assert(line.error().offset <= std::strlen(text));
+                require(!line);
+                require(line.error().offset <= std::strlen(text));
             }
         }
 
@@ -1002,17 +1002,17 @@ namespace wry::command {
                 String text = random_from(rng, line_fragments, 12);
                 auto line = parse_line(text);
                 if (!line) {
-                    assert(line.error().offset <= text.chars.size());
+                    require(line.error().offset <= text.chars.size());
                     continue;
                 }
                 ++accepted;
                 String printed = print_line(*line);
                 auto again = parse_line(printed);
-                assert(again);
-                assert(equivalent(*line, *again));
-                assert(print_line(*again) == printed);
+                require(again);
+                require(equivalent(*line, *again));
+                require(print_line(*again) == printed);
             }
-            assert(accepted > 1000);
+            require(accepted > 1000);
         }
 
         co_return;
@@ -1024,22 +1024,22 @@ namespace wry::command {
 
         // Bool.
         for (bool b : {false, true})
-            assert(reread<bool>(to_string(b)) == b);
+            require(reread<bool>(to_string(b)) == b);
 
         // Int: random, extremes, hex input.
         for (int i = 0; i != 10000; ++i) {
             int64_t x = random_int64(rng);
-            assert(reread<int64_t>(to_string(x)) == x);
+            require(reread<int64_t>(to_string(x)) == x);
         }
-        assert(reread<int64_t>("0x7fffffffffffffff") == std::numeric_limits<int64_t>::max());
-        assert(reread<int64_t>("-0x8000000000000000") == std::numeric_limits<int64_t>::min());
-        assert(reread<int64_t>("-0") == 0);
+        require(reread<int64_t>("0x7fffffffffffffff") == std::numeric_limits<int64_t>::max());
+        require(reread<int64_t>("-0x8000000000000000") == std::numeric_limits<int64_t>::min());
+        require(reread<int64_t>("-0") == 0);
         for (const char* text : {"9223372036854775808", "-9223372036854775809",
                                  "0x10000000000000000", "1a", "0x", "-", "--1",
                                  "1-", "+1", "0x-1", "x"}) {
             auto node = parse_node(StringView(text));
-            assert(node);
-            assert(!Type<int64_t>::read(*node));
+            require(node);
+            require(!Type<int64_t>::read(*node));
         }
 
         // String: random content, including every escape and non-ASCII;
@@ -1047,13 +1047,13 @@ namespace wry::command {
         for (int i = 0; i != 10000; ++i) {
             String s = random_from(rng, string_fragments, 10);
             String printed = to_string(s);
-            assert(reread<String>(printed) == s);
-            assert(printed.chars.size() >= 2);
+            require(reread<String>(printed) == s);
+            require(printed.chars.size() >= 2);
         }
-        assert(reread<String>("probe") == StringView("probe"));
+        require(reread<String>("probe") == StringView("probe"));
         {
             auto node = parse_node("T(1)");
-            assert(node && !Type<String>::read(*node));
+            require(node && !Type<String>::read(*node));
         }
 
         co_return;
@@ -1108,50 +1108,50 @@ namespace wry::command {
         // Positional, named, defaults resolved into the canonical line.
         {
             auto o = run("add 1 2");
-            assert(o.reply.status == Reply::OK && o.reply.text == StringView("3"));
-            assert(o.line == StringView("add 1 2"));
+            require(o.reply.status == Reply::OK && o.reply.text == StringView("3"));
+            require(o.line == StringView("add 1 2"));
         }
         {
             auto o = run("add 0x10");
-            assert(o.reply.text == StringView("26"));
-            assert(o.line == StringView("add 16 10"));
+            require(o.reply.text == StringView("26"));
+            require(o.line == StringView("add 16 10"));
         }
         {
             auto o = run("add b=1 2");
-            assert(o.reply.text == StringView("3"));
-            assert(o.line == StringView("add 2 1"));
+            require(o.reply.text == StringView("3"));
+            require(o.line == StringView("add 2 1"));
         }
         {
             auto o = run("greet");
-            assert(o.reply.text == StringView("hello antony"));
-            assert(o.line == StringView("greet \"antony\" false"));
+            require(o.reply.text == StringView("hello antony"));
+            require(o.line == StringView("greet \"antony\" false"));
         }
         {
             auto o = run("greet loud=true");
-            assert(o.reply.text == StringView("HELLO antony"));
+            require(o.reply.text == StringView("HELLO antony"));
         }
         {
             auto o = run("greet bob");
-            assert(o.line == StringView("greet \"bob\" false"));
+            require(o.line == StringView("greet \"bob\" false"));
         }
         {
             auto o = run("noop  # nothing");
-            assert(o.reply.status == Reply::OK && o.line == StringView("noop"));
+            require(o.reply.status == Reply::OK && o.line == StringView("noop"));
         }
 
         // The canonical line re-runs to the same canonical line.
         for (const char* text : {"add 1", "add b=-3 a=0x7", "greet", "greet x loud=true"}) {
             auto first = run(text);
-            assert(first.reply.status == Reply::OK);
+            require(first.reply.status == Reply::OK);
             auto second = registry.run(context, StringView(first.line));
-            assert(second.line == first.line);
-            assert(second.reply.text == first.reply.text);
+            require(second.line == first.line);
+            require(second.reply.text == first.reply.text);
         }
 
         // Blank lines issue nothing.
         {
             auto o = run("   ");
-            assert(o.line.empty() && o.reply.status == Reply::OK && o.reply.text.empty());
+            require(o.line.empty() && o.reply.status == Reply::OK && o.reply.text.empty());
         }
 
         // Binding errors issue nothing.
@@ -1159,26 +1159,26 @@ namespace wry::command {
                                  "add a=1 a=2", "add 1 a=2", "add x", "add \"1\"",
                                  "greet loud=yes", "add T(1)", "add (1"}) {
             auto o = run(text);
-            assert(o.reply.status == Reply::ERROR);
-            assert(o.line.empty());
+            require(o.reply.status == Reply::ERROR);
+            require(o.line.empty());
         }
 
         // A computed default that cannot be computed is an error...
         context.user.clear();
         auto missing = run("greet");
-        assert(missing.reply.status == Reply::ERROR);
+        require(missing.reply.status == Reply::ERROR);
         (void) missing;
         // ...unless the argument is supplied.
         auto supplied = run("greet carol");
-        assert(supplied.reply.status == Reply::OK);
+        require(supplied.reply.status == Reply::OK);
         (void) supplied;
 
         // Help.
         {
             String all = help_text(registry);
-            assert(!all.empty());
+            require(!all.empty());
             String one = help_text(registry, StringView("greet"));
-            assert(!one.empty());
+            require(!one.empty());
         }
 
         co_return;
@@ -1223,52 +1223,52 @@ namespace wry::command {
         // The command word: by prefix, sorted; everything for no prefix.
         {
             auto c = complete("st");
-            assert(c.first == 0 && is(c, {"state-hash", "step"}) && c.usage.empty());
-            assert(common_prefix(c.candidates) == StringView("st"));
-            assert(is(complete("  sta"), {"state-hash"}));
-            assert(complete("  sta").first == 2);
-            assert(is(complete(""), {"shade", "state-hash", "step"}));
-            assert(is(complete("ST"), {"state-hash", "step"}));
-            assert(is(complete("x"), {}));
+            require(c.first == 0 && is(c, {"state-hash", "step"}) && c.usage.empty());
+            require(common_prefix(c.candidates) == StringView("st"));
+            require(is(complete("  sta"), {"state-hash"}));
+            require(complete("  sta").first == 2);
+            require(is(complete(""), {"shade", "state-hash", "step"}));
+            require(is(complete("ST"), {"state-hash", "step"}));
+            require(is(complete("x"), {}));
         }
 
         // An argument: the parameter's words, positional or named, and
         // the usage line either way.
         {
             auto c = complete("shade ");
-            assert(c.first == 6 && is(c, {"flat", "off", "smooth"}));
-            assert(c.usage == help_line("shade", "Set the shading", registry.find("shade")->params));
-            assert(is(complete("shade s"), {"samples=", "shadows=", "smooth"}));
-            assert(common_prefix(complete("shade s").candidates) == StringView("s"));
-            assert(is(complete("shade sm"), {"smooth"}));
-            assert(is(complete("shade flat "), {"false", "true"}));
-            assert(is(complete("shade flat t"), {"true"}));
-            assert(is(complete("shade shadows=f"), {"false"}));
-            assert(complete("shade shadows=f").first == 14);
-            assert(is(complete("shade shadows = "), {"false", "true"}));
+            require(c.first == 6 && is(c, {"flat", "off", "smooth"}));
+            require(c.usage == help_line("shade", "Set the shading", registry.find("shade")->params));
+            require(is(complete("shade s"), {"samples=", "shadows=", "smooth"}));
+            require(common_prefix(complete("shade s").candidates) == StringView("s"));
+            require(is(complete("shade sm"), {"smooth"}));
+            require(is(complete("shade flat "), {"false", "true"}));
+            require(is(complete("shade flat t"), {"true"}));
+            require(is(complete("shade shadows=f"), {"false"}));
+            require(complete("shade shadows=f").first == 14);
+            require(is(complete("shade shadows = "), {"false", "true"}));
             // A named argument frees the positional slot it did not take.
-            assert(is(complete("shade shadows=false "), {"flat", "off", "smooth"}));
-            assert(is(complete("shade mode=off "), {"false", "true"}));
+            require(is(complete("shade shadows=false "), {"flat", "off", "smooth"}));
+            require(is(complete("shade mode=off "), {"false", "true"}));
             // Names are offered only once something is typed, and only
             // for parameters not yet given.
-            assert(is(complete("shade off s"), {"samples=", "shadows="}));
-            assert(is(complete("shade off samples=2 s"), {"shadows="}));
+            require(is(complete("shade off s"), {"samples=", "shadows="}));
+            require(is(complete("shade off samples=2 s"), {"shadows="}));
             // A type with no words: nothing but the usage.
             auto n = complete("step ");
-            assert(is(n, {}) && !n.usage.empty() && n.first == 5);
+            require(is(n, {}) && !n.usage.empty() && n.first == 5);
         }
 
         // Nowhere to complete: an unknown command, too many arguments, a
         // parameter given twice, inside a string or a literal, straight
         // after one.
         {
-            assert(is(complete("nope "), {}) && complete("nope ").usage.empty());
-            assert(is(complete("shade off true 1 "), {}));
-            assert(is(complete("shade mode=off mode="), {}));
-            assert(is(complete("shade \"sm"), {}));
-            assert(is(complete("shade Tag(sm"), {}));
-            assert(is(complete("shade Tag(1)sm"), {}));
-            assert(is(complete("=x"), {}));
+            require(is(complete("nope "), {}) && complete("nope ").usage.empty());
+            require(is(complete("shade off true 1 "), {}));
+            require(is(complete("shade mode=off mode="), {}));
+            require(is(complete("shade \"sm"), {}));
+            require(is(complete("shade Tag(sm"), {}));
+            require(is(complete("shade Tag(1)sm"), {}));
+            require(is(complete("=x"), {}));
         }
 
         // Qualified words: the bare spelling is preferred where both are
@@ -1287,19 +1287,19 @@ namespace wry::command {
             auto at = [&](const char* before) {
                 Completion c;
                 auto site = detail::completion_site(StringView(before));
-                assert(site);
+                require(site);
                 detail::complete_argument(c.candidates, *site, params);
                 detail::sort_candidates(c.candidates);
                 return c;
             };
-            assert(is(at("put "), {"OVER", "SWAP"}));
-            assert(is(at("put sw"), {"SWAP"}));
-            assert(is(at("put o"), {"OVER", "op="}));
-            assert(is(at("put OPC"), {"OPCODE::OVER", "OPCODE::SWAP"}));
-            assert(common_prefix(at("put OPC").candidates) == StringView("OPCODE::"));
-            assert(is(at("put SWAP "), {"OPCODE::OVER", "OPCODE::SWAP", "null"}));
-            assert(is(at("put SWAP sw"), {"OPCODE::SWAP"}));
-            assert(is(at("put SWAP n"), {"null"}));
+            require(is(at("put "), {"OVER", "SWAP"}));
+            require(is(at("put sw"), {"SWAP"}));
+            require(is(at("put o"), {"OVER", "op="}));
+            require(is(at("put OPC"), {"OPCODE::OVER", "OPCODE::SWAP"}));
+            require(common_prefix(at("put OPC").candidates) == StringView("OPCODE::"));
+            require(is(at("put SWAP "), {"OPCODE::OVER", "OPCODE::SWAP", "null"}));
+            require(is(at("put SWAP sw"), {"OPCODE::SWAP"}));
+            require(is(at("put SWAP n"), {"null"}));
             (void) at;
         }
 
@@ -1307,10 +1307,10 @@ namespace wry::command {
         // does not split a character.
         {
             const String mixed[] = { String("Alpha"), String("alpine") };
-            assert(common_prefix(mixed) == StringView("Alp"));
+            require(common_prefix(mixed) == StringView("Alp"));
             const String split[] = { String("a\xC3\xA9"), String("a\xC3\xA8") };
-            assert(common_prefix(split) == StringView("a"));
-            assert(common_prefix({}).empty());
+            require(common_prefix(split) == StringView("a"));
+            require(common_prefix({}).empty());
         }
 
         (void) complete; (void) is;

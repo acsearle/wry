@@ -108,8 +108,8 @@ namespace wry::coroutine {
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(fence._outcome.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(fence._outcome.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         // Cancellation: the leaf destroys itself, the cascade destroys mid
@@ -125,10 +125,10 @@ namespace wry::coroutine {
             global_work_queue_schedule(handle_from_future(std::move(task)));
             while (fence._outcome.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(fence._outcome.load(std::memory_order_relaxed) == 2);
-            assert(reached.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 3);
-            assert(resumed_past.load(std::memory_order_relaxed) == 0);
+            require(fence._outcome.load(std::memory_order_relaxed) == 2);
+            require(reached.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 3);
+            require(resumed_past.load(std::memory_order_relaxed) == 0);
         }
 
         co_return;
@@ -253,9 +253,9 @@ namespace wry::coroutine {
             std::atomic<int> done{0};
             auto op = connect(sr_add(10), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 1);
-            assert(std::get<1>(outcome._variant) == 14);
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 1);
+            require(std::get<1>(outcome._variant) == 14);
         }
 
         // error crossing two seams and caught in the middle
@@ -264,9 +264,9 @@ namespace wry::coroutine {
             std::atomic<int> done{0};
             auto op = connect(sr_catcher(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 1);
-            assert(std::get<1>(outcome._variant) == 42);
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 1);
+            require(std::get<1>(outcome._variant) == 42);
         }
 
         // error reaching the terminal receiver
@@ -275,15 +275,15 @@ namespace wry::coroutine {
             std::atomic<int> done{0};
             auto op = connect(sr_thrower(), OutcomeReceiver<int>{&outcome, &done, {}});
             start(op);
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 2);
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 2);
             bool caught = false;
             try {
                 std::rethrow_exception(std::get<2>(outcome._variant));
             } catch (std::runtime_error const& e) {
                 caught = (std::string_view(e.what()) == "boom");
             }
-            assert(caught);
+            require(caught);
         }
 
         // a Task (void) as a sender
@@ -293,9 +293,9 @@ namespace wry::coroutine {
             std::atomic<int> ran{0};
             auto op = connect(sr_void_child(&ran), OutcomeReceiver<void>{&outcome, &done, {}});
             start(op);
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 1);
-            assert(ran.load(std::memory_order_relaxed) == 1);
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 1);
+            require(ran.load(std::memory_order_relaxed) == 1);
         }
 
         co_return;
@@ -352,12 +352,12 @@ namespace wry::coroutine {
         StackExtent extent;
         auto op = connect(sr_inline_loop(n, &extent), OutcomeReceiver<int>{&outcome, &done, {}});
         start(op);
-        assert(done.load(std::memory_order_acquire) == 1);
-        assert(outcome._variant.index() == 1);
-        assert(std::get<1>(outcome._variant) == 3 * n);
+        require(done.load(std::memory_order_acquire) == 1);
+        require(outcome._variant.index() == 1);
+        require(std::get<1>(outcome._variant) == 3 * n);
         printf("coroutine_sender_inline_stack: %d awaits, native stack spread %zu bytes\n",
                3 * n, (std::size_t) extent.spread());
-        assert(extent.spread() < 4096);
+        require(extent.spread() < 4096);
 
         co_return;
     };
@@ -454,8 +454,8 @@ namespace wry::coroutine {
             start(op);
             while (done.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(outcome._variant.index() == 1);
-            assert(std::get<1>(outcome._variant) == n);
+            require(outcome._variant.index() == 1);
+            require(std::get<1>(outcome._variant) == n);
         }
 
         // Stopped completions: whichever party arrives second destroys the
@@ -469,8 +469,8 @@ namespace wry::coroutine {
             start(op);
             while (done.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(outcome._variant.index() == 3);
-            assert(destroyed.load(std::memory_order_relaxed) == 1);
+            require(outcome._variant.index() == 3);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
         }
 
         co_return;
@@ -492,15 +492,15 @@ namespace wry::coroutine {
             auto op = connect(sr_trunk(10.0, &started, &destroyed),
                               OutcomeReceiver<int>{&outcome, &done, source.get_token()});
             start(op);  // runs the trunk inline until the leaf parks
-            assert(started.load(std::memory_order_acquire) == 1);
+            require(started.load(std::memory_order_acquire) == 1);
             co_await cancelable_sleep(0.010);  // settle past the arming window
             auto t0 = steady_clock::now();
             source.request_stop();
             auto elapsed = steady_clock::now() - t0;
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 3);
-            assert(destroyed.load(std::memory_order_relaxed) == 2);
-            assert(elapsed < seconds(2));
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 3);
+            require(destroyed.load(std::memory_order_relaxed) == 2);
+            require(elapsed < seconds(2));
         }
 
         // Cancel before park: the token is already requested when the leaf
@@ -514,10 +514,10 @@ namespace wry::coroutine {
             auto op = connect(sr_trunk(10.0, &started, &destroyed),
                               OutcomeReceiver<int>{&outcome, &done, source.get_token()});
             start(op);
-            assert(done.load(std::memory_order_acquire) == 1);
-            assert(outcome._variant.index() == 3);
-            assert(started.load(std::memory_order_relaxed) == 1);
-            assert(destroyed.load(std::memory_order_relaxed) == 2);
+            require(done.load(std::memory_order_acquire) == 1);
+            require(outcome._variant.index() == 3);
+            require(started.load(std::memory_order_relaxed) == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 2);
         }
 
         // Not stopped: the same tower completes normally on a worker after
@@ -531,9 +531,9 @@ namespace wry::coroutine {
             start(op);
             while (done.load(std::memory_order_acquire) == 0)
                 co_await TransferToPoolExecutor{};
-            assert(outcome._variant.index() == 1);
-            assert(std::get<1>(outcome._variant) == 7);
-            assert(destroyed.load(std::memory_order_relaxed) == 2);
+            require(outcome._variant.index() == 1);
+            require(std::get<1>(outcome._variant) == 7);
+            require(destroyed.load(std::memory_order_relaxed) == 2);
         }
 
         co_return;

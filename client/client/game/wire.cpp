@@ -406,24 +406,24 @@ namespace wry::wire {
         {
             Hello h{PROTOCOL_VERSION, build_id(), 0};
             std::string m = encode_hello(h);
-            assert(m.size() <= cap_for_tag(tag_of(m)));
+            require(m.size() <= cap_for_tag(tag_of(m)));
             auto d = decode_hello(m);
-            assert(d && d->protocol == h.protocol && d->build == h.build && d->tier2 == h.tier2);
+            require(d && d->protocol == h.protocol && d->build == h.build && d->tier2 == h.tier2);
         }
         {
             Welcome w{7, 16666667, 12345, 100};
             auto d = decode_welcome(encode_welcome(w));
-            assert(d && d->client == 7 && d->quantum_ns == 16666667 && d->head == 12345 && d->first == 100);
+            require(d && d->client == 7 && d->quantum_ns == 16666667 && d->head == 12345 && d->first == 100);
         }
         {
             std::string body = "write Coordinate(1, 2) OPCODE::SWAP";
             std::string m = encode_action(99, body);
-            assert(m.size() <= cap_for_tag(ACTION));
+            require(m.size() <= cap_for_tag(ACTION));
             auto d = decode_action(m);
-            assert(d && d->seq == 99 && d->body == body);
+            require(d && d->seq == 99 && d->body == body);
             std::string over = encode_action(1, "");
             over.append(MAX_ACTION_BYTES + 1, 'x');
-            assert(!decode_action(over));
+            require(!decode_action(over));
         }
         {
             std::vector<Entry> entries;
@@ -432,48 +432,48 @@ namespace wry::wire {
             entries.push_back({5, 7, ""});
             std::string m = encode_step(42, entries);
             auto d = decode_step(m);
-            assert(d && d->number == 42 && d->entries.size() == 3);
+            require(d && d->number == 42 && d->entries.size() == 3);
             for (size_t i = 0; i != 3; ++i) {
-                assert(d->entries[i].origin == entries[i].origin);
-                assert(d->entries[i].seq == entries[i].seq);
-                assert(d->entries[i].bytes == entries[i].bytes);
+                require(d->entries[i].origin == entries[i].origin);
+                require(d->entries[i].seq == entries[i].seq);
+                require(d->entries[i].bytes == entries[i].bytes);
             }
             auto e = decode_event(d->entries[0].bytes);
-            assert(e && e->kind == Command::JOIN && e->client == 3);
-            assert(!decode_event("x"));
-            assert(!decode_event(encode_event((Command::Kind)9, 1)));
+            require(e && e->kind == Command::JOIN && e->client == 3);
+            require(!decode_event("x"));
+            require(!decode_event(encode_event((Command::Kind)9, 1)));
             auto empty = decode_step(encode_step(1, {}));
-            assert(empty && empty->number == 1 && empty->entries.empty());
+            require(empty && empty->number == 1 && empty->entries.empty());
         }
         {
             std::string request = encode_join_request("antony");
             auto n = decode_join_request(request);
-            assert(n && *n == "antony");
+            require(n && *n == "antony");
             std::string long_name = encode_join_request("");
             long_name.append(MAX_NAME_BYTES + 1, 'n');
-            assert(!decode_join_request(long_name));
-            assert(decode_kick(codec().farewell("because")).value() == "because");
+            require(!decode_join_request(long_name));
+            require(decode_kick(codec().farewell("because")).value() == "because");
             auto h = decode_hash(encode_hash(10, 0x1234));
-            assert(h && h->first == 10 && h->second == 0x1234);
-            assert(tag_of(encode_quit()) == QUIT && encode_quit().size() == 2);
-            assert(tag_of(encode_ping()) == PING && tag_of(encode_shutdown()) == SHUTDOWN);
+            require(h && h->first == 10 && h->second == 0x1234);
+            require(tag_of(encode_quit()) == QUIT && encode_quit().size() == 2);
+            require(tag_of(encode_ping()) == PING && tag_of(encode_shutdown()) == SHUTDOWN);
         }
         {
             auto q = decode_save_request(encode_save_request(5, 77));
-            assert(q && q->transfer == 5 && q->boundary == 77);
+            require(q && q->transfer == 5 && q->boundary == 77);
             auto b = decode_save_begin(encode_save_begin(5, 77, 123456));
-            assert(b && b->transfer == 5 && b->boundary == 77 && b->total == 123456);
+            require(b && b->transfer == 5 && b->boundary == 77 && b->total == 123456);
             std::string payload(MAX_SAVE_CHUNK, 'p');
             std::string data = encode_save_data(5, 3, payload);
-            assert(data.size() <= cap_for_tag(SAVE_DATA));
+            require(data.size() <= cap_for_tag(SAVE_DATA));
             auto d = decode_save_data(data);
-            assert(d && d->transfer == 5 && d->index == 3 && d->bytes == payload);
+            require(d && d->transfer == 5 && d->index == 3 && d->bytes == payload);
             std::string over = encode_save_data(5, 0, "");
             over.append(MAX_SAVE_CHUNK + 1, 'p');
-            assert(!decode_save_data(over));
+            require(!decode_save_data(over));
             auto e = decode_save_end(encode_save_end(5));
-            assert(e && *e == 5);
-            assert(!decode_save_end(encode_save_request(5, 77)));
+            require(e && *e == 5);
+            require(!decode_save_end(encode_save_request(5, 77)));
         }
 
         // The wrong tag, a truncation, or trailing bytes is nullopt, never
@@ -487,7 +487,7 @@ namespace wry::wire {
                 encode_save_end(1),
             };
             for (std::string const& m : messages) {
-                assert(!decode_hello(encode_quit()) && !decode_welcome(encode_quit()));
+                require(!decode_hello(encode_quit()) && !decode_welcome(encode_quit()));
                 for (size_t cut = 0; cut < m.size(); ++cut) {
                     std::string_view t(m.data(), cut);
                     (void) decode_hello(t);
@@ -502,7 +502,7 @@ namespace wry::wire {
                     (void) decode_save_end(t);
                 }
                 std::string longer = m + "!";
-                assert(!decode_hello(longer) && !decode_welcome(longer) && !decode_step(longer)
+                require(!decode_hello(longer) && !decode_welcome(longer) && !decode_step(longer)
                        && !decode_hash(longer));
             }
             // A STEP claiming more entries than it holds, or an entry
@@ -511,11 +511,11 @@ namespace wry::wire {
             std::string huge = s;
             uint32_t count = 0x7fffffff;
             std::memcpy(huge.data() + 2 + 8, &count, 4);
-            assert(!decode_step(huge));
+            require(!decode_step(huge));
             std::string overlong = s;
             uint32_t length = 1000;
             std::memcpy(overlong.data() + 2 + 8 + 4 + 8 + 8, &length, 4);
-            assert(!decode_step(overlong));
+            require(!decode_step(overlong));
             // Random bytes
             for (int i = 0; i != 2000; ++i) {
                 std::string junk(rng() % 64, '\0');

@@ -463,7 +463,7 @@ namespace wry {
         Relay::Limits limits;
         limits.quantum = std::chrono::hours(1);
         auto host = Host::make(scope, limits, error);
-        assert(host && error.empty());
+        require(host && error.empty());
         RemoteServer& client = host->client();
         host->relay().pause();              // step 1: PAUSED
         client.request_join();              // JOIN_REQUEST once welcomed
@@ -476,9 +476,9 @@ namespace wry {
             take();
             return client.state() == RemoteServer::State::SUBSCRIBED || client.state() == RemoteServer::State::JOINED;
         });
-        assert(subscribed);
+        require(subscribed);
         (void) subscribed;
-        assert(client.client_id() == 1);    // the first connection
+        require(client.client_id() == 1);    // the first connection
 
         // Submitted before the JOIN: queued, sent once in.  (A posted step
         // goes straight to the relay's inbox while the request travels the
@@ -489,7 +489,7 @@ namespace wry {
             take();
             return client.state() == RemoteServer::State::JOINED;
         });
-        assert(joined);
+        require(joined);
         (void) joined;
         bool acted = co_await eventually([&] {
             host->relay().step(1);
@@ -500,13 +500,13 @@ namespace wry {
                         return true;
             return false;
         });
-        assert(acted);
+        require(acted);
         (void) acted;
         // The steps are numbered from 1 and carry PAUSED, JOIN{1}, then
         // the action with its sequence number
-        assert(steps.size() >= 3);
+        require(steps.size() >= 3);
         for (size_t i = 0; i != steps.size(); ++i)
-            assert(steps[i].number == i + 1);
+            require(steps[i].number == i + 1);
         bool paused_seen = false, join_seen = false;
         Command const* action = nullptr;
         for (Step& s : steps)
@@ -515,11 +515,11 @@ namespace wry {
                 if (c.kind == Command::JOIN && c.client == 1) join_seen = true;
                 if (c.kind == Command::ACTION) action = &c;
             }
-        assert(paused_seen && join_seen && action);
-        assert(action->origin == 1 && action->seq == 1);
-        assert(action->action.tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
-        assert(action->action.coordinate == (Coordinate{1, 1}));
-        assert(action->action.value._value._data == term_make_integer_with(7)._data);
+        require(paused_seen && join_seen && action);
+        require(action->origin == 1 && action->seq == 1);
+        require(action->action.tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
+        require(action->action.coordinate == (Coordinate{1, 1}));
+        require(action->action.value._value._data == term_make_integer_with(7)._data);
 
         // Applied to a World, the steps spawn the Player and land the write
         {
@@ -531,25 +531,25 @@ namespace wry {
                 Root<World*> next = co_await world._ptr->step(s.commands);
                 unpin_global_epoch(pin);
                 world = std::move(next);
-                assert(world._ptr->_time == (Time)s.number);
+                require(world._ptr->_time == (Time)s.number);
             }
             EntityID player{};
             bool mapped = world._ptr->_player_for_client.try_get(1, player);
-            assert(mapped);
+            require(mapped);
             (void) mapped;
             Term t{};
             bool has_term = world._ptr->_term_for_coordinate.try_get(Coordinate{1, 1}, t);
-            assert(has_term);
+            require(has_term);
             (void) has_term;
-            assert(t._data == term_make_integer_with(7)._data);
+            require(t._data == term_make_integer_with(7)._data);
         }
 
         // Leaving: the relay sees the QUIT and our LEAVE rides a step that
         // we no longer receive
         client.leave();
-        assert(client.state() == RemoteServer::State::DISCONNECTED && client.reason() == "left");
+        require(client.state() == RemoteServer::State::DISCONNECTED && client.reason() == "left");
         co_await host->shutdown(std::chrono::milliseconds(200));
-        assert(host->finished());
+        require(host->finished());
         (void) co_await scope.join();
         co_return;
     };
@@ -562,12 +562,12 @@ namespace wry {
         frame.entries.push_back({1, 1, std::string("write Coordinate(1, 1) 7")});
         frame.entries.push_back({1, 2, std::string(wire::MAX_ACTION_BYTES, 'x')});
         auto ok = step_from_wire(frame);
-        assert(ok && ok->commands.size() == 2);
-        assert(ok->commands[0].action.tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
-        assert(ok->commands[1].action.tag == Player::Action::NONE);     // unparseable: a no-op
+        require(ok && ok->commands.size() == 2);
+        require(ok->commands[0].action.tag == Player::Action::WRITE_VALUE_FOR_COORDINATE);
+        require(ok->commands[1].action.tag == Player::Action::NONE);     // unparseable: a no-op
         frame.entries.push_back({1, 3, std::string(wire::MAX_ACTION_BYTES + 1, '(')});
         auto over = step_from_wire(frame);
-        assert(!over);
+        require(!over);
         co_return;
     };
 
@@ -578,14 +578,14 @@ namespace wry {
         Relay::Limits limits;
         limits.quantum = std::chrono::hours(1);
         auto host = Host::make(scope, limits, error);
-        assert(host && error.empty());
+        require(host && error.empty());
         host->relay().pause();
         auto port = host->relay().listen("127.0.0.1", 0);
-        assert(port && *port != 0);
+        require(port && *port != 0);
 
         host->relay().step(2);
         bool stepped = co_await eventually([&] { return host->relay().clock().head >= 3; });
-        assert(stepped);
+        require(stepped);
         (void) stepped;
         auto joiner = RemoteServer::make(scope);
         joiner->dial("127.0.0.1", *port);
@@ -601,10 +601,10 @@ namespace wry {
                 donations.push_back(d);
             return !donations.empty();
         });
-        assert(asked && donations.size() == 1);
+        require(asked && donations.size() == 1);
         (void) asked;
         const uint64_t boundary = donations[0].boundary;
-        assert(boundary == host->relay().clock().head);
+        require(boundary == host->relay().clock().head);
         World* w = new World;
         w->_time = (Time)boundary;
         Player* p = new Player;
@@ -627,19 +627,19 @@ namespace wry {
             save = joiner->take_save();
             return save.has_value();
         });
-        assert(received && save->boundary == boundary);
+        require(received && save->boundary == boundary);
         (void) received;
         // Rooted: it is read again after the waits below, and a wait is a
         // suspension, across which this worker's pin is not held
         Root<World const*> loaded{load_world_from_bytes(save->bytes)};
-        assert(loaded._ptr && loaded._ptr->_time == (Time)boundary);
-        assert(loaded._ptr->content_hash() == w->content_hash());
+        require(loaded._ptr && loaded._ptr->_time == (Time)boundary);
+        require(loaded._ptr->content_hash() == w->content_hash());
         {
             Term t{};
             bool has_term = loaded._ptr->_term_for_coordinate.try_get(Coordinate{2, 3}, t);
-            assert(has_term);
+            require(has_term);
             (void) has_term;
-            assert(term_eq(t, term_make_string_with("donated")));
+            require(term_eq(t, term_make_string_with("donated")));
         }
         // The JOIN is not yet admitted: no report
         host->relay().step(1);
@@ -647,7 +647,7 @@ namespace wry {
             (void) joiner->take_steps();
             return joiner->head() >= boundary + 1;
         });
-        assert(pending && joiner->state() == RemoteServer::State::SUBSCRIBED);
+        require(pending && joiner->state() == RemoteServer::State::SUBSCRIBED);
         (void) pending;
         host->client().report_hash(boundary, w->content_hash());
         joiner->report_hash(boundary, loaded._ptr->content_hash());
@@ -657,9 +657,9 @@ namespace wry {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::JOINED;
         });
-        assert(joined);
+        require(joined);
         (void) joined;
-        assert(joiner->client_id() == 2);
+        require(joiner->client_id() == 2);
 
         // Hash reports: agreement with the host's client is silent, and a
         // disagreement at any step the reference has reported is a kick
@@ -672,11 +672,11 @@ namespace wry {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::JOINED;
         });
-        assert(agreed);
+        require(agreed);
         (void) agreed;
         host->relay().step(1);
         bool one_more = co_await eventually([&] { return host->relay().clock().head > later; });
-        assert(one_more);
+        require(one_more);
         (void) one_more;
         host->client().report_hash(later + 1, 0x3333);
         joiner->report_hash(later + 1, 0xbad);
@@ -684,7 +684,7 @@ namespace wry {
             (void) joiner->take_steps();
             return joiner->state() == RemoteServer::State::DISCONNECTED;
         });
-        assert(desynced && joiner->reason() == "kicked: desync at step " + std::to_string(later + 1));
+        require(desynced && joiner->reason() == "kicked: desync at step " + std::to_string(later + 1));
         (void) desynced;
 
         // A dial that is refused reports its error
@@ -699,7 +699,7 @@ namespace wry {
             (void) refused->take_steps();
             return refused->state() == RemoteServer::State::DISCONNECTED;
         });
-        assert(failed && refused->reason().starts_with("connect: "));
+        require(failed && refused->reason().starts_with("connect: "));
         (void) failed;
 
         // A second joiner, agreeing, is told of the shutdown
@@ -709,7 +709,7 @@ namespace wry {
             (void) second->take_steps();
             return second->state() == RemoteServer::State::SUBSCRIBED;
         });
-        assert(subscribed);
+        require(subscribed);
         (void) subscribed;
         second->report_hash(later + 1, 0x3333);
         co_await host->shutdown(std::chrono::milliseconds(200));
@@ -717,7 +717,7 @@ namespace wry {
             (void) second->take_steps();
             return second->state() == RemoteServer::State::DISCONNECTED;
         });
-        assert(told && second->reason() == "the server shut down");
+        require(told && second->reason() == "the server shut down");
         (void) told;
         co_await joiner->shutdown(std::chrono::milliseconds(100));
         co_await second->shutdown(std::chrono::milliseconds(100));

@@ -540,33 +540,33 @@ namespace wry::gui {
         // Typing inserts before the cursor.
         {
             LineEditor ed;
-            assert(ed.empty() && ed.cursor() == 0);
+            require(ed.empty() && ed.cursor() == 0);
             type(ed, "abc");
-            assert(ed.text() == StringView("abc") && ed.cursor() == 3);
+            require(ed.text() == StringView("abc") && ed.cursor() == 3);
             ed.move_left(Unit::character);
             type(ed, "X");
-            assert(ed.text() == StringView("abXc") && ed.cursor() == 3);
-            assert(ed.before() == StringView("abX") && ed.after() == StringView("c"));
+            require(ed.text() == StringView("abXc") && ed.cursor() == 3);
+            require(ed.before() == StringView("abX") && ed.after() == StringView("c"));
 
             // Backspace takes what is before, Delete what is after.
             ed.erase_left(Unit::character);
-            assert(ed.text() == StringView("abc") && ed.cursor() == 2);
+            require(ed.text() == StringView("abc") && ed.cursor() == 2);
             ed.erase_right(Unit::character);
-            assert(ed.text() == StringView("ab") && ed.cursor() == 2);
+            require(ed.text() == StringView("ab") && ed.cursor() == 2);
 
             // Both are no-ops at the end they point at.
             ed.erase_right(Unit::character);
             ed.move_left(Unit::line);
             ed.erase_left(Unit::character);
             ed.move_left(Unit::character);
-            assert(ed.text() == StringView("ab") && ed.cursor() == 0);
+            require(ed.text() == StringView("ab") && ed.cursor() == 0);
             ed.move_right(Unit::line);
             ed.move_right(Unit::character);
-            assert(ed.cursor() == 2);
+            require(ed.cursor() == 2);
 
             // take() empties the line.
             String line = ed.take();
-            assert(line == StringView("ab") && ed.empty() && ed.cursor() == 0);
+            require(line == StringView("ab") && ed.empty() && ed.cursor() == 0);
         }
 
         // The cursor moves and erases by whole code points:
@@ -574,27 +574,27 @@ namespace wry::gui {
         {
             LineEditor ed;
             ed.set("a\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80" "b");
-            assert(ed.cursor() == 11);
+            require(ed.cursor() == 11);
             const std::size_t stops[] = { 10, 6, 3, 1, 0, 0 };
             for (std::size_t stop : stops) {
                 ed.move_left(Unit::character);
-                assert(ed.cursor() == stop);
+                require(ed.cursor() == stop);
                 (void) stop;
             }
             const std::size_t back[] = { 1, 3, 6, 10, 11, 11 };
             for (std::size_t stop : back) {
                 ed.move_right(Unit::character);
-                assert(ed.cursor() == stop);
+                require(ed.cursor() == stop);
                 (void) stop;
             }
             ed.move_left(Unit::character);
             ed.erase_left(Unit::character);     // the face, all four bytes
-            assert(ed.text() == StringView("a\xC3\xA9\xE2\x82\xAC" "b"));
-            assert(ed.cursor() == 6);
+            require(ed.text() == StringView("a\xC3\xA9\xE2\x82\xAC" "b"));
+            require(ed.cursor() == 6);
             ed.move_left(Unit::line);
             ed.move_right(Unit::character);
             ed.erase_right(Unit::character);    // e-acute
-            assert(ed.text() == StringView("a\xE2\x82\xAC" "b"));
+            require(ed.text() == StringView("a\xE2\x82\xAC" "b"));
         }
 
         // Words: left lands on starts, right on ends.
@@ -606,30 +606,30 @@ namespace wry::gui {
             const std::size_t starts[] = { 24, 20, 8, 0, 0 };
             for (std::size_t stop : starts) {
                 ed.move_left(Unit::word);
-                assert(ed.cursor() == stop);
+                require(ed.cursor() == stop);
                 (void) stop;
             }
             const std::size_t ends[] = { 7, 18, 21, 25, 26, 26 };
             for (std::size_t stop : ends) {
                 ed.move_right(Unit::word);
-                assert(ed.cursor() == stop);
+                require(ed.cursor() == stop);
                 (void) stop;
             }
             // A blank-delimited word swallows the punctuation.
             ed.move_left(Unit::blank_word);
-            assert(ed.cursor() == 23);
+            require(ed.cursor() == 23);
             ed.move_left(Unit::blank_word);
-            assert(ed.cursor() == 8);
+            require(ed.cursor() == 8);
             ed.move_right(Unit::blank_word);
-            assert(ed.cursor() == 22);
+            require(ed.cursor() == 22);
 
             // A hyphenated name is two words but one blank word.
             ed.set("toggle-console");
             ed.move_left(Unit::word);
-            assert(ed.cursor() == 7);
+            require(ed.cursor() == 7);
             ed.move_right(Unit::line);
             ed.move_left(Unit::blank_word);
-            assert(ed.cursor() == 0);
+            require(ed.cursor() == 0);
         }
 
         // Kills accumulate while they are consecutive, in text order,
@@ -639,17 +639,17 @@ namespace wry::gui {
             ed.set("one two three four");
             ed.erase_left(Unit::blank_word);
             ed.erase_left(Unit::blank_word);
-            assert(ed.text() == StringView("one two "));
+            require(ed.text() == StringView("one two "));
             ed.yank();
-            assert(ed.text() == StringView("one two three four"));
+            require(ed.text() == StringView("one two three four"));
 
             // Erasing a character is not a kill and breaks the chain.
             ed.erase_left(Unit::blank_word);        // "four"
             ed.erase_left(Unit::character);         // " "
             ed.erase_left(Unit::blank_word);        // "three" replaces "four"
-            assert(ed.text() == StringView("one two "));
+            require(ed.text() == StringView("one two "));
             ed.yank();
-            assert(ed.text() == StringView("one two three"));
+            require(ed.text() == StringView("one two three"));
 
             // Left of the cursor then right of it: one buffer.
             ed.set("alpha beta gamma");
@@ -657,9 +657,9 @@ namespace wry::gui {
             ed.move_left(Unit::character);          // between "beta" and " gamma"
             ed.erase_left(Unit::line);              // "alpha beta"
             ed.erase_right(Unit::line);             // " gamma"
-            assert(ed.empty());
+            require(ed.empty());
             ed.yank();
-            assert(ed.text() == StringView("alpha beta gamma"));
+            require(ed.text() == StringView("alpha beta gamma"));
         }
 
         // Insertion drops control characters, and may be handed the
@@ -667,11 +667,11 @@ namespace wry::gui {
         {
             LineEditor ed;
             ed.insert("a\tb\nc\x7F" "d");
-            assert(ed.text() == StringView("abcd"));
+            require(ed.text() == StringView("abcd"));
             ed.move_left(Unit::character);
             ed.move_left(Unit::character);
             ed.insert(ed.text());
-            assert(ed.text() == StringView("ababcdcd") && ed.cursor() == 6);
+            require(ed.text() == StringView("ababcdcd") && ed.cursor() == 6);
         }
 
         // Key bindings.
@@ -683,56 +683,56 @@ namespace wry::gui {
             LineEditor ed;
             type(ed, "hold OPCODE::SWAP");
             must(ed.on_key(key_event(key::ArrowLeft, alt)));
-            assert(ed.cursor() == 13);
+            require(ed.cursor() == 13);
             must(ed.on_key(key_event(key::ArrowLeft, cmd)));
-            assert(ed.cursor() == 0);
+            require(ed.cursor() == 0);
             must(ed.on_key(key_event(key::ArrowRight, ctrl)));
-            assert(ed.cursor() == 4);
+            require(ed.cursor() == 4);
             must(ed.on_key(key_event(key::End)));
-            assert(ed.cursor() == 17);
+            require(ed.cursor() == 17);
             must(ed.on_key(key_event(key::Home)));
-            assert(ed.cursor() == 0);
+            require(ed.cursor() == 0);
             must(ed.on_key(key_event('e', ctrl)));
-            assert(ed.cursor() == 17);
+            require(ed.cursor() == 17);
             must(ed.on_key(key_event('a', ctrl)));
             must(ed.on_key(key_event('f', ctrl)));
-            assert(ed.cursor() == 1);
+            require(ed.cursor() == 1);
             must(ed.on_key(key_event('b', ctrl)));
-            assert(ed.cursor() == 0);
+            require(ed.cursor() == 0);
             must(ed.on_key(key_event('d', ctrl)));
-            assert(ed.text() == StringView("old OPCODE::SWAP"));
+            require(ed.text() == StringView("old OPCODE::SWAP"));
             must(ed.on_key(key_event(key::Delete, alt)));
-            assert(ed.text() == StringView(" OPCODE::SWAP"));
+            require(ed.text() == StringView(" OPCODE::SWAP"));
             must(ed.on_key(key_event('e', ctrl)));
             must(ed.on_key(key_event(key::Backspace, alt)));
-            assert(ed.text() == StringView(" OPCODE::"));
+            require(ed.text() == StringView(" OPCODE::"));
             must(ed.on_key(key_event('w', ctrl)));
-            assert(ed.text() == StringView(" "));
+            require(ed.text() == StringView(" "));
             // The two kills were consecutive, so the yank returns both.
             must(ed.on_key(key_event('y', ctrl)));
-            assert(ed.text() == StringView(" OPCODE::SWAP"));
+            require(ed.text() == StringView(" OPCODE::SWAP"));
             must(ed.on_key(key_event('h', ctrl)));
-            assert(ed.text() == StringView(" OPCODE::SWA"));
+            require(ed.text() == StringView(" OPCODE::SWA"));
             must(ed.on_key(key_event(key::Backspace, cmd)));
-            assert(ed.empty());
+            require(ed.empty());
             type(ed, "abcd");
             ed.move_left(Unit::character);
             ed.move_left(Unit::character);
             must(ed.on_key(key_event('k', ctrl)));
-            assert(ed.text() == StringView("ab"));
+            require(ed.text() == StringView("ab"));
             must(ed.on_key(key_event('u', ctrl)));
-            assert(ed.empty());
+            require(ed.empty());
 
             // Chords are not text: Cmd-Q arrives with the text "q".
             must(!ed.on_key(key_event('q', cmd, "q")));
             must(!ed.on_key(key_event('q', ctrl)));
-            assert(ed.empty());
+            require(ed.empty());
             // Alt text is: Alt-A types a-ring on a US layout.
             must(ed.on_key(key_event('a', alt, "\xC3\xA5")));
-            assert(ed.text() == StringView("\xC3\xA5"));
+            require(ed.text() == StringView("\xC3\xA5"));
             // A sequence the event buffer cut short is dropped, not stored.
             must(ed.on_key(key_event(key::Unknown, 0, "\xE2\x82")));
-            assert(ed.text() == StringView("\xC3\xA5"));
+            require(ed.text() == StringView("\xC3\xA5"));
 
             // The owner's keys and other event kinds are not ours.
             must(!ed.on_key(key_event(key::Enter)));
@@ -757,80 +757,80 @@ namespace wry::gui {
 
         LineEditor ed;
         ed.set("hold OPCODE::SWAP");
-        assert(!ed.has_selection() && ed.selected().empty());
+        require(!ed.has_selection() && ed.selected().empty());
 
         // Shift with a motion leaves the anchor behind.
         must(ed.on_key(key_event(key::ArrowLeft, shift | alt)));
-        assert(ed.anchor() == 17 && ed.cursor() == 13);
-        assert(ed.selected() == StringView("SWAP"));
+        require(ed.anchor() == 17 && ed.cursor() == 13);
+        require(ed.selected() == StringView("SWAP"));
         must(ed.on_key(key_event(key::ArrowLeft, shift)));
-        assert(ed.selected() == StringView(":SWAP"));
+        require(ed.selected() == StringView(":SWAP"));
         // ... and moving back past the anchor turns the selection round.
         ed.move_right(Unit::line, true);
-        assert(!ed.has_selection());
+        require(!ed.has_selection());
         ed.move_left(Unit::line, true);
-        assert(ed.selected() == StringView("hold OPCODE::SWAP"));
-        assert(ed.selection_first() == 0 && ed.selection_last() == 17);
+        require(ed.selected() == StringView("hold OPCODE::SWAP"));
+        require(ed.selection_first() == 0 && ed.selection_last() == 17);
 
         // An unshifted character move collapses to that end and stops.
         ed.move_to(5);
         ed.move_to(11, true);
-        assert(ed.selected() == StringView("OPCODE"));
+        require(ed.selected() == StringView("OPCODE"));
         ed.move_left(Unit::character);
-        assert(!ed.has_selection() && ed.cursor() == 5);
+        require(!ed.has_selection() && ed.cursor() == 5);
         ed.move_to(11, true);
         ed.move_right(Unit::character);
-        assert(!ed.has_selection() && ed.cursor() == 11);
+        require(!ed.has_selection() && ed.cursor() == 11);
         // A larger move continues from that end.
         ed.move_to(5);
         ed.move_to(11, true);
         ed.move_left(Unit::word);
-        assert(!ed.has_selection() && ed.cursor() == 0);
+        require(!ed.has_selection() && ed.cursor() == 0);
 
         // Typing replaces the selection; so do Backspace and Delete,
         // whatever their unit.
         ed.move_to(5);
         ed.move_to(11, true);
         type(ed, "X");
-        assert(ed.text() == StringView("hold X::SWAP") && ed.cursor() == 6);
+        require(ed.text() == StringView("hold X::SWAP") && ed.cursor() == 6);
         ed.move_to(4, true);
         must(ed.on_key(key_event(key::Backspace, alt)));
-        assert(ed.text() == StringView("hold::SWAP") && ed.cursor() == 4);
+        require(ed.text() == StringView("hold::SWAP") && ed.cursor() == 4);
         ed.move_to(6, true);
         must(ed.on_key(key_event(key::Delete)));
-        assert(ed.text() == StringView("holdSWAP"));
+        require(ed.text() == StringView("holdSWAP"));
 
         // Select all.
         must(ed.on_key(key_event('a', cmd, "a")));
-        assert(ed.selected() == StringView("holdSWAP"));
-        assert(ed.text() == StringView("holdSWAP"));
+        require(ed.selected() == StringView("holdSWAP"));
+        require(ed.text() == StringView("holdSWAP"));
 
         // move_to clamps, and snaps into a code point's start.
         ed.set("a\xE2\x82\xAC" "b");
         ed.move_to(2);
-        assert(ed.cursor() == 1);
+        require(ed.cursor() == 1);
         ed.move_to(3);
-        assert(ed.cursor() == 1);
+        require(ed.cursor() == 1);
         ed.move_to(99);
-        assert(ed.cursor() == 5);
+        require(ed.cursor() == 5);
 
         // A double click takes the word, the spaces, or the one mark.
         //      0         1
         //      01234567890123456
         ed.set("hold  OPCODE::SWAP");
         ed.select_word_at(2);
-        assert(ed.selected() == StringView("hold"));
+        require(ed.selected() == StringView("hold"));
         ed.select_word_at(4);
-        assert(ed.selected() == StringView("  "));
+        require(ed.selected() == StringView("  "));
         ed.select_word_at(8);
-        assert(ed.selected() == StringView("OPCODE"));
+        require(ed.selected() == StringView("OPCODE"));
         ed.select_word_at(12);
-        assert(ed.selected() == StringView(":"));
+        require(ed.selected() == StringView(":"));
         ed.select_word_at(18);      // the end: the last word
-        assert(ed.selected() == StringView("SWAP"));
+        require(ed.selected() == StringView("SWAP"));
         ed.clear();
         ed.select_word_at(0);
-        assert(!ed.has_selection());
+        require(!ed.has_selection());
 
         (void) shift; (void) alt; (void) cmd;
         co_return;
@@ -849,56 +849,56 @@ namespace wry::gui {
         // word began.
         type(ed, "one two three");
         must(ed.undo());
-        assert(ed.text() == StringView("one two "));
+        require(ed.text() == StringView("one two "));
         must(ed.undo());
-        assert(ed.text() == StringView("one "));
+        require(ed.text() == StringView("one "));
         must(ed.undo());
-        assert(ed.empty());
+        require(ed.empty());
         must(!ed.undo());
         // ... and redone the same way, until a new edit.
         must(ed.redo() && ed.redo());
-        assert(ed.text() == StringView("one two ") && ed.cursor() == 8);
+        require(ed.text() == StringView("one two ") && ed.cursor() == 8);
         type(ed, "x");
         must(!ed.redo());
-        assert(ed.text() == StringView("one two x"));
+        require(ed.text() == StringView("one two x"));
 
         // A run of Backspaces is one step; moving the cursor ends a run.
         ed.erase_left(Unit::character);
         ed.erase_left(Unit::character);
         ed.erase_left(Unit::character);
-        assert(ed.text() == StringView("one tw"));
+        require(ed.text() == StringView("one tw"));
         ed.move_left(Unit::character);
         ed.erase_left(Unit::character);
-        assert(ed.text() == StringView("one w"));
+        require(ed.text() == StringView("one w"));
         must(ed.undo());
-        assert(ed.text() == StringView("one tw") && ed.cursor() == 5);
+        require(ed.text() == StringView("one tw") && ed.cursor() == 5);
         must(ed.undo());
-        assert(ed.text() == StringView("one two x") && ed.cursor() == 9);
+        require(ed.text() == StringView("one two x") && ed.cursor() == 9);
 
         // Erasing nothing is not a step.
         ed.erase_right(Unit::character);
         must(ed.undo());
-        assert(ed.text() == StringView("one two "));
+        require(ed.text() == StringView("one two "));
 
         // A kill, a replaced selection and a replace() are each a step,
         // and undo brings the selection back.
         ed.set("alpha beta");
         ed.erase_left(Unit::word);
-        assert(ed.text() == StringView("alpha "));
+        require(ed.text() == StringView("alpha "));
         ed.move_to(0);
         ed.move_to(5, true);
         type(ed, "A");
-        assert(ed.text() == StringView("A "));
+        require(ed.text() == StringView("A "));
         ed.replace(0, 1, "omega");
-        assert(ed.text() == StringView("omega ") && ed.cursor() == 5);
+        require(ed.text() == StringView("omega ") && ed.cursor() == 5);
         must(ed.on_key(key_event('z', cmd, "z")));
-        assert(ed.text() == StringView("A "));
+        require(ed.text() == StringView("A "));
         must(ed.on_key(key_event('z', cmd, "z")));
-        assert(ed.text() == StringView("alpha ") && ed.selected() == StringView("alpha"));
+        require(ed.text() == StringView("alpha ") && ed.selected() == StringView("alpha"));
         must(ed.on_key(key_event('z', cmd, "z")));
-        assert(ed.text() == StringView("alpha beta") && ed.cursor() == 10);
+        require(ed.text() == StringView("alpha beta") && ed.cursor() == 10);
         must(ed.on_key(key_event('z', cmd | shift, "Z")));
-        assert(ed.text() == StringView("alpha "));
+        require(ed.text() == StringView("alpha "));
 
         // A new line has nothing to undo.
         ed.set("recalled");
@@ -921,7 +921,7 @@ namespace wry::gui {
         ed.select_all();
         must(ed.on_key(key_event('x', cmd, "x")));
         must(ed.on_key(key_event('v', cmd, "v")));
-        assert(ed.text() == StringView("abc"));
+        require(ed.text() == StringView("abc"));
 
         Clipboard clipboard;
         ed.set_clipboard(&clipboard);
@@ -932,27 +932,27 @@ namespace wry::gui {
         ed.move_to(0);
         must(ed.on_key(key_event('c', cmd, "c")));
         must(ed.on_key(key_event('x', cmd, "x")));
-        assert(clipboard.read() == StringView("kept"));
+        require(clipboard.read() == StringView("kept"));
         ed.move_to(1);
         ed.move_to(3, true);
         must(ed.on_key(key_event('c', cmd, "c")));
-        assert(clipboard.read() == StringView("bc") && ed.text() == StringView("abc"));
+        require(clipboard.read() == StringView("bc") && ed.text() == StringView("abc"));
         ed.move_to(0);
         ed.move_to(1, true);
         must(ed.on_key(key_event('x', cmd, "x")));
-        assert(clipboard.read() == StringView("a") && ed.text() == StringView("bc"));
+        require(clipboard.read() == StringView("a") && ed.text() == StringView("bc"));
 
         // Paste inserts at the cursor or over the selection, as one undo
         // step, with line breaks and tabs flattened to spaces.
         ed.move_to(1);
         must(ed.on_key(key_event('v', cmd, "v")));
-        assert(ed.text() == StringView("bac") && ed.cursor() == 2);
+        require(ed.text() == StringView("bac") && ed.cursor() == 2);
         clipboard.write("one\ntwo\tthree\r\n");
         ed.select_all();
         must(ed.on_key(key_event('v', cmd, "v")));
-        assert(ed.text() == StringView("one two three  "));
+        require(ed.text() == StringView("one two three  "));
         must(ed.undo());
-        assert(ed.text() == StringView("bac"));
+        require(ed.text() == StringView("bac"));
 
         (void) cmd;
         co_return;
@@ -1055,11 +1055,11 @@ namespace wry::gui {
                     if (random(4) == 0) {
                         ed.insert("zz");
                         const bool undone = ed.undo();
-                        assert(undone);
+                        require(undone);
                         (void) undone;
                         if (ed.undo()) {
                             const bool redone = ed.redo();
-                            assert(redone);
+                            require(redone);
                             (void) redone;
                         }
                     }
@@ -1078,9 +1078,9 @@ namespace wry::gui {
             }
             if (at == model.size()) cursor_bytes = expected.chars.size();
             if (from == model.size()) anchor_bytes = expected.chars.size();
-            assert(ed.text() == StringView(expected));
-            assert(ed.cursor() == cursor_bytes);
-            assert(ed.anchor() == anchor_bytes);
+            require(ed.text() == StringView(expected));
+            require(ed.cursor() == cursor_bytes);
+            require(ed.anchor() == anchor_bytes);
         }
 
         co_return;

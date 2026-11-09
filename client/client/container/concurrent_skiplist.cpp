@@ -32,15 +32,15 @@ namespace wry {
                 for (int k = 0; k != N; ++k) {
                     auto c = a.find(k);
                     auto d = b.find(k);
-                    assert((c == a.end()) == (d == b.end()));
+                    require((c == a.end()) == (d == b.end()));
                     if (c != a.end()) {
-                        assert(*c == *d);
+                        require(*c == *d);
                     }
                     auto cl = a.lower_bound(k);
                     auto dl = b.lower_bound(k);
-                    assert((cl == a.end()) == (dl == b.end()));
+                    require((cl == a.end()) == (dl == b.end()));
                     if (cl != a.end()) {
-                        assert(*cl == *dl);
+                        require(*cl == *dl);
                     }
                 }
             }
@@ -51,23 +51,23 @@ namespace wry {
             // decomposition (for_each_child) reaches every node exactly once.
             {
                 auto f = freeze(a);
-                assert(f.is_empty() == b.empty());
+                require(f.is_empty() == b.empty());
                 for (int k = 0; k != N; ++k) {
                     auto c = f.find(k);
                     auto d = b.find(k);
-                    assert((c == f.end()) == (d == b.end()));
+                    require((c == f.end()) == (d == b.end()));
                     if (c != f.end())
-                        assert(*c == *d);
+                        require(*c == *d);
                     auto cl = f.lower_bound(k);
                     auto dl = b.lower_bound(k);
-                    assert((cl == f.end()) == (dl == b.end()));
+                    require((cl == f.end()) == (dl == b.end()));
                     if (cl != f.end())
-                        assert(*cl == *dl);
+                        require(*cl == *dl);
                 }
                 std::vector<int> iterated;
                 for (int x : f)
                     iterated.push_back(x);
-                assert(std::equal(iterated.begin(), iterated.end(), b.begin(), b.end()));
+                require(std::equal(iterated.begin(), iterated.end(), b.begin(), b.end()));
 
                 // find(query, visit): the entered nodes are a strictly
                 // increasing chain of keys below the query, ending at the
@@ -76,10 +76,10 @@ namespace wry {
                     std::vector<int> entered;
                     auto c = f.find(k, [&entered](int const& key) { entered.push_back(key); });
                     for (size_t i = 1; i < entered.size(); ++i)
-                        assert(entered[i - 1] < entered[i]);
+                        require(entered[i - 1] < entered[i]);
                     for (int key : entered)
-                        assert(key <= k);
-                    assert((c != f.end()) == (!entered.empty() && entered.back() == k));
+                        require(key <= k);
+                    require((c != f.end()) == (!entered.empty() && entered.back() == k));
                 }
 
                 using Node = decltype(f)::Node;
@@ -92,7 +92,7 @@ namespace wry {
                 };
                 collect(collect, f._head, nullptr);
                 std::sort(visited.begin(), visited.end());
-                assert(std::equal(visited.begin(), visited.end(), b.begin(), b.end()));
+                require(std::equal(visited.begin(), visited.end(), b.begin(), b.end()));
             }
         }
 
@@ -110,17 +110,17 @@ namespace wry {
                 for (int k = 0; k != N; ++k) {
                     auto c = a.find(k);
                     auto d = b.find(k);
-                    assert((c == a.end()) == (d == b.end()));
+                    require((c == a.end()) == (d == b.end()));
                     if (c != a.end()) {
-                        assert(c->first == d->first);
-                        assert(c->second == d->second);
+                        require(c->first == d->first);
+                        require(c->second == d->second);
                         // printf("[%d] = %d\n", c->first, c->second);
                     }
                     auto cl = a.lower_bound(k);
                     auto dl = b.lower_bound(k);
-                    assert((cl == a.end()) == (dl == b.end()));
+                    require((cl == a.end()) == (dl == b.end()));
                     if (cl != a.end()) {
-                        assert(cl->first == dl->first);
+                        require(cl->first == dl->first);
                     }
                 }
             }
@@ -129,38 +129,38 @@ namespace wry {
             // convention (key only => value-initialized mapped value).
             {
                 auto f = freeze(a);
-                assert(f.is_empty() == b.empty());
+                require(f.is_empty() == b.empty());
                 for (int k = 0; k != N; ++k) {
                     auto c = f.find(k);
                     auto d = b.find(k);
-                    assert((c == f.end()) == (d == b.end()));
+                    require((c == f.end()) == (d == b.end()));
                     if (c != f.end()) {
-                        assert(c->first == d->first);
-                        assert(c->second == d->second);
+                        require(c->first == d->first);
+                        require(c->second == d->second);
                     }
                     auto cl = f.lower_bound(k);
                     auto dl = b.lower_bound(k);
-                    assert((cl == f.end()) == (dl == b.end()));
+                    require((cl == f.end()) == (dl == b.end()));
                     if (cl != f.end())
-                        assert(cl->first == dl->first);
+                        require(cl->first == dl->first);
                 }
                 size_t count = 0;
                 auto it = f.begin();
                 for (auto const& [k, v] : b) {
-                    assert(it != f.end());
-                    assert(it->first == k && it->second == v);
+                    require(it != f.end());
+                    require(it->first == k && it->second == v);
                     ++it;
                     ++count;
                 }
-                assert(it == f.end());
-                assert(count == b.size());
+                require(it == f.end());
+                require(count == b.size());
             }
             {
                 ConcurrentSkiplistMap<int, int, DefaultKeyService<int>, EpochDiscipline> d;
                 auto [it, inserted] = d.try_emplace(7);
-                assert(inserted && it->first == 7 && it->second == 0);
+                require(inserted && it->first == 7 && it->second == 0);
                 auto [it2, inserted2] = d.try_emplace(7, 99);
-                assert(!inserted2 && it2 == it && it2->second == 0);
+                require(!inserted2 && it2 == it && it2->second == 0);
             }
         }
 
@@ -220,7 +220,7 @@ namespace wry {
             std::set<uint64_t> got;
             // top frame [0, 2^20): shift 15, 32 slots (32 * 2^15 = 2^20)
             collect_via_partition(freeze(a).make_cursor(), 0, 15, 32, got);
-            assert(got == b);
+            require(got == b);
             if (!(iter & 31))
                 mutator_repin();
         }

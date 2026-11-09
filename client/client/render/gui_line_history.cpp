@@ -204,7 +204,7 @@ namespace wry::gui {
     {
         LineHistory h;
         must(!h.older("") && !h.newer(""));
-        assert(h.suggest("x").empty());
+        require(h.suggest("x").empty());
 
         // Blank lines and immediate repeats are not recorded.
         h.add("step 1");
@@ -214,7 +214,7 @@ namespace wry::gui {
         h.add("pause");
         h.add("step 2");
         h.add("resume");
-        assert(h.entries().size() == 4);
+        require(h.entries().size() == 4);
 
         // A plain walk visits everything and returns to the (empty) draft.
         must(*h.older("") == StringView("resume"));
@@ -247,7 +247,7 @@ namespace wry::gui {
         must(!h.older("step 22"));              // and nothing begins so
         must(*h.older("pa") == StringView("pause"));
         must(*h.newer("pause") == StringView("pa"));
-        assert(h.entries()[2] == StringView("step 2"));
+        require(h.entries()[2] == StringView("step 2"));
 
         // An entry equal to the line is skipped: with "pause" typed, Up
         // finds nothing new to show.
@@ -261,10 +261,10 @@ namespace wry::gui {
         h.add("help");
 
         // Suggestion: the newest entry that extends the prefix.
-        assert(h.suggest("st") == StringView("step 2"));
-        assert(h.suggest("step 1") .empty());
-        assert(h.suggest("").empty());
-        assert(h.suggest("q").empty());
+        require(h.suggest("st") == StringView("step 2"));
+        require(h.suggest("step 1") .empty());
+        require(h.suggest("").empty());
+        require(h.suggest("q").empty());
 
         co_return;
     };
@@ -273,7 +273,7 @@ namespace wry::gui {
     {
         char directory_template[] = "/tmp/wry-history-XXXXXX";
         const char* made = mkdtemp(directory_template);
-        assert(made);
+        require(made);
         const std::filesystem::path directory(made);
         const std::filesystem::path path = directory / "history.txt";
 
@@ -284,15 +284,15 @@ namespace wry::gui {
             h.attach(path);
             h.add("one");
             h.add("two");
-            assert(h.entries().size() == 3);
+            require(h.entries().size() == 3);
         }
         // "before attach" was never written; the others were.
         {
             LineHistory h;
             h.attach(path);
-            assert(h.entries().size() == 2);
-            assert(h.entries()[0] == StringView("one"));
-            assert(h.entries()[1] == StringView("two"));
+            require(h.entries().size() == 2);
+            require(h.entries()[0] == StringView("one"));
+            require(h.entries()[1] == StringView("two"));
             must(*h.older("") == StringView("two"));
             h.add("three");
         }
@@ -301,41 +301,41 @@ namespace wry::gui {
         // kept as it is, and ended, so the next entry gets its own line.
         {
             std::FILE* file = std::fopen(path.c_str(), "ab");
-            assert(file);
+            require(file);
             std::fputs("bad \xC3\x28\n" "tab\there\n" "\n" "four\n" "cut sho", file);
             std::fclose(file);
             LineHistory h;
             h.attach(path);
-            assert(h.entries().size() == 5);
-            assert(h.entries()[2] == StringView("three"));
-            assert(h.entries()[3] == StringView("four"));
-            assert(h.entries()[4] == StringView("cut sho"));
+            require(h.entries().size() == 5);
+            require(h.entries()[2] == StringView("three"));
+            require(h.entries()[3] == StringView("four"));
+            require(h.entries()[4] == StringView("cut sho"));
             h.add("five");
             LineHistory again;
             again.attach(path);
-            assert(again.entries().size() == 6);
-            assert(again.entries()[4] == StringView("cut sho"));
-            assert(again.entries()[5] == StringView("five"));
+            require(again.entries().size() == 6);
+            require(again.entries()[4] == StringView("cut sho"));
+            require(again.entries()[5] == StringView("five"));
         }
         // Past twice the capacity the file is cut back to the newest
         // `capacity` entries.
         {
             std::FILE* file = std::fopen(path.c_str(), "wb");
-            assert(file);
+            require(file);
             const std::size_t written = 2 * LineHistory::capacity + 5;
             for (std::size_t i = 0; i != written; ++i)
                 std::fprintf(file, "entry %zu\n", i);
             std::fclose(file);
             LineHistory h;
             h.attach(path);
-            assert(h.entries().size() == LineHistory::capacity);
-            assert(h.entries().back() == StringView("entry 2004"));
-            assert(h.entries().front() == StringView("entry 1005"));
+            require(h.entries().size() == LineHistory::capacity);
+            require(h.entries().back() == StringView("entry 2004"));
+            require(h.entries().front() == StringView("entry 1005"));
             std::size_t count = 0;
             bool unterminated = false;
             std::vector<String> lines = read_lines(path, count, unterminated);
-            assert(count == LineHistory::capacity && !unterminated);
-            assert(lines.front() == StringView("entry 1005"));
+            require(count == LineHistory::capacity && !unterminated);
+            require(lines.front() == StringView("entry 1005"));
             (void) written;
         }
 

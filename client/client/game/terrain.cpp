@@ -196,19 +196,19 @@ namespace wry {
             for (i32 x = -128; x != 128; ++x) {
                 Terrain t = -1;
                 bool has = w->_terrain_for_coordinate.try_get(Coordinate{x, y}, t);
-                assert(has);
-                assert((t >= 0) && (t < TERRAIN_KIND_COUNT));
+                require(has);
+                require((t >= 0) && (t < TERRAIN_KIND_COUNT));
                 ++count[t];
                 if ((-12 <= x) && (x <= 12) && (-7 <= y) && (y <= 7))
                     ++near[t];
                 if ((-3 <= x) && (x <= 3) && (-3 <= y) && (y <= 3))
-                    assert(t == TERRAIN_GRASS);
+                    require(t == TERRAIN_GRASS);
             }
         }
         for (Terrain t = 0; t != TERRAIN_KIND_COUNT; ++t)
-            assert(count[t] > 256 * 256 / 100);   // over 1% each
+            require(count[t] > 256 * 256 / 100);   // over 1% each
         for (Terrain t : { TERRAIN_COAL, TERRAIN_IRON_ORE, TERRAIN_LIMESTONE })
-            assert(near[t] >= 4);
+            require(near[t] >= 4);
         co_return;
     };
 
@@ -239,15 +239,15 @@ namespace wry {
                     Terrain t = -1;
                     bool has = w->_terrain_for_coordinate.try_get(
                         Coordinate{cx * TERRAIN_CHUNK + i, cy * TERRAIN_CHUNK + j}, t);
-                    assert(has);
-                    assert(t == cells[j * TERRAIN_CHUNK + i]);
+                    require(has);
+                    require(t == cells[j * TERRAIN_CHUNK + i]);
                 }
             Terrain other[TERRAIN_CHUNK * TERRAIN_CHUNK];
             generate_terrain_chunk(WORLD_SEED_DEFAULT + 1, cx, cy, other);
             for (int k = 0; k != TERRAIN_CHUNK * TERRAIN_CHUNK; ++k)
                 differ += (other[k] != cells[k]);
         }
-        assert(differ > 0);
+        require(differ > 0);
         // The coordinate seam: making the chunks around the last cell makes
         // the first chunk too, with its own content
         {
@@ -256,16 +256,16 @@ namespace wry {
             Terrain c[TERRAIN_CHUNK * TERRAIN_CHUNK];
             generate_terrain_chunk(WORLD_SEED_DEFAULT, -(1 << 27), 0, c);
             Terrain t = -1;
-            CHECK(seam.try_get(Coordinate{INT32_MIN + 3, 5}, t));
-            assert(t == c[5 * TERRAIN_CHUNK + 3]);
+            require(seam.try_get(Coordinate{INT32_MIN + 3, 5}, t));
+            require(t == c[5 * TERRAIN_CHUNK + 3]);
         }
         // making an existing chunk is a no-op, and never overwrites
         w->_terrain_for_coordinate.set(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, TERRAIN_ROCK);
-        CHECK(!ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 0, 0));
-        CHECK(ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 20, 0));
+        require(!ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 0, 0));
+        require(ensure_terrain_chunk(WORLD_SEED_DEFAULT, w->_terrain_for_coordinate, 20, 0));
         Terrain t = -1;
-        CHECK(w->_terrain_for_coordinate.try_get(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, t));
-        assert(t == TERRAIN_ROCK);
+        require(w->_terrain_for_coordinate.try_get(Coordinate{20 * TERRAIN_CHUNK + 3, 4}, t));
+        require(t == TERRAIN_ROCK);
         co_return;
     };
 
