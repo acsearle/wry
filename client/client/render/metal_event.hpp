@@ -43,6 +43,25 @@ namespace wry {
     [[nodiscard]] coroutine::Future<>
     shared_event_wait(id<MTLSharedEvent> event, uint64_t value);
 
+    // An owner that abandons an event (drops it, or stops signaling it)
+    // while stopped waits may still be registered on it calls this first:
+    // it signals the terminal value UINT64_MAX from the CPU, which fires
+    // and so retires every leftover notification (each resumes nothing).
+    // Metal keeps a notification as long as its event never reaches the
+    // value, even after the last reference to the event goes (measured),
+    // so without this a stopped wait's small state leaks.  An event whose
+    // values only ever advance, signaled to the end, needs nothing.
+    // Waits after abandonment complete at once.
+    void shared_event_abandon(id<MTLSharedEvent> event);
+
+    // Adds a completion handler that aborts the process if the command
+    // buffer fails (status MTLCommandBufferStatusError: a GPU fault,
+    // timeout or page fault).  Call before commit.  Whether a failed
+    // command buffer still signals its encoded events is unverified, so a
+    // wait on one could hang and its state leak; we treat a failed command
+    // buffer as fatal rather than recover.
+    void abort_on_command_buffer_error(id<MTLCommandBuffer> command_buffer);
+
 } // namespace wry
 
 #endif /* metal_event_hpp */

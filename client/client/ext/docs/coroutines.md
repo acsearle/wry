@@ -563,11 +563,13 @@ the caller, who need not be a coroutine.
 - ORDER: the kernel carries only the udata pointer, an edge invisible to
   the C++ model and to TSan.  The code treats `kevent` as a mutex: an ADD
   synchronizes-with the delivery of that knote and with a DELETE that
-  receipts 0.  `g_reactor_tsan_helper` makes the edge visible to TSan: a
-  release `fetch_or(0)` by every publisher before its `kevent`
-  (`CancelableKEventFrame::_kevent`), an acquire load by the reactor after
-  each harvest.  It over-approximates the per-knote edge and could mask a
-  race (docs/tsan_2026-11-08.md).
+  receipts 0.  Under TSan the edge is annotated per knote, on the udata:
+  `__tsan_release(this)` before every change
+  (`CancelableKEventFrame::_kevent`), `__tsan_acquire(udata)` by the
+  reactor before it schedules a harvested frame and by a receipt-0
+  DELETE.  (A global witness atomic did this until 2026-11-09; it
+  over-approximated the edge and could mask a race,
+  docs/tsan_2026-11-08.md.)
 
 ### 9.2 CancelableKEventFrame
 

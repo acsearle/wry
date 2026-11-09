@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <thread>
 
+#include "metal_event.hpp"
 #include "WryRenderContext.h"
 #include "WryWorldScene.h"
 #include "WrySplashScene.h"
@@ -961,6 +962,7 @@ namespace {
         gui->gpu_time_ns.fetch_add_relaxed((uint64_t)(seconds * 1e9));
         gui->gpu_time_frames.fetch_add_relaxed(1);
     }];
+    wry::abort_on_command_buffer_error(command_buffer);
     [command_buffer commit];
     // With no drawable to throttle it, an offscreen host waits out each
     // frame; this also completes screenshots before the next frame.

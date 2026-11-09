@@ -7,6 +7,7 @@
 
 // Shared Metal header first for no contamination
 #include <cmath>
+#include "metal_event.hpp"
 #include "ShaderTypes.h"
 
 #include <algorithm>
@@ -259,6 +260,7 @@
     // per scale change.
     id<MTLCommandBuffer> drain = [_commandQueue commandBuffer];
     drain.label = @"Drain before font rebuild";
+    wry::abort_on_command_buffer_error(drain);
     [drain commit];
     [drain waitUntilCompleted];
     *_font = wry::build_font(*_atlas, clamped);
@@ -500,6 +502,7 @@
     id<MTLBlitCommandEncoder> encoder = [commandBuffer blitCommandEncoder];
     [encoder generateMipmapsForTexture:texture];
     [encoder endEncoding];
+    wry::abort_on_command_buffer_error(commandBuffer);
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
 }
@@ -569,6 +572,7 @@
         [encoder memoryBarrierWithScope:MTLBarrierScopeTextures];
     }
     [encoder endEncoding];
+    wry::abort_on_command_buffer_error(commandBuffer);
     [commandBuffer commit];
     [commandBuffer waitUntilCompleted];
 }

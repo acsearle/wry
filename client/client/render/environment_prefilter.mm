@@ -176,6 +176,7 @@ namespace wry {
 
         } // end loop over mip-map levels
 
+        wry::abort_on_command_buffer_error(commandBuffer);
         [commandBuffer commit];
 
         return output;
@@ -214,9 +215,12 @@ namespace wry {
             }
             [blit endEncoding];
             [commandBuffer encodeSignalEvent:event value:1];
+            wry::abort_on_command_buffer_error(commandBuffer);
             [commandBuffer commit];
             auto r = co_await with_deadline(steady_clock::now() + seconds(30),
                                             shared_event_wait(event, 1));
+            if (!r.has_value())
+                shared_event_abandon(event);   // retire the stopped wait
             assert(r.has_value());
             (void) r;
             std::vector<std::vector<simd_float4>> levels;

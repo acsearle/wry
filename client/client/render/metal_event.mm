@@ -14,6 +14,13 @@
 
 #include <dispatch/dispatch.h>
 
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define WRY_TSAN 1
+#include <sanitizer/tsan_interface.h>
+#endif
+#endif
+
 #include "metal_event.hpp"
 
 #include "kqueue_reactor.hpp"
@@ -94,6 +101,8 @@ namespace wry {
     // perhaps the event.  An owner that abandons an event with stopped
     // waiters can retire them by signaling a terminal value (UINT64_MAX)
     // first; a timeline that only ever advances needs nothing.
+
+    // (shared_event_abandon is that, in the header's contract.)
 
     // Test observability: live WaitStates (one relaxed add, one release sub)
     constinit std::atomic<std::ptrdiff_t> g_shared_event_wait_state_count{0};
@@ -193,12 +202,28 @@ namespace wry {
                 if (state->_claim.load(std::memory_order_relaxed) & WaitState::STOPPED)
                     return;
                 // A value reached between await_ready and here is fine: Metal
-                // calls a block registered at or below signaledValue at once
+                // calls a block registered at or below signaledValue at once.
+                //
+                // ThreadSanitizer cannot see the registration-to-block edge
+                // (Metal reaches the listener queue through an IOSurface
+                // notification callback), so it is annotated on the state's
+                // address, as the reactor annotates its knotes: the block is
+                // copied to the heap (ARC, on assignment) before the
+                // release, and reads the key, a plain captured pointer,
+                // before anything else.  Nothing in other builds.
+                [[maybe_unused]] void* key = state.get();
+                void (^block)(id<MTLSharedEvent>, uint64_t) = ^(id<MTLSharedEvent>, uint64_t) {
+#ifdef WRY_TSAN
+                    __tsan_acquire(key);
+#endif
+                    state->fire();
+                };
+#ifdef WRY_TSAN
+                __tsan_release(key);
+#endif
                 [event notifyListener:shared_event_listener()
                               atValue:value
-                                block:^(id<MTLSharedEvent>, uint64_t) {
-                    state->fire();
-                }];
+                                block:block];
             }
 
             void await_resume() const noexcept {}
@@ -209,6 +234,21 @@ namespace wry {
 
     coroutine::Future<> shared_event_wait(id<MTLSharedEvent> event, uint64_t value) {
         co_await SharedEventAwaitable{event, value};
+    }
+
+    void shared_event_abandon(id<MTLSharedEvent> event) {
+        event.signaledValue = UINT64_MAX;
+    }
+
+    void abort_on_command_buffer_error(id<MTLCommandBuffer> command_buffer) {
+        [command_buffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+            if (buffer.status == MTLCommandBufferStatusError) {
+                fprintf(stderr, "command buffer \"%s\" failed: %s\n",
+                        buffer.label ? buffer.label.UTF8String : "",
+                        buffer.error ? buffer.error.localizedDescription.UTF8String : "(no error)");
+                abort();
+            }
+        }];
     }
 
     // ---- Tests ----------------------------------------------------------------
@@ -227,6 +267,7 @@ namespace wry {
         void gpu_signal(MetalEventFixture const& f, uint64_t value) {
             id<MTLCommandBuffer> command_buffer = [f.queue commandBuffer];
             [command_buffer encodeSignalEvent:f.event value:value];
+            abort_on_command_buffer_error(command_buffer);
             [command_buffer commit];
         }
 
@@ -301,6 +342,7 @@ namespace wry {
         [blit fillBuffer:buffer range:NSMakeRange(0, 256) value:0xAB];
         [blit endEncoding];
         [command_buffer encodeSignalEvent:f.event value:1];
+        abort_on_command_buffer_error(command_buffer);
         [command_buffer commit];
         auto r = co_await with_deadline(steady_clock::now() + seconds(30),
                                         shared_event_wait(f.event, 1));
@@ -334,6 +376,23 @@ namespace wry {
         // A late signal fires the leftover block, which resumes nothing
         f.event.signaledValue = 1;
         co_await wait_states_drained();
+    };
+
+    define_test("metal_event_abandon") {
+        MetalEventFixture f;
+        // Stopped waits on values the event will never reach leave their
+        // notifications behind; abandoning the event retires them all
+        for (uint64_t value : {10ull, 1000ull, UINT64_MAX - 1}) {
+            auto r = co_await with_deadline(steady_clock::now() + milliseconds(5),
+                                            shared_event_wait(f.event, value));
+            assert(!r.has_value());
+        }
+        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 3);
+        shared_event_abandon(f.event);
+        co_await wait_states_drained();
+        // and a wait after abandonment does not suspend
+        co_await shared_event_wait(f.event, UINT64_MAX);
+        assert(g_shared_event_wait_state_count.load(std::memory_order_acquire) == 0);
     };
 
     define_test("metal_event_cancel_before_park") {

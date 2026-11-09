@@ -22,6 +22,13 @@
 #include <string>
 #include <thread>
 
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define WRY_TSAN 1
+#include <sanitizer/tsan_interface.h>
+#endif
+#endif
+
 #include "kqueue_reactor.hpp"
 #include "nursery.hpp"
 
@@ -35,7 +42,19 @@ namespace wry {
 
         constinit int g_reactor_kqueue = -1;
         std::thread g_reactor_thread;
-        std::atomic_int_fast8_t g_reactor_tsan_helper{0};
+
+        // The kernel's per-knote edge (see ORDER below), shown to
+        // ThreadSanitizer on the knote's udata; nothing in other builds
+        inline void tsan_kevent_release([[maybe_unused]] void* udata) {
+#ifdef WRY_TSAN
+            __tsan_release(udata);
+#endif
+        }
+        inline void tsan_kevent_acquire([[maybe_unused]] void* udata) {
+#ifdef WRY_TSAN
+            __tsan_acquire(udata);
+#endif
+        }
 
         void reactor_run();
 
@@ -57,10 +76,14 @@ namespace wry {
         //
         // ORDER: the kernel carries only the udata pointer, an edge neither
         // the C++ model nor ThreadSanitizer can see.  We treat kevent as a
-        // mutex -- ADD synchronizes-with delivery, and with a receipt-0
-        // DELETE -- and make that edge visible with g_reactor_tsan_helper: a
-        // release poke by every publisher before its kevent, an acquire poke
-        // by the reactor after each harvest.  Frame atomics are otherwise
+        // mutex per knote -- ADD synchronizes-with delivery, and with a
+        // receipt-0 DELETE -- and make that edge visible to TSan on the
+        // udata itself: __tsan_release(udata) before every kevent change,
+        // __tsan_acquire(udata) after it returns and before the reactor
+        // schedules a harvested udata (tsan_kevent_*).  Per knote, as the
+        // kernel orders it: a global witness atomic (until 2026-11-09) also
+        // ordered unrelated knotes, which could hide races
+        // (docs/tsan_2026-11-08.md N1).  Frame atomics are otherwise
         // relaxed except for an acquire re-load on the winning path.
 
         // ---- Reactor service loop ------------------------------------------
@@ -75,10 +98,6 @@ namespace wry {
                 int n = ::kevent(g_reactor_kqueue,
                                  nullptr, 0, events, NEVENTS,
                                  stop_requested ? &immediate : nullptr);
-                // AFTER the harvest, before touching any udata: pairs with
-                // the publishers' release pokes before their kevent ADDs.
-                (void) g_reactor_tsan_helper.load(std::memory_order_acquire);
-
                 assert((-1 <= n) && (n <= NEVENTS));
                 assert((n != 0) || stop_requested);
                 if (n == -1) {
@@ -105,8 +124,9 @@ namespace wry {
                     // (CancelableKEventFrame); the reactor knows nothing
                     // about filters or protocols.  It schedules the frame on
                     // the pool.
-                    // The witness acquire above ordered the publisher's
-                    // construction before this dispatch.
+                    // The kernel ordered the publisher's ADD (and everything
+                    // before it) before this harvest; tell TSan
+                    tsan_kevent_acquire((void*)event.udata);
                     global_work_queue_schedule((void*)event.udata);
                 }
                 if (stop_requested) {
@@ -259,11 +279,16 @@ namespace wry {
             change.flags = flags;
             change.udata = this;
             struct timespec immediate = {};
-            g_reactor_tsan_helper.fetch_or(0, std::memory_order_release);
+            tsan_kevent_release(this);
             // EV_RECEIPT and nchange == nevent means we get only change results
             int n = kevent(g_reactor_kqueue, &change, 1, &event, 1, &immediate);
             if (n != 1)
                 abort();
+            // A receipt-0 DELETE won the knote from the reactor: the ADD
+            // is ordered before it.  (Not after an ADD: the frame may
+            // already be delivered, run and freed.)
+            if ((flags & EV_DELETE) && event.data == 0)
+                tsan_kevent_acquire(this);
             return event.data;
         }
 
