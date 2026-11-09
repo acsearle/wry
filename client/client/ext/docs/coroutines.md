@@ -617,9 +617,15 @@ callback added an acquire re-load of `_state` when it saw STARTED (the
 (`core/kqueue_reactor_model.cpp`, tests `kevent_model` and
 `kevent_model_mutations`: every interleaving of spawn, a stop request and
 the fire, with happens-before computed from the code's own release/acquire
-edges) shows neither is load-bearing, so both were dropped
-(docs/decisions_2026-11-08.md item 19).  They survive in the model as
-variants `M_S_STARTED_RELEASE` and `M_C_GARNISH`, which must also pass.
+edges) passes with the relaxed protocol as its baseline: that is what
+shows neither order was load-bearing, so both were dropped
+(docs/decisions_2026-11-08.md item 19).  The old protocol (both orders
+together) is also checked, as variant `M_OLD_PROTOCOL`, which must pass
+too and whose garnish must synchronize with the STARTED release.  Neither
+half alone adds a happens-before edge (the release is never acquired; the
+garnish alone acquires messages that carry no release), so neither is a
+variant of its own beyond `M_C_GARNISH`, the garnish alone, kept as a
+negative control for that synchronization check.
 
 ### 9.3 The interleavings, and the fire-won race
 

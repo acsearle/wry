@@ -213,8 +213,10 @@ namespace wry {
                 // end of that release sequence) and by ~stop_callback's
                 // acquire wait on request_stop's __completed_ release
                 // store.  No acquire re-load of _state is needed: the model
-                // check (kqueue_reactor_model.cpp, variant M_C_GARNISH)
-                // shows one is not load-bearing.
+                // check (kqueue_reactor_model.cpp) passes with this relaxed
+                // protocol as its baseline.  The old protocol (this re-load
+                // plus spawn's STARTED as a release) is checked there too,
+                // as variant M_OLD_PROTOCOL.
                 intptr_t before = frame->_state.fetch_or(STOPPED, std::memory_order_relaxed);
                 intptr_t resumed = before & RESUMED;
                 assert(!(before & STOPPED));
@@ -367,8 +369,10 @@ namespace wry {
             // Our own accesses after this RMW: if it saw RESUMED we invoke
             // _f, which static_resume left alone (it saw no STARTED); the
             // final release() orders us before the deleter.  The model
-            // check (kqueue_reactor_model.cpp, variant M_S_STARTED_RELEASE)
-            // shows release here is not load-bearing.
+            // check (kqueue_reactor_model.cpp) passes with this relaxed
+            // protocol as its baseline.  The old protocol (release here plus
+            // the Callback's acquire re-load of _state) is checked there
+            // too, as variant M_OLD_PROTOCOL.
             auto before = frame->_state.fetch_or(STARTED, std::memory_order_relaxed);
             auto resumed = before & RESUMED;
             auto stopped = before & STOPPED;
