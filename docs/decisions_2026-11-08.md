@@ -1,5 +1,7 @@
 # Decisions waiting on Antony, 2026-11-08
 
+Links are relative to this file (`docs/`); `~/Desktop/assets` is outside the repo, reached as `../../assets`.
+
 The autonomous TODO run (52 commits on main since `0bc4468 todo 3`) stopped
 at these items. Each one names where its context lives. They are ordered
 roughly by how much they unblock.
@@ -18,33 +20,35 @@ roughly by how much they unblock.
    or recorded below) plus uncommitted comparison screenshots in their
    `docs/` folders. Their `build/` folders are already deleted. Remove them
    all with `git worktree remove` once you have looked at the screenshots?
+   **Decided 2026-11-10:** remove each worktree once its decision is made. Done: 18 removed (their untracked screenshots moved to `~/.Trash/wry-worktree-screenshots-2026-11-10/`); the three whose decisions are open (codoc 18, session 14, sender 22) moved to `~/Desktop/worktrees.nosync/`, where future agent worktrees go (off the iCloud Desktop).
 
 ## Look and feel (screenshots in assets/ or the worktrees' docs/)
 
 3. **Tile captions.** `caption-decals 100` draws Noto Sans Condensed (OFL)
    captions as decals instead of the Futura baked into `assets_tile.png`.
    Make it the default and drop Futura? Comparison:
-   `wry-wt-strings/docs/captions_zoom{100,200}.png`. That needs the palette
+   `wry-wt-strings/docs/captions_zoom{100,200}.png` (worktree since removed; the screenshots are in `~/.Trash/wry-worktree-screenshots-2026-11-10/`). That needs the palette
    and cursor captions done the same way first, and Noto is about 40% wider.
    **Decided 2026-11-09:** make the Noto decal captions the default and drop Futura (Claude is doing this now).
 4. **Bloom.** It is no longer computed unless shown (`toggle-bloom`). As built
    it blurs the HUD too and, with no HDR highlights, reads as a haze
-   (`assets/bloom_off_vs_on.png`). Delete it, or move it before the GUI with
+   ([`~/Desktop/assets/bloom_off_vs_on.png`](../../assets/bloom_off_vs_on.png)). Delete it, or move it before the GUI with
    a threshold?
    **Decided 2026-11-09:** delete bloom (Claude is doing this now).
 5. **Indoor lighting.** `environment room` uses a procedural room
-   (`assets/tools/make_room_env.py`). The effect is mild while the sun
-   dominates (`assets/environment_day_vs_room.png`). Move the sun to the
+   ([`~/Desktop/assets/tools/make_room_env.py`](../../assets/tools/make_room_env.py)). The effect is mild while the sun
+   dominates ([`~/Desktop/assets/environment_day_vs_room.png`](../../assets/environment_day_vs_room.png)). Move the sun to the
    window's direction and dim it indoors? Use an HDR window?
+   **Decided 2026-11-10:** punt until the radiance-cascade experiment; the lighting will be made to fit the chosen algorithm.
 6. **Clear coat** defaults to 50% on tiles and tokens (`coat TILES TOKEN`), at
    roughness 1/8. Keep it?
    **Decided 2026-11-09:** keep it.
-7. **UI font** is now Noto Sans Medium (`assets/ui_font_weights.png`
+7. **UI font** is now Noto Sans Medium ([`~/Desktop/assets/ui_font_weights.png`](../../assets/ui_font_weights.png)
    compares Light, Regular and Medium). Keep it?
    **Decided 2026-11-09:** keep it. The weights comparison shows the importance of *optical* weight; Antony will think more about that (todo note added).
 8. **Ambient occlusion: pick one** (the existing DECIDE): GTAO, Luft, or the
    symbol decals. Radiance cascades are a fourth candidate
-   (`docs/radiance_cascades.md`: ambient yes, sun no; it lists 7 sub-decisions).
+   ([`docs/radiance_cascades.md`](radiance_cascades.md): ambient yes, sun no; it lists 7 sub-decisions).
    A scale-free GTAO variant is also possible: the radius turned out to be
    world-space, not pixels.
    **Decided 2026-11-09:** GTAO; delete the others (Luft, symbol-decal AO) (Claude is doing this now). Later, in an interactive turn: implement radiance cascades to compare against GTAO, with an environment map that suits them (indoors, a large-solid-angle window, relatively high up, relatively close to the view direction, giving soft short shadows) and no directional sun or shadow map at all. Screen-space limits are fine. Height field: not yet, since the experiment has no sun (todo item added).
@@ -55,7 +59,7 @@ roughly by how much they unblock.
 
 ## Design
 
-10. **Data-driven tables**: the four decisions in `docs/data_driven.md`
+10. **Data-driven tables**: the four decisions in [`docs/data_driven.md`](data_driven.md)
     (presentation data now and simulation data later? ruleset hash or rules
     in the World? where the files live? who drafts the opcode help text?).
     Context help on hover depends on these.
@@ -64,6 +68,7 @@ roughly by how much they unblock.
     **Decided 2026-11-09:** the stack's tiles are stacked tightly; explode means draw them vertically with enough spacing to read their faces, probably spaced as if they were cubes. Animating into and out of the state is a stretch goal (Claude is doing this now).
 12. **Player write lost on a same-cell conflict**: retry by peek-then-pop,
     re-propose on abort, or accept the drop?
+    **Decided 2026-11-10:** accept the drop; playtest to see how irritating it is. New open question (todo): what should happen when the cell changes during or after the turn the action is submitted, but before it is applied.
 13. **Console output scrolling**: the log fills the screen, so scrolling it
     would take the scroll wheel from world panning while the console is open.
 14. **Named saves** (`save NAME`): saves are named only by file today, and
@@ -78,13 +83,14 @@ roughly by how much they unblock.
     **Decided 2026-11-09:** the memory is completely fine. New todo item: load all static assets as early as possible, before opening a world (splash first, then main-menu resources, then the rest; the first world render waits on loading), an aspiration to do later in stages.
 16. **GUI test suite default**: `--no-tests` opts out today. Keep running the
     suite beside the game, or make it opt-in?
+    **Decided 2026-11-10:** keep running the suite beside the game, as much as we can.
 17. **UI scale**: add a control on the settings screen? The 32 pt cursor
     ignores `ui_scale`.
     **Decided 2026-11-09:** yes, add a UI scale control on the settings screen; the cursor must be bigger regardless, matching the displayed tile size in the palette (Claude is doing this now; open question: the performance of a large hardware cursor).
 
 ## Concurrency and correctness (needs your judgement on the contracts)
 
-18. **Coroutine doc findings** (`client/client/ext/docs/coroutines.md`; todo
+18. **Coroutine doc findings** ([`client/client/ext/docs/coroutines.md`](../client/client/ext/docs/coroutines.md); todo
     OPEN line):
     (a) a cancelled child's stopped hook retires before its parameter copies
     are destroyed, so a parameter destructor that touches joiner-owned state
@@ -92,7 +98,7 @@ roughly by how much they unblock.
     (b) `CancelableKEventFrame` can destroy the frame after `request_stop`
     returns, which contradicts the "synchronous cancellation" comments in
     `kqueue_reactor.cpp` and `metal_event.hpp`. Fix the comments or the code?
-19. **Model checker** (`core/kqueue_reactor_model.cpp`): spawn's
+19. **Model checker** ([`core/kqueue_reactor_model.cpp`](../client/client/core/kqueue_reactor_model.cpp)): spawn's
     `fetch_or(STARTED, release)` and the Callback's acquire garnish are not
     load-bearing in the model. Relax them, or keep them as belt-and-braces?
 20. **TSan reactor hook**: the global release/acquire on
@@ -100,7 +106,7 @@ roughly by how much they unblock.
     so it can hide races. Switch to per-knote `__tsan_release(this)` /
     `__tsan_acquire(udata)`? (That also ran clean.)
     **Decided 2026-11-09:** switch to per-knote release/acquire (Claude is doing this now).
-21. **`shared_event_wait`** (`render/metal_event.mm`): a stopped wait on a
+21. **`shared_event_wait`** ([`render/metal_event.mm`](../client/client/render/metal_event.mm)): a stopped wait on a
     value that is never reached leaks a small state, because Metal cannot
     withdraw a notification. Should event owners signal `UINT64_MAX` when
     abandoning? It is also unverified whether a failed command buffer still

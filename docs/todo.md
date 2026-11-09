@@ -28,6 +28,7 @@
 - Data driven: try to move properties out of the executable and into data files as much as possible.  e.g. prices, opcode \_displayed\_ names, help text etc.
   - PROPOSAL 2026-11-08: docs/data_driven.md (presentation tables now as JSON; simulation tables stay compiled until a scenario needs them, then become World state; four decisions listed)
 - Context help for item under cursor: hover or side panel like Factorio
+- LATER (antony 2026-11-10): move the text-based, human-readable parts of ~/Desktop/assets into wry/assets and wry/tools under version control: .json, .py, .svg (things we edit and git can diff), not .obj, .blend, .png or fonts.  ~/Desktop/assets keeps the static and cached PNGs, meshes etc. (maybe eventually nothing).  Leave ambiguous cases where they are and discuss them first
 - Exploded stack: from the steep default camera each item still hides about half of the one below at a one-unit pitch; tune the pitch (or tilt the items toward the camera) if faces need to be read whole
 - Commutative operations on World values.  Operation is applied when its transaction commits, concurrently, in any order.  Could be an atomic add on the value in the new World, for example.  Money is an example.  Attempt a widthdrawal if enough money \_now\_; but if enough people do it on the same turn, goes negative.  Don't try to prevent that, just penalize it - apply overdraft or interest every "month" based on lowest balance.  Fancier implementation for busy variables is to apply the deltas to thread locals and merge at the end of step.
 - Help text, display text, etc. needs a to have meta that allows the easy inclusion (and rendering) of glyphs and keycaps and stuff.
@@ -37,7 +38,7 @@
 ## Things to change
 - Implement radiance cascades to compare against GTAO, in a later interactive turn (decided 2026-11-09, decisions_2026-11-08.md item 8; investigation in docs/radiance_cascades.md).  With an environment map that suits them: indoors, a large-solid-angle window, relatively high up and relatively close to the view direction, giving soft short shadows; no directional sun and no shadow map at all.  Screen-space limits are fine.  Height field: not yet, since the experiment has no sun
 - Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
-  - DECIDE (decisions_2026-11-08.md item 5): move the sun to the window's direction and drop its strength indoors, or an HDR window (LDR caps the window at 1).  `environment room` is built (see done.md)
+  - PUNTED 2026-11-10 (decisions item 5): indoor lighting waits for the radiance-cascade experiment; the lighting will be made to fit the chosen algorithm.  `environment room` stays built
 - Make the palette a GUI widget
 - Console widget (built 2026-11-08; see done.md) follow-ups: scrolling the output (the log fills the screen, so a scroll over it would have to stop panning the world while the console is open: a decision, decisions_2026-11-08.md item 13); dimensions are still font-derived (half a line) rather than points
 - Optical weight of the UI font: Noto Sans Medium is kept (decided 2026-11-09, decisions_2026-11-08.md item 7), but the Light / Regular / Medium comparison (assets/ui_font_weights.png) shows the importance of *optical* weight; antony will think more about that
@@ -54,7 +55,6 @@
 - How to handle pop-in pop-out of Terms as they are mined, shipped, picked up etc.
 
 ## Other
-- Agent worktrees ~/Desktop/wry-wt-* are still on the iCloud Desktop (their .git files now point at wry.nosync); remove them once their screenshots are looked at (decisions item 2)
 ## Won't do
 Things that have been decided against
 - Non-shadow-casting fairy light shader for running lights, headlights, etc.
@@ -104,8 +104,6 @@ List of one-line reminders of things to think and do
   - spawn's fetch_or(STARTED, release) and the Callback's acquire garnish are not load-bearing in the model: relax them, or keep them as belt and braces (decisions_2026-11-08.md item 19)
   - GenMC / relacy for the relaxed-memory claims: not installed and not installable offline
 - set_delegate's Debug diagnostic names the colliding delegates; the one-time GUI firing (first run after pulling the port) is most likely a mixed incremental build -- if it recurs the message says which pair
-- main.mm spawns the full test suite in the GUI unconditionally (4-5 s under ASan with the small world; QUIT waits for it, and must: the runner is shielded from the root token since 2026-10-17, because tests own nurseries across sleeps and a cancelled test frame asserts in ~Nursery -- the crash-on-quit of 2026-10-17): gate it behind a flag
-  - NOTE 2026-11-08: a flag exists (--no-tests opts out); what is undecided is the default -- keep running the suite beside the game, or make it opt-in
 - ext/functional.hpp: wry::move_only_function<R(Args...)> (subset: plain signature only, no in_place_type, empty call asserts) -- retire in favor of std::move_only_function when libc++ ships it
   - CHECKED 2026-11-08: Xcode's libc++ still lacks std::move_only_function under -std=c++23
 - Nits: test metadata prints interleave with collector logging (flaky counts in log greps, bit again 2026-09-11)
@@ -116,7 +114,7 @@ List of one-line reminders of things to think and do
   - transfer flow control (multiplayer.md 11.12); semantic validation of a loaded World (11.13)
   - the checkpoint is serialized on the main thread at install (11.14); no in-process diff of two dumps (an external diff)
   - build_id is wire.cpp's compile time; quit closes sessions brutally (clients see EOF, not SHUTDOWN); log rotation can unlink another process's live log; a second concurrent `replay` confuses the first's pending reply; frame caps are per tag not per direction
-- Player drops a queued write when its transaction loses a same-cell conflict (popped before resolution, never re-proposed); liveness fixed 2026-09-18 with WAIT_ALWAYS, retry is a design choice: peek-then-pop on the next notify, or WAIT_ON_ABORT re-propose, vs. accept the drop as the exclusive-write contract
+- Player write vs a changed cell: the same-cell-conflict drop is ACCEPTED (decisions item 12, 2026-11-10; playtest how irritating it is).  Open: what should happen when the cell changes during or after the turn an action is submitted to the server, but before the action is applied (apply against the new contents, drop, or report back to the player?)
 
 ## Old below
 

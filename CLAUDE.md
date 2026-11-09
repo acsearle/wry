@@ -31,3 +31,7 @@ While in plan mode, do not call Edit/Write/Bash-with-side-effects under any circ
 ## File Contents
 
 - Strong default: ASCII only when editing files. Box-drawing characters for section breaks (e.g. `──`), fancy bullets, em-dashes, and similar decorative non-ASCII are gratuitous and break grep, diff tooling, and some terminals. Use `//`, `// ----`, or `// ====` for section dividers; ASCII art for diagrams. Exceptions are defensible (mathematical symbols where ASCII spelling is awkward, canonical non-English names, user-visible strings) but should be the rare conscious choice, not the default.
+
+## Worktrees
+
+- Agent / side-task git worktrees go under `~/Desktop/worktrees.nosync/wry-<name>`, never directly on the Desktop: the Desktop is iCloud-synced, and iCloud writes conflict copies inside `.git`. Remove a worktree once the work has landed and any decision depending on its screenshots is made.
