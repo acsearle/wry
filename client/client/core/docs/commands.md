@@ -407,8 +407,8 @@ Illustrative, not exhaustive; arguments in `[]` have defaults.
 - **view** (local): today's keymap actions -- `rotate`,
   `reverse-rotate`, `flip-horizontal`, `flip-vertical`, `toggle-map`,
   `toggle-console`, `toggle-jacobians`, `toggle-points`,
-  `toggle-wireframe`, `toggle-symbol-decals`,
-  `ssao off|gtao|luft|gtao-show|luft-show [radius texels] [strength %]
+  `toggle-wireframe`,
+  `ssao off|gtao|gtao-show [radius texels] [strength %]
   [slices] [steps] [pyramid] [blur] [blur-radius]` (GTAO by default: 3
   slices x 4 steps per side, the taps reading the depth pyramid;
   `pyramid 0` reads the Depth G-buffer flat; the blur is the same

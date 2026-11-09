@@ -74,19 +74,13 @@ namespace wry {
         bool _show_jacobian = false;
         bool _show_points = false;
         bool _show_wireframe = false;
-        // Screen-space bloom (WryWorldScene: a Gaussian of the lit image,
-        // added at 1/8).  Off: undecided whether we want it at all, and
-        // computed-but-unshown it cost a full-screen blur every frame
-        bool _show_bloom = false;
         // The image-based light's environment: an equirectangular PNG in
         // assets, by resource name (day.png, the outdoor default; room.png,
         // indoors with a window, tools/make_room_env.py).  The renderer
         // re-prefilters when it changes (`environment NAME`)
         std::string _environment = "day";
-        // The symbol slabs' ambient-occlusion decals (toggle-symbol-decals)
-        bool _show_symbol_decals = true;
         // Screen-space ambient occlusion (the `ssao` command): WRY_SSAO_*
-        // mode (GTAO by default; see docs/todo.md on retiring the others),
+        // mode (GTAO, or off),
         // whether to show the factor itself, the world radius and the
         // strength (1 = as estimated)
         int _ssao_mode = WRY_SSAO_GTAO;
@@ -132,10 +126,6 @@ namespace wry {
         // (Shaders.metal kClearCoatRoughness)
         float _coat_tiles = 0.5f;
         float _coat_token = 0.5f;
-        // The slabs' ambient-occlusion decals on the ground under them
-        // (Shaders.metal symbol_decal_fragment_function); off, GTAO does
-        // the job, and the decal's stroke model overreaches for tiles
-        bool _symbol_decals = false;
         // The tile captions printed as decals (`caption-decals`), at this
         // percent of the baked captions' size, on the caption-free tile
         // faces (assets_tile_nocaption.png in place of assets_tile.png);

@@ -1741,13 +1741,6 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "toggle-symbol-decals", "Show or hide the symbols' ambient-occlusion decals (debug)", Category::local,
-            std::tuple<>{},
-            with_world([](WorldState& ws) {
-                return toggle(ws, ws._show_symbol_decals, "symbol decals");
-            })));
-
-        registry.add(make_command<Ctx>(
             "ssao-repeat", "Encode the screen-space occlusion this many times per frame (measuring aid: with the GPU saturated by it, (frame - frame at 1) / (n - 1) is one pass's cost at full clock)", Category::local,
             std::tuple{
                 Param<Ctx, int64_t>{"n", "1 to 64", 1},
@@ -1758,10 +1751,10 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "ssao", "Screen-space ambient occlusion: off, gtao or luft, with -show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, and for GTAO the slices and steps per side and whether the taps read the depth pyramid; then the blur kernel and its taps per side", Category::local,
+            "ssao", "Screen-space ambient occlusion (GTAO): off, gtao, or gtao-show for the factor itself; then a radius in texels (128 per world unit), a strength in percent, the slices and steps per side and whether the taps read the depth pyramid; then the blur kernel and its taps per side", Category::local,
             std::tuple{
-                Param<Ctx, String>{"mode", "off, gtao, luft, gtao-show or luft-show", {}, nullptr,
-                                   {"off", "gtao", "luft", "gtao-show", "luft-show"}},
+                Param<Ctx, String>{"mode", "off, gtao or gtao-show", {}, nullptr,
+                                   {"off", "gtao", "gtao-show"}},
                 Param<Ctx, int64_t>{"radius", "texels, 128 per world unit", 64},
                 Param<Ctx, int64_t>{"strength", "percent; 100 = as estimated", 100},
                 Param<Ctx, int64_t>{"slices", "GTAO slice directions per pixel, 1 to 16", 3},
@@ -1778,10 +1771,8 @@ namespace wry {
                 bool show = false;
                 if (m == "off") which = WRY_SSAO_OFF;
                 else if (m == "gtao") which = WRY_SSAO_GTAO;
-                else if (m == "luft") which = WRY_SSAO_LUFT;
                 else if (m == "gtao-show") { which = WRY_SSAO_GTAO; show = true; }
-                else if (m == "luft-show") { which = WRY_SSAO_LUFT; show = true; }
-                else return Reply::error(String("mode must be off, gtao, luft, gtao-show or luft-show"));
+                else return Reply::error(String("mode must be off, gtao or gtao-show"));
                 ws._ssao_mode = which;
                 ws._ssao_show = show;
                 ws._ssao_radius = (float)std::clamp(radius, 0.01, 8.0);
@@ -1891,13 +1882,6 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "toggle-decals", "Show or hide the symbols' ambient-occlusion decals on the ground (off by default; GTAO covers it)", Category::local,
-            std::tuple<>{},
-            with_world([](WorldState& ws) {
-                return toggle(ws, ws._symbol_decals, "Symbol decals");
-            })));
-
-        registry.add(make_command<Ctx>(
             "toggle-jacobians", "Show or hide Jacobians (debug)", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
@@ -1931,13 +1915,6 @@ namespace wry {
                     return Reply::error(String(("no " + n + ".png in assets").c_str()));
                 ws._environment = n;
                 return Reply::ok();
-            })));
-
-        registry.add(make_command<Ctx>(
-            "toggle-bloom", "Show or hide screen-space bloom (undecided look option)", Category::local,
-            std::tuple<>{},
-            with_world([](WorldState& ws) {
-                return toggle(ws, ws._show_bloom, "bloom");
             })));
 
         // Factorio's Q: a full hand is emptied; an empty hand picks up the

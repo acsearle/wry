@@ -302,7 +302,6 @@ typedef struct {
 // WrySSAOMode: which estimator the occlusion pass runs (WorldState::_ssao_mode)
 #define WRY_SSAO_OFF 0
 #define WRY_SSAO_GTAO 1
-#define WRY_SSAO_LUFT 2
 
 // The GTAO taps read a depth pyramid (R32Float, this many levels, built
 // from the Depth G-buffer each frame by ssao_depth_pyramid_kernel); a tap
@@ -402,10 +401,8 @@ typedef struct
     simd_float4 half_extent;    // texels: xy the cuboid's half extents about the cell's centre, z the half thickness, w the cell's half extent
     float top_radius;           // fillet radii, texels; each below half the
     float bottom_radius;        // stroke width, their sum below the thickness
-    float stroke_width;         // texels: the cell's, the decal's far edge
-    float decal_reach;          // texels beyond the silhouette the ambient-occlusion decal fades out by; 0 for none
     float clear_coat;           // the varnish's strength, 0 to 1 (G-buffer material.a; Shaders.metal kClearCoatRoughness)
-    float _padding[3];
+    float _padding;
 } WrySymbolInstance;
 
 #pragma mark - Decals

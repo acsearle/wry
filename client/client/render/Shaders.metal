@@ -1287,40 +1287,6 @@ namespace deferred {
         return out;
     }
 
-    // ---- Symbol decals: the slab's ambient occlusion on what lies under it.
-    //
-    // Treating the nearest silhouette edge as a straight stroke of the
-    // cell's width w, thickness t and fillets r, extruded without end,
-    // the fraction of the cosine-weighted sky it hides from a point h
-    // below its underside and d outside its edge is the two-dimensional
-    // configuration factor
-    //
-    //     blocked = (sin(phi2) - sin(phi1)) / 2
-    //
-    // phi1, phi2 the angles from the vertical of the tangent rays to the
-    // section.  The section is the convex hull of its corner discs, so
-    // each tangent touches a disc: the far bottom disc gives phi1
-    // everywhere on the ground, the near bottom disc gives phi2 under the
-    // stroke and the near top disc outside it (they swap directly under
-    // the wall, which is the one crease in the result), and a tangent's
-    // sine is algebraic in the disc's offset (cx, cz) and radius r:
-    //
-    //     sin(phi) = (cx * sqrt(cx^2 + cz^2 - r^2) -+ cz * r) / (cx^2 + cz^2)
-    //
-    // Exact along a stroke; at its ends, corners and junctions it is off
-    // by the order of the far-edge term.  The tail is (h + t/2) t / (2 d^2),
-    // so the instance's reach is where that drops below a threshold, and
-    // the last stroke width before the reach fades out.  Only the ambient
-    // light reads the occlusion channel it writes
-    // (image_based_lighting_fragment_function), so direct light and the
-    // shadow map are untouched.
-    //
-    // The decal is a box under the slab, from its underside to the ground,
-    // its footprint the cell plus the reach; each fragment reads the
-    // G-buffer's depth, finds the surface point in slab space, and
-    // multiplies the occlusion channel in place under the G-buffer raster
-    // order group.  No depth test: the box's own depth means nothing.
-
     // The camera ray through an NDC point, with unit component along the
     // view axis (ShaderTypes.h, MeshUniforms): camera + ray * depth is the
     // surface at linear view depth
@@ -1330,114 +1296,9 @@ namespace deferred {
              + ndc.y * uniforms.camera_ray_dy.xyz;
     }
 
-    struct SymbolDecalVertexFunctionOutput {
-        float4 position_clip [[position]];
-        // The camera ray through the pixel (MeshUniforms ray basis), affine
-        // in the pixel, so interpolated without perspective
-        float3 ray [[center_no_perspective]];
-        uint instance_id [[flat]];
-    };
-
-    // The ground plane in slab space: the point under the slab's origin
-    static float symbol_ground_z(WrySymbolInstance instance) {
-        float4 origin = instance.model_transform.columns[3];
-        float4 ground = instance.inverse_model_transform * float4(origin.xy, 0.0f, origin.w);
-        return ground.z / ground.w;
-    }
-
-    [[vertex]] SymbolDecalVertexFunctionOutput
-    symbol_decal_vertex_function(uint vertex_id [[vertex_id]],
-                                 uint instance_id [[instance_id]],
-                                 constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
-                                 const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]])
-    {
-        SymbolDecalVertexFunctionOutput out;
-        WrySymbolInstance instance = instances[instance_id];
-        float3 corner = symbol_cube_corner[symbol_cube_index[vertex_id]];
-        float z_under = -instance.half_extent.z;
-        float3 p;
-        p.xy = corner.xy * (instance.half_extent.xy + instance.decal_reach);
-        p.z = corner.z > 0.0f ? z_under : min(symbol_ground_z(instance), z_under) - 1.0f;
-        float4 position_world = instance.model_transform * float4(p, 1.0f);
-        out.position_clip = uniforms.viewprojection_transform * position_world;
-        float2 ndc = out.position_clip.xy / out.position_clip.w;
-        out.ray = camera_ray(uniforms, ndc);
-        out.instance_id = instance_id;
-        return out;
-    }
-
-    // The sines of the lower (x) and upper (y) tangent angles from the
-    // origin to a disc of radius r at (cx, cz), angles from the vertical
-    static float2 symbol_tangent_sines(float cx, float cz, float r) {
-        float rho2 = cx * cx + cz * cz;
-        float s = sqrt(max(rho2 - r * r, 0.0f));
-        return float2(cx * s - cz * r, cx * s + cz * r) / rho2;
-    }
-
-    // The blocked fraction of the sky at a point h below the underside of
-    // a stroke occupying x in [-w, 0], thickness t, bottom and top fillets
-    // rb and rt, the point d outside its edge (d negative under it)
-    static float symbol_stroke_occlusion(float d, float h, float w, float t, float rb, float rt) {
-        float2 near_bottom = symbol_tangent_sines(-rb - d, h + rb, rb);
-        float2 near_top = symbol_tangent_sines(-rt - d, h + t - rt, rt);
-        float2 far_bottom = symbol_tangent_sines(-w + rb - d, h + rb, rb);
-        return 0.5f * (max(near_bottom.y, near_top.y) - far_bottom.x);
-    }
-
-    struct SymbolDecalFragmentFunctionOutput {
-        half4 material [[color(AAPLColorIndexMaterial), raster_order_group(AAPLRasterOrderGroupGBuffer)]];
-    };
-
-    [[fragment]] SymbolDecalFragmentFunctionOutput
-    symbol_decal_fragment_function(SymbolDecalVertexFunctionOutput in [[stage_in]],
-                                   FragmentFunctionOutput gbuffer,
-                                   constant MeshUniforms& uniforms [[buffer(AAPLBufferIndexUniforms)]],
-                                   const device WrySymbolInstance* instances [[buffer(AAPLBufferIndexInstanced)]],
-                                   texture2d<float> field [[texture(AAPLTextureIndexNormal)]])
-    {
-        constexpr sampler bilinear(mag_filter::linear,
-                                   min_filter::linear,
-                                   s_address::clamp_to_edge,
-                                   t_address::clamp_to_edge);
-
-        WrySymbolInstance instance = instances[in.instance_id];
-        // The surface under this pixel, from the G-buffer's depth, in slab space
-        float4 position_world = float4(uniforms.camera_position_world.xyz + in.ray * gbuffer.depth, 1.0f);
-        float4 q = instance.inverse_model_transform * position_world;
-        float3 p = q.xyz / q.w;
-        float3 half_extent = instance.half_extent.xyz;
-        float cell_half = instance.half_extent.w;
-        float reach = instance.decal_reach;
-        float2 outside = max(abs(p.xy) - cell_half, 0.0f);
-        float h = -half_extent.z - p.z;      // below the underside, texels
-        if (h <= 0.0f || p.z < symbol_ground_z(instance) - 1.0f || any(outside > reach))
-            discard_fragment();
-
-        // The planar distance to the silhouette: the fine channel within
-        // its range, the coarse one beyond, plus the way to the cell from
-        // outside it, where the sampler clamps (exact for an edge along
-        // the cell's border, an overestimate otherwise, which only fades
-        // the decal sooner)
-        float4 s = field.sample(bilinear, symbol_uv(instance, clamp(p.xy, -cell_half, cell_half)));
-        float fine = (s.r - 0.5f) * (2.0f * WRY_SYMBOL_SDF_RANGE);
-        float coarse = (s.a - 0.5f) * (2.0f * WRY_SYMBOL_SDF_FAR_RANGE);
-        float d = (abs(fine) < WRY_SYMBOL_SDF_RANGE - 0.5f ? fine : coarse) + length(outside);
-
-        float w = instance.stroke_width;
-        float t = 2.0f * half_extent.z;
-        float blocked = symbol_stroke_occlusion(d, max(h, 0.25f), w, t,
-                                                instance.bottom_radius, instance.top_radius);
-        float window = 1.0f - smoothstep(reach - w, reach, d);
-        float occlusion = float(gbuffer.material.r) * (1.0f - saturate(blocked) * window);
-
-        SymbolDecalFragmentFunctionOutput out;
-        out.material = half4(half(occlusion), gbuffer.material.gba);
-        return out;
-    }
-
     // ---- Decals: images projected onto the G-buffer (WryDecalInstance).
     //
-    // The same scheme as the occlusion decal above: a box rasterized
+    // A box rasterized
     // after the frame's geometry, no depth test, each fragment finding
     // the surface under it from the G-buffer's depth and editing the
     // G-buffer in place under its raster order groups.  This one paints:
@@ -2124,20 +1985,15 @@ namespace deferred {
     // bilaterally; the cost is texture fetches, so a quarter of the
     // threads is a quarter of the time.  The composite multiplies the
     // factor into the image-based light alone (the direct light and its
-    // shadow map are untouched, as with the symbol decals).
+    // shadow map are untouched).
     //
     // GTAO (Jimenez et al. 2016, as XeGTAO lays it out): for a few screen
     // directions through the pixel, find the horizon angle on each side by
     // walking the depth buffer out to the radius, project the normal into
     // the slice, and integrate the cosine-weighted visible arc
-    // analytically -- the same (sin phi2 - sin phi1) / 2 integral the
-    // symbol decals evaluate for one shape, here for whatever the depth
-    // buffer holds.  Physical, so no strength knob is needed.
-    //
-    // Luft, Colditz and Deussen 2006 ("Image Enhancement by Unsharp
-    // Masking the Depth Buffer"): darken a pixel by how much farther it
-    // lies than the mean depth around it.  A perceptual cue rather than a
-    // light transport, with a strength to taste.
+    // analytically.  Physical, so no strength knob is needed.  (Luft et
+    // al.'s depth unsharp masking and the symbols' analytic decals were
+    // tried beside it and retired, 2026-11-09.)
     //
     // The camera is fixed and elevated, so a world radius is nearly a
     // constant pixel radius; it is projected exactly per pixel anyway.
@@ -2344,52 +2200,6 @@ namespace deferred {
         float ao = saturate(visibility / (float)u.slices);
         ao = 1.0f - u.strength * (1.0f - ao);
         aoTexture.write(float4(ao, depth, 0.0f, 0.0f), g);
-    }
-
-    [[kernel]] void
-    ssao_luft_kernel(texture2d<float, access::read> depthTexture [[texture(0)]],
-                     texture2d<float, access::read> normalTexture [[texture(1)]],
-                     texture2d<float, access::write> aoTexture [[texture(2)]],
-                     constant WrySSAOUniforms& u [[buffer(0)]],
-                     uint2 g [[thread_position_in_grid]])
-    {
-        if (g.x >= aoTexture.get_width() || g.y >= aoTexture.get_height())
-            return;
-        uint2 f = 2u * g;                    // the block's representative texel
-        float z = depthTexture.read(f).r;
-        if (z <= 0.0f) {
-            aoTexture.write(float4(1.0f, 0.0f, 0.0f, 0.0f), g);
-            return;
-        }
-        float2 pixel = float2(f) + 0.5f;
-        float radius_px = ssao_radius_pixels(u, z);
-        // The Gaussian-weighted mean view depth around the pixel (sigma =
-        // half the radius): a 9 x 9 grid of taps rotated per pixel so the
-        // grid never shows, the blur pass after smoothing the rotation
-        float noise = ssao_noise(g) * (M_PI_F * 0.5f);
-        float2x2 rotate = float2x2(float2(cos(noise), sin(noise)), float2(-sin(noise), cos(noise)));
-        float sum = 0.0f, weight = 0.0f;
-        for (int j = -4; j <= 4; ++j) {
-            for (int i = -4; i <= 4; ++i) {
-                float2 o = float2(i, j) / 4.0f;
-                float r2 = dot(o, o);
-                if (r2 > 1.0f)
-                    continue;
-                float2 sp = pixel + (rotate * o) * radius_px;
-                if (any(sp < 0.0f) || any(sp >= u.viewport))
-                    continue;
-                uint2 sg = uint2(sp);
-                float sd = depthTexture.read(sg).r;
-                float sz = sd <= 0.0f ? z + u.radius : sd;
-                float w = exp(-4.0f * r2);
-                sum += sz * w;
-                weight += w;
-            }
-        }
-        float blurred = weight > 0.0f ? sum / weight : z;
-        // Farther than the surroundings: darken, over one radius
-        float ao = 1.0f - u.strength * saturate((z - blurred) / u.radius);
-        aoTexture.write(float4(ao, z, 0.0f, 0.0f), g);
     }
 
     // The blur over the (visibility, depth) blocks, a (2r + 1) square

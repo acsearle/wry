@@ -16,7 +16,6 @@
 #include <random>
 
 #include <MetalKit/MetalKit.h>
-#include <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 #include <sqlite3.h>
 
@@ -131,13 +130,6 @@ struct WryNumberGlyph {
     //std::vector<otf::QuadraticBezier> _otf_quadratic_bezier;
                     
     
-    // bloom
-    
-    MPSImageGaussianBlur* _gaussianBlur;
-    id<MTLTexture> _blurredTexture;
-    MPSImageAdd* _imageAdd;
-    id<MTLTexture> _addedTexture;
-
     // symbols?
     
     id<MTLTexture> _symbols;
@@ -169,7 +161,6 @@ struct WryNumberGlyph {
     id<MTLRenderPipelineState> _symbolGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _terrainGBufferRenderPipelineState;
     id<MTLRenderPipelineState> _symbolShadowRenderPipelineState;
-    id<MTLRenderPipelineState> _symbolDecalRenderPipelineState;
     id<MTLRenderPipelineState> _decalRenderPipelineState;   // images onto the G-buffer (WryDecalInstance)
 
     // Screen-space ambient occlusion: the image-based light accumulates
@@ -185,7 +176,6 @@ struct WryNumberGlyph {
     id<MTLTexture> _depthPyramidLevels[WRY_SSAO_DEPTH_PYRAMID_LEVELS];
     id<MTLComputePipelineState> _ssaoDepthPyramidPipelineState;
     id<MTLComputePipelineState> _ssaoGTAOPipelineState;
-    id<MTLComputePipelineState> _ssaoLuftPipelineState;
     id<MTLComputePipelineState> _ssaoBlurPipelineState;
     id<MTLComputePipelineState> _ssaoBlurAxisPipelineState;
     id<MTLComputePipelineState> _ssaoBlurTiledPipelineState;
@@ -551,18 +541,6 @@ struct WryNumberGlyph {
             descriptor.label = @"Board G-buffer";
             _terrainGBufferRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
 
-            // The decal multiplies the material's occlusion channel in
-            // place and touches nothing else
-            descriptor.vertexFunction = [_ctx newFunctionWithName:@"deferred::symbol_decal_vertex_function"];
-            descriptor.fragmentFunction = [_ctx newFunctionWithName:@"deferred::symbol_decal_fragment_function"];
-            descriptor.label = @"Symbol decal (ambient occlusion)";
-            descriptor.colorAttachments[AAPLColorIndexColor].writeMask = MTLColorWriteMaskNone;
-            descriptor.colorAttachments[AAPLColorIndexAlbedo].writeMask = MTLColorWriteMaskNone;
-            descriptor.colorAttachments[AAPLColorIndexNormal].writeMask = MTLColorWriteMaskNone;
-            descriptor.colorAttachments[AAPLColorIndexMaterial].writeMask = MTLColorWriteMaskRed;
-            descriptor.colorAttachments[AAPLColorIndexDepth].writeMask = MTLColorWriteMaskNone;
-            _symbolDecalRenderPipelineState = [_ctx newRenderPipelineStateWithDescriptor:descriptor];
-
             // Image decals paint the emitted light, the albedo, the
             // normal (embossing) and the material's occlusion, roughness
             // and metallic in place (WryDecalInstance); the depth stays
@@ -643,8 +621,6 @@ struct WryNumberGlyph {
             NSError* error = nil;
             _ssaoGTAOPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_gtao_kernel"] error:&error];
             assert(_ssaoGTAOPipelineState);
-            _ssaoLuftPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_luft_kernel"] error:&error];
-            assert(_ssaoLuftPipelineState);
             _ssaoBlurPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_kernel"] error:&error];
             assert(_ssaoBlurPipelineState);
             _ssaoBlurAxisPipelineState = [_ctx.device newComputePipelineStateWithFunction:[_ctx newFunctionWithName:@"deferred::ssao_blur_axis_kernel"] error:&error];
@@ -713,9 +689,6 @@ struct WryNumberGlyph {
         }
 
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
-        
-        _gaussianBlur = [[MPSImageGaussianBlur alloc] initWithDevice:_ctx.device sigma:32.0];
-        _imageAdd = [[MPSImageAdd alloc] initWithDevice:_ctx.device];
         
         NSLog(@"%s:%d", __PRETTY_FUNCTION__, __LINE__);
 
@@ -2107,8 +2080,6 @@ struct WryNumberGlyph {
     NSUInteger symbol_count = 0;
     // The slabs that shade what lies under them (WrySymbolInstance again,
     // with a decal reach)
-    WryBufferSlice decal_instances = {};
-    NSUInteger decal_count = 0;
     WryBufferSlice print_instances = {};
     NSUInteger print_count = 0;
     WryBufferSlice string_instances = {};
@@ -2218,14 +2189,12 @@ struct WryNumberGlyph {
         // once below.  Reserve a rough lower bound (one per grid cell and
         // per entity, plus the cursor); this is only a hint.
         std::vector<WrySymbolInstance> symbols;
-        std::vector<WrySymbolInstance> decals;
         std::vector<WryDecalInstance> prints;   // image decals: the digits on number tiles
         std::vector<WryDecalInstance> strings;  // image decals from the decal font (_decalFontTexture)
         size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
         symbols.reserve(symbol_hint);
-        decals.reserve(symbol_hint);
 
         // A string printed as decals from the decal font (decal_text.hpp)
         // on a surface: its baseline through `location` along `across`,
@@ -2309,20 +2278,13 @@ struct WryNumberGlyph {
         // (and the decal) reach out to the cell's edge; as thick as the
         // cell's stroke width, with top and bottom fillets of a quarter
         // of it (symbol_sdf.hpp).
-        // A slab lying flat near the ground also casts its ambient
-        // occlusion on what is under it, as a decal (Shaders.metal,
-        // symbol_decal_fragment_function): its reach is where the
-        // section's far-field tail (h + t/2) t / (2 d^2) falls below
-        // two percent.  Higher slabs (the stacks) are skipped: their
-        // occlusion is a faint blur the stroke model no longer describes.
         const float texels_per_cell = (float)(_symbols.width / wry::SymbolSDF::kCells);
         const float texels_per_unit = texels_per_cell * 0.5f;   // the glyph's frame
         // A slab of the cell at `coordinate`, `stroke` texels thick with
-        // fillets of `fillet`; `width` is the cell's stroke width, which
-        // sizes the decal
+        // fillets of `fillet`
         auto emit_slab = [&](simd_float4 location, simd_float4 coordinate,
                              simd_float3 across, simd_float3 up,
-                             float stroke, float fillet, float width, bool decal, float half_xy) {
+                             float stroke, float fillet, float half_xy) {
             // Slab space is source texels; the frame is one world unit
             const float texel = 1.0f / texels_per_unit;
             simd_float3 normal = simd_cross(across, up);
@@ -2337,18 +2299,7 @@ struct WryNumberGlyph {
             s.half_extent = make<float4>(half_xy, half_xy, stroke * 0.5f, texels_per_cell * 0.5f);
             s.top_radius = fillet;
             s.bottom_radius = fillet;
-            s.stroke_width = width;
-            s.decal_reach = 0.0f;
             s.clear_coat = _model->_coat_tiles;
-            if (decal && _model->_symbol_decals && normal.z > 0.99f) {
-                // Flat: the underside's height above the ground, in texels
-                const float h = (location.z - stroke * 0.5f * texel) * texels_per_unit;
-                if (h <= 2.0f * width) {
-                    const float tail = (std::max(h, 0.25f) + stroke * 0.5f) * stroke;
-                    s.decal_reach = std::min(std::sqrt(tail / (2.0f * 0.02f)), wry::SymbolSDF::kFarRange);
-                    decals.push_back(s);
-                }
-            }
             symbols.push_back(s);
         };
         // A symbol: as thick as its cell's stroke, filleted by a quarter of it
@@ -2358,10 +2309,10 @@ struct WryNumberGlyph {
             const int cy = std::clamp((int)std::lround(coordinate.y * wry::SymbolSDF::kCells), 0, wry::SymbolSDF::kCells - 1);
             // Capped: a solid tile's stroke is the whole cell; 20 texels
             // keeps a ground symbol's underside (centred at z = 0.1, 12.8
-            // texels up) above the ground, where its decal can land
+            // texels up) above the ground
             const float width = std::max(_symbolStrokeWidth[(size_t)cy * wry::SymbolSDF::kCells + (size_t)cx], 2.0f);
             const float stroke = std::min(width, 20.0f);
-            emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, width, true, texels_per_unit * 0.5f);
+            emit_slab(location, coordinate, across, up, stroke, stroke * 0.25f, texels_per_unit * 0.5f);
             emit_caption(location.xyz + simd_cross(across, up) * (stroke * 0.5f / texels_per_unit), coordinate, across, up);
         };
         // A number: the blank tile with the value's caption (at most
@@ -2576,7 +2527,7 @@ struct WryNumberGlyph {
                     // underside, and a standing piece has none to show
                     // The cuboid reaches past the frame for the apex,
                     // which overhangs it by 0.12 units
-                    emit_slab(centre, _token_truck_coordinate, across, up, thickness, _model->_token_fillet * texels_per_unit, thickness, false, texels_per_unit * 0.6f);
+                    emit_slab(centre, _token_truck_coordinate, across, up, thickness, _model->_token_fillet * texels_per_unit, texels_per_unit * 0.6f);
                     symbols.back().clear_coat = _model->_coat_token;
                 }
                 
@@ -2837,10 +2788,6 @@ struct WryNumberGlyph {
         if (symbol_count)
             symbol_instances = [_ctx.arena copyBytes:symbols.data()
                                               length:symbols.size() * sizeof(WrySymbolInstance)];
-        decal_count = decals.size();
-        if (decal_count)
-            decal_instances = [_ctx.arena copyBytes:decals.data()
-                                             length:decals.size() * sizeof(WrySymbolInstance)];
         print_count = prints.size();
         if (print_count)
             print_instances = [_ctx.arena copyBytes:prints.data()
@@ -3167,27 +3114,6 @@ struct WryNumberGlyph {
                 [_ship_hold_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
                 [_ship_stern_mesh drawWithRenderCommandEncoder:encoder arena:_ctx.arena];
 
-                // Symbol decals: now that everything that can lie under a
-                // slab is in the G-buffer, multiply the slabs' ambient
-                // occlusion into its occlusion channel.  No depth test:
-                // the box's fragments find their surface from the
-                // G-buffer's depth.
-                if (decal_count && _model->_show_symbol_decals) {
-                    [encoder setRenderPipelineState:_symbolDecalRenderPipelineState];
-                    [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
-                    [encoder setVertexBuffer:decal_instances.buffer
-                                      offset:decal_instances.offset
-                                     atIndex:AAPLBufferIndexInstanced];
-                    [encoder setFragmentBuffer:decal_instances.buffer
-                                        offset:decal_instances.offset
-                                       atIndex:AAPLBufferIndexInstanced];
-                    [encoder setFragmentTexture:_symbolField atIndex:AAPLTextureIndexNormal];
-                    [encoder drawPrimitives:MTLPrimitiveTypeTriangle
-                                vertexStart:0
-                                vertexCount:36
-                              instanceCount:decal_count];
-                    [encoder setDepthStencilState:_ctx.enabledDepthStencilState];
-                }
 
                 // Image decals: the digits printed on the number tiles,
                 // onto whatever the G-buffer holds inside their boxes
@@ -3352,7 +3278,7 @@ struct WryNumberGlyph {
             compute.label = @"Screen-space occlusion";
             MTLSize grid = MTLSizeMake(_ssaoTexture.width, _ssaoTexture.height, 1);
             MTLSize group = MTLSizeMake(16, 16, 1);
-            if (ssao.mode == WRY_SSAO_GTAO && ssao.pyramid) {
+            if (ssao.pyramid) {
                 // The depth pyramid first: whole 32 x 32 tiles, the
                 // kernel bound-checks the edges
                 [compute setComputePipelineState:_ssaoDepthPyramidPipelineState];
@@ -3363,8 +3289,8 @@ struct WryNumberGlyph {
                 MTLSize tiles = MTLSizeMake((_depthPyramid.width + 31) / 32, (_depthPyramid.height + 31) / 32, 1);
                 [compute dispatchThreadgroups:tiles threadsPerThreadgroup:group];
             }
-            [compute setComputePipelineState:ssao.mode == WRY_SSAO_LUFT ? _ssaoLuftPipelineState : _ssaoGTAOPipelineState];
-            [compute setTexture:ssao.mode == WRY_SSAO_LUFT ? _deferredDepthColorAttachmentTexture : _depthPyramid atIndex:0];
+            [compute setComputePipelineState:_ssaoGTAOPipelineState];
+            [compute setTexture:_depthPyramid atIndex:0];
             [compute setTexture:_deferredDepthColorAttachmentTexture atIndex:3];
             [compute setTexture:_deferredNormalColorAttachmentTexture atIndex:1];
             [compute setTexture:_ssaoTexture atIndex:2];
@@ -3454,40 +3380,13 @@ struct WryNumberGlyph {
 
     }
         
-    if (_model->_show_bloom) {
-        // Screen-space bloom by simple Gaussian blur (toggle-bloom; off by
-        // default, and then not computed at all).  NB: it runs after the
-        // composite-and-GUI pass, so it blurs the HUD into itself too
-        _gaussianBlur.edgeMode = MPSImageEdgeModeClamp;
-        
-        [_gaussianBlur encodeToCommandBuffer:command_buffer
-                               sourceTexture:_deferredLightColorAttachmentTexture
-                          destinationTexture:_blurredTexture];
-
-        // TODO: Different impulse reponses, like Unreal blur, convolution
-
-        // TODO: we may want to mix in proportion to a texture so we can
-        // increase blur under the HUD
-        
-        _imageAdd.primaryScale = 0.875f; //0.75f; // //15.0f/16.0f;
-        _imageAdd.secondaryScale = 0.125f; // 0.25f; ////1.0f/16.0f;
-
-        [_imageAdd encodeToCommandBuffer:command_buffer
-        primaryTexture:_deferredLightColorAttachmentTexture
-                        secondaryTexture:_blurredTexture
-                      destinationTexture:_addedTexture];
-        
-        
-    }
-    
     ++_frame_count;
 
     //[_captureScope endScope];
 
     // Hand the host the texture to show.  It blits this into the drawable
     // (acquired as late as possible) and presents + commits the command buffer.
-    // With bloom on, present the light plus 1/8 of its blur
-    return _model->_show_bloom ? _addedTexture : _deferredLightColorAttachmentTexture;
+    return _deferredLightColorAttachmentTexture;
 
 }
 
@@ -3645,14 +3544,6 @@ struct WryNumberGlyph {
     _deferredDepthAttachmentTexture = [_ctx.device newTextureWithDescriptor:descriptor];
     _deferredDepthAttachmentTexture.label = @"Depth buffer";
 
-    descriptor.pixelFormat = MTLPixelFormatRGBA16Float;
-    descriptor.storageMode = MTLStorageModePrivate;
-    descriptor.usage = MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
-    _blurredTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _blurredTexture.label = @"Blur target";
-    
-    _addedTexture = [_ctx.device newTextureWithDescriptor:descriptor];
-    _addedTexture.label = @"Addition target";
     
 }
 
