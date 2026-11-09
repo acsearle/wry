@@ -201,12 +201,23 @@ namespace wry {
             void operator()() {
                 // We have reached here because stop was requested
                 assert(frame->_stop_token.stop_requested());
-                // Race to claim the continuation
+                // Race to claim the continuation.  Relaxed: _state only
+                // elects who acts; it publishes no data.  What this body
+                // reads of the frame (_stop_token, _change) was written by
+                // spawn before _stop_callback.emplace, so it happens-before
+                // us by sequenced-before (run inline in emplace) or by the
+                // stop_state lock (emplace's registration releases it,
+                // request_stop's pop acquires it).  What other parties do
+                // to the frame after us is ordered by release() below
+                // (fetch_sub release; the deleter's acquire load reads the
+                // end of that release sequence) and by ~stop_callback's
+                // acquire wait on request_stop's __completed_ release
+                // store.  No acquire re-load of _state is needed: the model
+                // check (kqueue_reactor_model.cpp, variant M_C_GARNISH)
+                // shows one is not load-bearing.
                 intptr_t before = frame->_state.fetch_or(STOPPED, std::memory_order_relaxed);
                 intptr_t resumed = before & RESUMED;
-                intptr_t stopped = before & STOPPED;
-                intptr_t started = before & STARTED;
-                assert(!stopped);
+                assert(!(before & STOPPED));
                 if (!resumed) {
                     switch (frame->_delete_knote()) {
                         case 0: // Won race; responsible for release
@@ -217,9 +228,6 @@ namespace wry {
                         default: // Unhandled errno value
                             abort();
                     }
-                }
-                if (started && !resumed) {
-                    frame->_state.load(std::memory_order_acquire);
                 }
                 frame->release();
                 // _f may be destroyed
@@ -343,8 +351,25 @@ namespace wry {
                     break;
             }
 
-            // Check our pointer-tagging is ok
-            auto before = frame->_state.fetch_or(STARTED, std::memory_order_release);
+            // Relaxed: STARTED publishes nothing.  The parties that read it
+            // take their data from other edges:
+            //   - static_resume reads STARTED, then invokes _f.  _f (and the
+            //     suspended coroutine) were written before the ADD, and the
+            //     ADD synchronizes-with the reactor's harvest of the knote
+            //     (the kernel edge, see ORDER), which is sequenced-before
+            //     static_resume on the pool.  On the armed path spawn
+            //     writes nothing to the frame between the ADD and here, so
+            //     a release here would publish nothing new.
+            //   - On the failed-ADD path no static_resume exists, and the
+            //     Callback cannot read STARTED: the reset above either
+            //     unlinked it (it never runs) or waited (acquire) on
+            //     __completed_ for it to return.
+            // Our own accesses after this RMW: if it saw RESUMED we invoke
+            // _f, which static_resume left alone (it saw no STARTED); the
+            // final release() orders us before the deleter.  The model
+            // check (kqueue_reactor_model.cpp, variant M_S_STARTED_RELEASE)
+            // shows release here is not load-bearing.
+            auto before = frame->_state.fetch_or(STARTED, std::memory_order_relaxed);
             auto resumed = before & RESUMED;
             auto stopped = before & STOPPED;
 

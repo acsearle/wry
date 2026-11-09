@@ -36,7 +36,8 @@
 // non-atomic access to the frame or the awaiting coroutine that matters.
 // The shared state:
 //
-//   atomic  _state                  RMW only, plus C's acquire garnish load
+//   atomic  _state                  RMW only (all relaxed), plus C's acquire
+//                                   garnish load in variant M_C_GARNISH
 //   atomic  _reference_count_minus_one   RMW only, plus the deleter's
 //                                   acquire load
 //   kq      the knote (none / armed / harvested); every kevent call is an
@@ -179,8 +180,10 @@ namespace wry {
                 M_R_NO_RESET,           // static_resume does not destroy the stop_callback first
                 M_R_IGNORES_STOPPED,    // static_resume inherits the callback's share unconditionally
                 M_S_NO_DOOMED_DELETE,   // spawn sees STOPPED after the ADD but leaves the knote armed
-                M_C_NO_GARNISH,         // Callback's acquire re-load of _state removed
-                M_S_STARTED_RELAXED,    // spawn's fetch_or(STARTED) relaxed, not release
+                // Strengthenings, not weakenings: the orders the code had
+                // before 2026-11-10, kept explorable.  Each must also pass.
+                M_C_GARNISH,            // Callback re-loads _state with acquire before its own release() when it saw STARTED and not RESUMED
+                M_S_STARTED_RELEASE,    // spawn's fetch_or(STARTED) release, not relaxed
             };
 
             struct Config {
@@ -252,6 +255,7 @@ namespace wry {
                 EV_PARKED = 1u << 13,
                 EV_ADD_FAILED = 1u << 14,
                 EV_R_SAW_UNSTARTED = 1u << 15,
+                EV_GARNISH = 1u << 16,
             };
 
             struct Ctx {
@@ -656,9 +660,11 @@ namespace wry {
                         return n;
                     case S_STARTED: {
                         tick(s, c, t);
-                        c.what = "spawn: _state.fetch_or(STARTED, release)";
+                        bool const rel = mut(c) == M_S_STARTED_RELEASE;
+                        c.what = rel ? "spawn: _state.fetch_or(STARTED, release)"
+                                     : "spawn: _state.fetch_or(STARTED, relaxed)";
                         na_read(s, c, t, L_STORAGE);
-                        uint8_t b = rmw(s, c, t, A_STATE, false, mut(c) != M_S_STARTED_RELAXED, STARTED);
+                        uint8_t b = rmw(s, c, t, A_STATE, false, rel, STARTED);
                         s.s_before = b;
                         bool resumed = b & RESUMED, stopped = b & STOPPED;
                         if (s.s_ok) {
@@ -822,7 +828,7 @@ namespace wry {
                             c.what = "Callback: kevent EV_DELETE -> 0 (won: the knote will never fire)";
                             c.events |= EV_C_DEL_WON;
                             if (mut(c) == M_C_LEAKS_KNOTE_OWNER) {
-                                bool g = (s.c_before & STARTED) && mut(c) != M_C_NO_GARNISH;
+                                bool g = (s.c_before & STARTED) && mut(c) == M_C_GARNISH;
                                 s.pc[P_C] = g ? C_GARNISH : C_REL_OWN;
                             } else {
                                 s.pc[P_C] = C_DEL_REL_R;
@@ -830,19 +836,20 @@ namespace wry {
                         } else {
                             c.what = "Callback: kevent EV_DELETE -> ENOENT (fired, or not yet armed)";
                             c.events |= EV_C_DEL_ENOENT;
-                            bool g = (s.c_before & STARTED) && mut(c) != M_C_NO_GARNISH;
+                            bool g = (s.c_before & STARTED) && mut(c) == M_C_GARNISH;
                             s.pc[P_C] = g ? C_GARNISH : C_REL_OWN;
                         }
                         return 1;
                     case C_DEL_REL_R:
                         n = release_step(s, c, P_C, t, choice, done);
                         if (done) {
-                            bool g = (s.c_before & STARTED) && mut(c) != M_C_NO_GARNISH;
+                            bool g = (s.c_before & STARTED) && mut(c) == M_C_GARNISH;
                             s.pc[P_C] = g ? C_GARNISH : C_REL_OWN;
                         }
                         return n;
                     case C_GARNISH: {
                         n = load_options(s, c, t, A_STATE);
+                        c.events |= EV_GARNISH;
                         if (n > 1)
                             c.events |= EV_GARNISH_STALE;
                         tick(s, c, t);
@@ -1143,12 +1150,8 @@ namespace wry {
                 EV_K_DESTROYED_FLAG | EV_PARKED | EV_ADD_FAILED |
                 EV_R_SAW_UNSTARTED;
             require((t.events & expected) == expected);
-            // The garnish never has a choice of message: after the
-            // Callback's fetch_or nothing else writes _state until it has
-            // finished (spawn's STARTED is already before it when the
-            // garnish runs, and static_resume's reset waits on
-            // __completed_), so it always reads the Callback's own RMW
-            require(!(t.events & EV_GARNISH_STALE));
+            // The code as written has no garnish (variant M_C_GARNISH)
+            require(!(t.events & EV_GARNISH));
             require(t.states > 100);
             (void)t;
         }
@@ -1159,23 +1162,32 @@ namespace wry {
     // should catch it.  Ordering mutations pass SC and fail RA; logic
     // mutations fail SC already.
     //
-    // Two orderings the protocol carries are NOT load-bearing in this model:
-    //   - spawn's fetch_or(STARTED, release): nothing spawn writes between
-    //     the ADD and STARTED is read by a party that reads STARTED.  On
-    //     the success path spawn writes nothing to the frame there; on the
-    //     failure path it writes (the R-share release, the reset) but then
-    //     no static_resume exists, and the Callback cannot read STARTED
-    //     (the reset waited for it or unlinked it).  static_resume's reads
-    //     of the frame are ordered by ADD -release-> harvest (acquire).
-    //   - the Callback's _state.load(acquire): every later frame access
-    //     by another party is ordered after the Callback by the reference
-    //     count's release sequence (each fetch_sub is a release; the
-    //     deleter's acquire load reads the last of the chain) or by the
-    //     stop_callback's __completed_ release/acquire.
+    // Two orderings the protocol once carried are NOT load-bearing in this
+    // model, so the code now omits them (docs/decisions_2026-11-08.md item
+    // 19) and the checked baseline (M_NONE, test kevent_model above) is the
+    // relaxed protocol.  Each survives here as a strengthening variant that
+    // must also pass:
+    //   - M_S_STARTED_RELEASE, spawn's fetch_or(STARTED) as release: nothing
+    //     spawn writes between the ADD and STARTED is read by a party that
+    //     reads STARTED.  On the success path spawn writes nothing to the
+    //     frame there; on the failure path it writes (the R-share release,
+    //     the reset) but then no static_resume exists, and the Callback
+    //     cannot read STARTED (the reset waited for it or unlinked it).
+    //     static_resume's reads of the frame are ordered by ADD -release->
+    //     harvest (acquire).
+    //   - M_C_GARNISH, the Callback's _state.load(acquire): every later
+    //     frame access by another party is ordered after the Callback by
+    //     the reference count's release sequence (each fetch_sub is a
+    //     release; the deleter's acquire load reads the last of the chain)
+    //     or by the stop_callback's __completed_ release/acquire.
     // Within the model.  F, NODE and FIELDS are coarse locations and the
     // callable is opaque, so a dependency inside F that spawn created after
     // the ADD would be invisible here; the code has none today (spawn does
     // not touch _f on the success path before STARTED).
+    //
+    // The ordering mutations below (M_RC_RELAXED, M_RC_NO_ACQUIRE,
+    // M_ADD_RELAXED) are weakenings of the relaxed baseline, so the edges
+    // they remove are load-bearing in the protocol as shipped.
     define_test("kevent_model_mutations") {
         using namespace kevent_model;
         struct Expectation {
@@ -1192,8 +1204,8 @@ namespace wry {
             { M_R_NO_RESET,          true,  true,  "" },
             { M_R_IGNORES_STOPPED,   true,  true,  "" },
             { M_S_NO_DOOMED_DELETE,  true,  true,  "lost cancellation" },
-            { M_C_NO_GARNISH,        false, false, nullptr },
-            { M_S_STARTED_RELAXED,   false, false, nullptr },
+            { M_C_GARNISH,           false, false, nullptr },
+            { M_S_STARTED_RELEASE,   false, false, nullptr },
         };
         bool const verbose = std::getenv("WRY_MODEL_VERBOSE") != nullptr;
         for (Expectation const& e : expectations) {
@@ -1211,6 +1223,19 @@ namespace wry {
             require(ra.failed == e.ra_fails);
             if (e.ra_violation)
                 require(contains(ra.first_violation, e.ra_violation));
+            if (e.mutation == M_C_GARNISH) {
+                // The variant really runs the garnish (else its pass is
+                // vacuous), and the garnish never has a choice of message:
+                // after the Callback's fetch_or nothing else writes _state
+                // until it has finished (spawn's STARTED is already before
+                // it when the garnish runs, and static_resume's reset waits
+                // on __completed_), so it always reads the Callback's own
+                // RMW
+                require(sc.events & EV_GARNISH);
+                require(ra.events & EV_GARNISH);
+                require(!(sc.events & EV_GARNISH_STALE));
+                require(!(ra.events & EV_GARNISH_STALE));
+            }
             (void)sc; (void)ra;
         }
         co_return;

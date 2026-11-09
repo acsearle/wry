@@ -591,15 +591,35 @@ for `ContinuationThunk` the coroutine is destroyed by whoever drops the
 last reference: cancellation as destruction, on that thread.
 
 The callable runs exactly once or never.  `static_resume` invokes it if it
-sees STARTED and not STOPPED; `spawn` invokes it if its `fetch_or(STARTED,
-release)` sees RESUMED (the fire beat `spawn` to the state word) and not
-STOPPED.  Frame atomics are otherwise relaxed: `static_resume` and the
-callback `fetch_or` relaxed, and the callback adds an acquire re-load of
-`_state` when it saw STARTED, which reads from the release sequence headed
-by `spawn`'s release `fetch_or`.  Whether that garnish is load-bearing
-beyond the reference count's own release/acquire is unproved; the
-exhaustive-interleaving check of this frame is the open half of a
-docs/todo.md item.
+sees STARTED and not STOPPED; `spawn` invokes it if its `fetch_or(STARTED)`
+sees RESUMED (the fire beat `spawn` to the state word) and not STOPPED.
+All three `_state` RMWs are relaxed: the state word elects who acts and
+publishes no data.  The data travels on other edges:
+
+- `_f`, `_change` and the suspended coroutine are written by `spawn`
+  before the ADD; the ADD synchronizes-with the harvest (ORDER, 9.1),
+  which is sequenced-before `static_resume` on the pool.  `spawn`'s own
+  invoke (when it saw RESUMED) needs no edge: `static_resume`, having seen
+  no STARTED, left `_f` and the coroutine alone.
+- What the callback reads (`_stop_token`, `_change`) was written before
+  `_stop_callback.emplace`: sequenced-before when it runs inline, else
+  ordered by the stop_state lock (registration releases, `request_stop`'s
+  pop acquires).
+- Everything a party does to the frame is ordered before its deletion by
+  the reference count: each `fetch_sub` is a release, and the deleter's
+  acquire load reads the end of that release sequence.  `~stop_callback`
+  additionally waits (acquire) on `request_stop`'s release store of
+  `__completed_`.
+
+Until 2026-11-10 `spawn`'s `fetch_or(STARTED)` was a release and the
+callback added an acquire re-load of `_state` when it saw STARTED (the
+"garnish").  The exhaustive-interleaving model check
+(`core/kqueue_reactor_model.cpp`, tests `kevent_model` and
+`kevent_model_mutations`: every interleaving of spawn, a stop request and
+the fire, with happens-before computed from the code's own release/acquire
+edges) shows neither is load-bearing, so both were dropped
+(docs/decisions_2026-11-08.md item 19).  They survive in the model as
+variants `M_S_STARTED_RELEASE` and `M_C_GARNISH`, which must also pass.
 
 ### 9.3 The interleavings, and the fire-won race
 
@@ -873,8 +893,6 @@ the frame; 10 `await_ready` on `signaledValue`; 11 and 12 the six tests.
 - Reactor leaves are synchronous on cancel only outside the fire-won and
   arming windows (9.3); `metal_event.hpp`'s "as the reactor's leaves do"
   holds for the settled case.
-- `CancelableKEventFrame`'s relaxed-RMW plus acquire-garnish argument has
-  not been model-checked (docs/todo.md).
 - `get_stop_token` walks the delegate chain per leaf await (docs/todo.md).
 - `with_deadline`'s sender rebuild is in review, not on main (9.5).
 - An arm outside any task leaks its frame at shutdown (9.4).
