@@ -2013,10 +2013,36 @@ namespace deferred {
         return clamp(u.radius * u.pixels_per_unit / depth, 2.0f, 256.0f);
     }
 
-    // Interleaved gradient noise (Jimenez), a per-block rotation of the
-    // sample pattern that the blur below averages out
-    static float ssao_noise(uint2 g) {
-        return fract(52.9829189f * fract(0.06711056f * (float)g.x + 0.00583715f * (float)g.y));
+    // The per-block jitter that the blur below averages out: a rotation of
+    // the slices (x) and an offset of the taps along them (y).  The two
+    // must be independent and, over any blur window, spread evenly over
+    // the unit square: XeGTAO's R2 sequence along a 64 x 64 Hilbert curve,
+    // whose consecutive indices are neighbouring blocks.  (Interleaved
+    // gradient noise at two offsets, as this was, gives the same noise
+    // shifted, y = fract(x + 0.756) almost everywhere: each slice
+    // direction got one set of tap distances, and beside a wall the
+    // occlusion fell off in two ramps with a light band between them.
+    // The transposed pattern for y is constant along diagonals and
+    // streaks.)
+    static float2 ssao_noise(uint2 g) {
+        uint x = g.x & 63u;
+        uint y = g.y & 63u;
+        uint index = 0u;
+        for (uint level = 32u; level != 0u; level /= 2u) {
+            uint rx = (x & level) != 0u ? 1u : 0u;
+            uint ry = (y & level) != 0u ? 1u : 0u;
+            index += level * level * ((3u * rx) ^ ry);
+            if (ry == 0u) {
+                if (rx == 1u) {
+                    x = 63u - x;
+                    y = 63u - y;
+                }
+                uint t = x;
+                x = y;
+                y = t;
+            }
+        }
+        return fract(0.5f + (float)index * float2(0.75487766624669276f, 0.56984029099805327f));
     }
 
     // The depth pyramid the GTAO taps read (XeGTAO's prefilter): level 0 is
@@ -2134,8 +2160,9 @@ namespace deferred {
         float3 N = normalize(normalTexture.read(f).xyz);
         float3 V = normalize(u.camera_position_world.xyz - P);
         float radius_px = ssao_radius_pixels(u, depth);
-        float noise = ssao_noise(g);
-        float step_noise = ssao_noise(g + uint2(37u, 91u));
+        float2 jitter = ssao_noise(g);
+        float noise = jitter.x;              // the slices' rotation
+        float step_noise = jitter.y;         // the taps' offset
         float2 inv_viewport = 1.0f / u.viewport;
 
         float visibility = 0.0f;
@@ -2155,9 +2182,18 @@ namespace deferred {
             for (int side = 0; side != 2; ++side) {
                 float sgn = side == 0 ? 1.0f : -1.0f;
                 for (int i = 0; i != u.steps; ++i) {
-                    float t = ((float)i + 0.5f + step_noise * 0.5f) / (float)u.steps;
+                    // The noise jitters each tap across its whole
+                    // interval, so that over the blur's window the taps
+                    // cover the radius continuously.  (Jittering over
+                    // half of it left bands of distance no block ever
+                    // sampled -- with 4 steps, 0.56 to 0.77 of the
+                    // radius among others -- and the occlusion beside a
+                    // wall then fell off in two ramps with a light band
+                    // between them.)  The nearest tap stays a pixel and
+                    // a bit out, off the pixel's own texel.
+                    float t = ((float)i + step_noise) / (float)u.steps;
                     t = t * t;                       // denser near the pixel
-                    float distance_px = t * radius_px;
+                    float distance_px = mix(1.3f, radius_px, t);
                     float2 sp = pixel + sgn * dir * distance_px;
                     float sd;
                     if (u.pyramid) {
