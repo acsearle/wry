@@ -29,9 +29,12 @@ namespace wry {
     // the parked frame (cancellation unwinding), synchronously on the
     // requesting thread, whenever the stop wins the claim (if the
     // notification won, the frame is scheduled to resume, if it is not
-    // already, and sees the stop at its next leaf).  That is stronger than the reactor's
-    // leaves, which can leave the destroy to the pool or the arming thread
-    // just after request_stop returns (coroutines.md 9.3).  Metal cannot withdraw
+    // already, and sees the stop at its next leaf).  The reactor's leaves
+    // can also leave the destroy to the pool; this cannot.  Both share an
+    // arming window: a request that lands while the wait is still being
+    // armed is acted on by the arming thread, just after request_stop
+    // returns (coroutines.md 9.3).  As everywhere, the join or receiver,
+    // not request_stop's return, is the synchronization.  Metal cannot withdraw
     // a listener, so the notification stays registered after a stop: a
     // small heap record (not the coroutine) lives until the event reaches
     // the value or Metal drops the notification, and then dies without

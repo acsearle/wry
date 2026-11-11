@@ -116,6 +116,11 @@ namespace wry {
     std::expected<std::string, std::string> check_save_name(std::string_view name) {
         if (name.ends_with(".wry"))
             name.remove_suffix(4);
+        // One ".wry" is the file's extension; a stem that still ends in it
+        // ("notes.wry.wry") would be listed, loaded and deleted under a
+        // different name ("notes") than it was saved under
+        if (name.ends_with(".wry"))
+            return std::unexpected(std::string("a save's name cannot end in \".wry.wry\""));
         if (name.empty())
             return std::unexpected(std::string("a save's name cannot be empty"));
         if (name.size() > SAVE_NAME_MAX_BYTES)
@@ -255,6 +260,13 @@ namespace wry {
                     if (std::optional<int> n = automatic_save_number(stem))
                         next = std::max(next, *n + 1);
                 for (int attempt = 0; ; ++attempt, ++next) {
+                    // automatic_save_number recognizes at most 10^9; a save
+                    // numbered beyond it would not count toward the next
+                    // number, so every later save would retry over it
+                    if (next > 1'000'000'000) {
+                        ok = false;
+                        break;
+                    }
                     outcome.name = "save_" + std::to_string(next);
                     const std::string destination = save_path(outcome.name).string();
 #if defined(__APPLE__)
@@ -500,6 +512,8 @@ namespace wry {
         require(refused("\xED\xA0\x80"));                    // a surrogate
         require(refused("\xF4\x90\x80\x80"));                // beyond U+10FFFF
         require(refused("\x80"));                            // a stray continuation
+        require(refused("notes.wry.wry"));                   // would list as "notes"
+        require(accepted("notes.wry", "notes"));
         co_return;
     };
 
@@ -524,10 +538,11 @@ namespace wry {
         require(w2->_time == w->_time);
         require(holds_test_value(w2, 99));
 
+        // Deleted once, and then the name is given up: in the shared saves
+        // directory another process may already have published a new save
+        // under the same automatic name, which a second delete or a read
+        // would touch
         require(delete_game(saved.name));
-        require(read_save_file(saved.name).empty());
-        require(!delete_game(saved.name));                  // nothing left to delete
-        require(!listed(saved.name));
         co_return;
     };
 

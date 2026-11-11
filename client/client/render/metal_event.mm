@@ -54,10 +54,15 @@ namespace wry {
     //   - stop: the stop_callback (on the requesting thread, inside
     //     request_stop, or inline in emplace when the token is already
     //     requested) sets STOPPED and destroys the continuation there --
-    //     cancellation as destruction, always on the requester (the
-    //     reactor's leaves can defer it to the pool or the arming thread,
-    //     coroutines.md 9.3; this one has no such window, since the
-    //     claim and the destroy are one act of the callback).
+    //     cancellation as destruction.  For a parked wait that is on the
+    //     requester, inside request_stop (the reactor's leaves can also
+    //     defer it to the pool, coroutines.md 9.3; this one cannot, since
+    //     the claim and the destroy are one act of the callback).  But
+    //     there is an arming window, as in the reactor: a request that
+    //     lands after await_suspend took the token and before the emplace
+    //     finds no callback and returns; the emplace then runs the
+    //     callback inline, so the destroy happens on the arming thread,
+    //     after request_stop has returned.
     //
     //   - fire: the block (on the listener's queue) FIRST resets the
     //     stop_callback, THEN sets FIRED; if STOPPED was not set it schedules
@@ -161,6 +166,15 @@ namespace wry {
             WaitState(WaitState const&) = delete;
 
             ~WaitState() {
+#ifdef WRY_TSAN
+                // The block's body happens-before this: the block drops its
+                // reference after fire() returns and the last drop runs us.
+                // That edge is the shared_ptr count, which ThreadSanitizer
+                // can miss when the block is released inside Metal (a
+                // report of fire() racing this reset, seen once, 2026-11-12);
+                // paired with the release after fire() in the block
+                __tsan_acquire(this);
+#endif
                 // Waits for a callback still running on another thread
                 _stop_callback.reset();
                 if (_continuation) {
@@ -220,6 +234,9 @@ namespace wry {
                     __tsan_acquire(key);
 #endif
                     state->fire();
+#ifdef WRY_TSAN
+                    __tsan_release(key);   // to ~WaitState (see there)
+#endif
                 };
 #ifdef WRY_TSAN
                 __tsan_release(key);

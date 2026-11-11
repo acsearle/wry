@@ -561,10 +561,6 @@ namespace wry::otf {
             start = end + 1;
         }
 
-        for (auto& p : result)
-            for (int i = 0; i != 4; ++i)
-                printf("  %g %g\n", p.columns[i].x, p.columns[i].y);
-
         return result;
     }
 

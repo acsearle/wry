@@ -3123,9 +3123,14 @@ namespace wry {
         // The main menu: nothing to save or leave; a save must exist
         expect("save", Reply::ERROR);
         expect("main-menu", Reply::ERROR);
-        expect("load \"no-such-save.wry\"", Reply::ERROR);
+        // A name unique to this run: the directory may hold the player's
+        // own saves, and delete-save of an existing name would delete one
+        const std::string absent = "no such save "
+            + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        require(!save_exists(absent));
+        require(with_name("load", absent + ".wry").status == Reply::ERROR);
         expect("list-saves", Reply::OK);
-        expect("delete-save \"no-such-save\"", Reply::ERROR);
+        require(with_name("delete-save", absent).status == Reply::ERROR);
         // Names that cannot be a file of the saves directory are refused
         // before anything happens
         for (const char* bad : {"a/b", "..", ".savetmp.x", "a:b", "a\\b"})

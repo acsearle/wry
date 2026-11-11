@@ -420,10 +420,14 @@ namespace wry {
                 }
             }
             Shared& shared = *connection->shared;
-            // Nothing further from the peer is processed: a reader parked
-            // in its recv unwinds here, on this thread (or just after, on
-            // the pool, if its readiness was delivered as the stop
-            // arrived: it still never reads, coroutines.md 9.3)
+            // Stop the reader.  A reader parked in its recv unwinds here,
+            // on this thread (or just after, on the pool, if its readiness
+            // was delivered as the stop arrived, coroutines.md 9.3 case 3).
+            // But a reader already past its readiness (delivered before
+            // this request, 9.3 case 2, or running on the pool now) still
+            // completes that recv and may queue the Messages it split,
+            // before its next recv sees the stop: a consumer can receive a
+            // few messages from a connection after its kick
             connection->reader_stop.request_stop();
             Transport::Codec const& codec = *shared.codec;
             connection->out.emplace(Outgoing{codec.frame(codec.farewell(reason)), false});

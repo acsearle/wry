@@ -64,6 +64,7 @@ roughly by how much they unblock.
     in the World? where the files live? who drafts the opcode help text?).
     Context help on hover depends on these.
     **Decided 2026-11-10:** presentation data now, in a new repo [`assets/`](../assets/README.md) folder (terrain.json, matter.json, opcodes.json; JSON keyed by short name); Claude drafted the opcode help for Antony to edit. Done: 6f885f6. LATER: move the text parts of `~/Desktop/assets` (.json, .py, .svg) into the repo (todo). Still open as **10b**: simulation tables (prices, dig times): ruleset hash in HELLO, or rules in the World? (`docs/data_driven.md` option 1 vs 2; prices in a per-client file would desync lockstep.)
+    **10b, discussed 2026-11-12:** Factorio does both: prototype data (recipes) is rebuilt on every peer from mod files whose checksums and versions must match at join (the joiner can sync mods from the portal); per-world parameters (map-gen, difficulty selector) live in the save. A third option for wry: a content-addressed rules pack whose hash is in both the save and HELLO, with the pack shipped to joiners alongside the World. Open: choose.
 11. **"Explode the stack" when following a truck**: what should it look
     like? (Click-to-follow is built.)
     **Decided 2026-11-09:** the stack's tiles are stacked tightly; explode means draw them vertically with enough spacing to read their faces, probably spaced as if they were cubes. Animating into and out of the state is a stretch goal (Claude is doing this now).
@@ -75,6 +76,7 @@ roughly by how much they unblock.
     **Decided 2026-11-10:** the console is modal (keys and mouse) while open, and the wheel scrolls its output. Done: 69d2a81. Playtest how annoying modality is.
 14. **Named saves** (`save NAME`): saves are named only by file today, and
     names would need a format change.
+    **Decided 2026-11-12:** no format change was needed (the "format" was the save_N naming and the int-id API); saves are named by their file stem: `save NAME`, `load NAME`, `delete-save NAME`. Done: ea302a8.
 15. **Asset cache memory**: decoded assets and the Metal objects made from
     them are now kept for the whole process (WryRenderContext.assetCache).
     That makes a second New Game's scene setup 10 ms instead of 1.3 s
@@ -100,6 +102,7 @@ roughly by how much they unblock.
     (b) `CancelableKEventFrame` can destroy the frame after `request_stop`
     returns, which contradicts the "synchronous cancellation" comments in
     `kqueue_reactor.cpp` and `metal_event.hpp`. Fix the comments or the code?
+    **Decided 2026-11-12:** (a) was a latent bug, fixed (the stopped continuation now runs after the frame is freed, as the value path does; eb7b32e); (b) was comments only, now stating the std::execution contract. Optional, not done: synchronous stop-won destroy in CancelableKEventFrame (todo; recommended against until needed).
 19. **Model checker** ([`core/kqueue_reactor_model.cpp`](../client/client/core/kqueue_reactor_model.cpp)): spawn's
     `fetch_or(STARTED, release)` and the Callback's acquire garnish are not
     load-bearing in the model. Relax them, or keep them as belt-and-braces?
@@ -123,6 +126,7 @@ roughly by how much they unblock.
 23. **GC CRASH-1 trap tier**: the unpinned detector is now an assert, after
     clean sweeps. Strip the freed-object ring and quarantine tier too?
     **Explained 2026-11-10** (in chat). Recommendation: one recorded soak (mac-debug ASan suite x20 with WRY_GC_QUARANTINE=1), then strip the freed-object ring, walk labels and ASan narration (24 MiB + per-object stores in every Debug build; built only for CRASH-1), keeping the unpinned detector (move it out of the TEMP block) and keeping quarantine as a documented opt-in (~15 lines; fix it to require the value 1: today any value, 0 included, enables it).
+    **Decided 2026-11-12:** soak (20/20 clean with quarantine) and strip (d55497b); quarantine now needs exactly =1; the collector is quiet by default (WRY_GC_VERBOSE=1 / `gc-verbose`).
 
 ## Waiting on something external
 
@@ -154,3 +158,4 @@ roughly by how much they unblock.
     and picks the value up. `machine_language.md` 6.7 and 8.11 say machines
     cannot write under an occupant. A truck on HALT is safe (its cell is not
     empty). Is the code or the doc right?
+    **Decided 2026-11-12:** document the code's behaviour, subject to a TBD: machine_language.md 8.13 "Under vs beside" (719ecaf), part of the larger under-vs-beside question the playtesters raised.

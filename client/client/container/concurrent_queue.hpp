@@ -33,7 +33,6 @@ namespace wry {
                 _deque.push_front(std::move(item));
                 if (_deque.size() > _record_size) {
                     _record_size = _deque.size();
-                    printf("New record work queue size: %zu\n", _deque.size());
                 }
                 if (_waiting) {
                     notify = true;
@@ -50,7 +49,6 @@ namespace wry {
                 _deque.push_back(std::move(item));
                 if (_deque.size() > _record_size) {
                     _record_size = _deque.size();
-                    printf("New record work queue size: %zu\n", _deque.size());
                 }
                 if (_waiting) {
                     notify = true;
@@ -68,7 +66,6 @@ namespace wry {
                 _deque.emplace_back(std::forward<U>(args)...);
                 if (_deque.size() > _record_size) {
                     _record_size = _deque.size();
-                    printf("New record work queue size: %zu\n", _deque.size());
                 }
                 if (_waiting) {
                     notify = true;
