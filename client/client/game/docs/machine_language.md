@@ -479,6 +479,8 @@ Semantics, and the choices in them:
   machine never enters (a hold is occupied by the Ship).  Like a STORE of
   matter it waits for the cell to be empty, so a machine parks at the
   quay, turned and loaded, until the Ship has sold the last load.
+  "Empty" means the cell's *value*, not its occupancy: DUMP will put x
+  under another machine parked on an empty cell (8.13, TBD).
 - **Unpriced things stay put.**  Water, a container, a number: the Ship
   leaves it in the hold, which then blocks that hold.  Taking things back
   out of a hold is not built yet.
@@ -594,12 +596,15 @@ survives any of them.
 
 ### 6.7 Gates and mailboxes
 
-`HALT` parks a machine until *the cell under it* changes.  Nothing another
-machine can do wakes it (machines cannot write under an occupant -- STORE
-targets the cell the storer itself enters, and entry is blocked while the
-sleeper occupies it).  A halted machine is therefore a valve operated by
-non-machine entities: a Source or Sink under it, or the player editing the
-cell.  Write `TURN_EAST` under a sleeper and it leaves eastward, executing
+`HALT` parks a machine until *the cell under it* changes.  No machine can
+STORE under it: STORE targets the cell the storer itself enters, and entry
+is blocked while the sleeper occupies it.  (One machine write does reach
+under an occupant: DUMP's target is the cell *beside* the dumper, and it
+waits only for that cell's value to be empty, not for it to be
+unoccupied -- see 8.13, TBD.  A machine halted on its HALT glyph is safe
+from it, since its cell holds the HALT and is not empty.)  A halted
+machine is therefore a valve operated by non-machine entities: a Source or
+Sink under it, or the player editing the cell.  Write `TURN_EAST` under a sleeper and it leaves eastward, executing
 the glyph as it wakes.
 
 For machine-to-machine gating, use occupancy itself: a parked machine *is*
@@ -871,7 +876,8 @@ Two machines approaching head-on each wait for the other's cell forever;
 so do four machines in a rotational cycle.  The escape hatches (a blocked
 machine also wakes if the value under it changes) require an *external*
 actor -- the player, or an entity like a Source -- because machines cannot
-write under other machines.  There is no timeout, no arbitration, no
+STORE under other machines.  (DUMP can write under a machine parked on an
+empty cell, and so wake it: 8.13, TBD.)  There is no timeout, no arbitration, no
 in-language detection.  For a game this is arguably content: gridlock is
 real, one-way loops and flip-flop balancers are the players' traffic
 engineering; the priority-randomized transaction layer already guarantees
@@ -915,6 +921,36 @@ DO_NOT_QUEUE_ACROSS_INTERSECTION (the box-junction rule).
   the same design nerve.
 
 --------------------------------------------------------------------------
+
+### 8.13 Under vs beside: which cell an operation acts on (OPEN, TBD)
+
+Found 2026-11-10 while drafting the opcode help: `plan_arrival` lets DUMP
+write its target cell whenever that cell's value is empty, without
+checking who occupies it, and the transaction write does not check
+either.  So DUMP can put a value *under* another machine parked on an
+empty cell (one queued in traffic, say); the parked machine then wakes
+through the changed-cell escape hatch and picks the value up.  This
+contradicts the rule this document stated until now, that machines cannot
+write under an occupant (6.7, 8.11), which those sections now note.
+
+Decision (antony, 2026-11-12): the documentation describes the code's
+behaviour, subject to a TBD, because it is part of a larger problem.
+Playtesters were confused by the mixture of operations that act on the
+cell *under* the machine and those that act on the cell *beside* (ahead
+of or behind) it: "surprising/inconsistent that mine, dump, bury don't
+apply to the square containing [the] symbol" (todo.md, feedback
+2026-11-11).  Today:
+
+- under: the glyph executed is the one under the machine; the Sources and
+  Sinks the machine sits on;
+- the next cell entered: STORE, LOAD and the other prefix operands (5.2),
+  MINE / BURY's terrain (5.8);
+- beside (behind the turn): DUMP's hold (5.9).
+
+What a consistent rule should be (all under, all ahead, or a visible
+convention per opcode family), and whether any machine write may land
+under an occupant, is to be decided together; until then DUMP's
+behaviour stands as described.
 
 ## 9. Tarpit assessment
 
