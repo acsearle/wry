@@ -34,13 +34,13 @@ namespace wry {
         });
 
         // LOAD GAME: for now load the most recent save (enumerate_games
-        // returns (name, id) newest first) with the `load` command; a real
+        // returns the names newest first) with the `load` command; a real
         // save picker is the eventual UX.
         add("Load Game", [g] {
             auto games = enumerate_games();
             if (!games.empty())
                 (void) g->issue_with(command::Origin::gui, "load",
-                                     String(StringView(games.front().first.c_str())));
+                                     String(StringView(games.front().c_str())));
         });
 
         // JOIN GAME: joining is the `join` command and --join today; a

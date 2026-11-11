@@ -18,6 +18,7 @@
 #include <mutex>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "concurrent_queue.hpp"
@@ -31,6 +32,7 @@
 #include "hash.hpp"
 #include "machine.hpp"
 #include "palette.hpp"
+#include "save.hpp"
 #include "simd.hpp"
 #include "sim.hpp"
 #include "spawner.hpp"
@@ -319,7 +321,7 @@ namespace wry {
         void corrupt(Coordinate at, Term term);
 
         RemoteServer* _client();
-        void _start_session(std::optional<int> save);
+        void _start_session(std::optional<std::string> save);
         void _start_hosting(uint64_t head);
         void _start_joining(String const& address, uint16_t port);
         void _end_session(std::chrono::milliseconds grace);
@@ -345,9 +347,9 @@ namespace wry {
         // been done
         [[nodiscard]] coroutine::Task end_session(std::chrono::milliseconds grace);
 
-        // The game from the starting scenario, or from save `save`
-        // (save_ID.wry; the main menu's `load`)
-        explicit WorldState(GuiContext& gui, std::optional<int> save = std::nullopt) : _gui(gui) {
+        // The game from the starting scenario, or from the save named
+        // `save` (a checked name, io/save.hpp; the main menu's `load`)
+        explicit WorldState(GuiContext& gui, std::optional<std::string> save = std::nullopt) : _gui(gui) {
 
             // Overlay wiring.  The floating log + console are app-tier now:
             // GuiContext owns them (its ctor wires console->log and pushes them
@@ -363,7 +365,7 @@ namespace wry {
             // starting scenario or the save, or, on --join and no save, a
             // client of another's game.  At construction _worlds is empty,
             // so the drain inside is a no-op.
-            _start_session(save);
+            _start_session(std::move(save));
 
             _regenerate_uniforms();
 
@@ -380,14 +382,17 @@ namespace wry {
         // race-free.  Defined in model.cpp (needs io/save.hpp).
         void new_game();
         // False, changing nothing, if the save cannot be loaded
-        bool load_from_save(int id);
+        bool load_from_save(std::string const& name);
 
-        // Serialize the displayed world to a new save file, in the
-        // background (io/save.hpp): `on_done(id)` runs on a worker thread
-        // once it has published save_ID.wry, or failed (id 0).  The world
-        // is read non-destructively (popped and re-pushed).  False, and
-        // nothing saved, if there is no displayed world
-        bool save_current(move_only_function<void(int)> on_done = {});
+        // Serialize the displayed world to a save file, in the background
+        // (io/save.hpp): as `name` (a checked name), replacing any save of
+        // that name, or as the next save_N if `name` is empty.  `on_done`
+        // runs on a worker thread once it has published the save, or
+        // failed (an empty name).  The world is read non-destructively
+        // (popped and re-pushed).  False, and nothing saved, if there is
+        // no displayed world
+        bool save_current(std::string name = {},
+                          move_only_function<void(SaveOutcome)> on_done = {});
 
         void _regenerate_uniforms();
 

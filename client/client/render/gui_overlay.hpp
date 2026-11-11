@@ -40,6 +40,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <limits>
@@ -627,7 +628,8 @@ namespace wry {
         // The rows are populated from the real save files (io/save.hpp
         // enumerate_games) via refresh(); the MainMenuOverlay's LOAD button
         // refreshes before showing this, and delete_selected refreshes after
-        // removing a file.
+        // removing a file.  Load and Delete issue the `load` and
+        // `delete-save` commands with the row's name.
 
         class SaveListOverlay : public Overlay {
         public:
@@ -655,9 +657,9 @@ namespace wry {
             // to scroll arithmetic and to flip the selected state on rows.
             class ScrollView*       _scroll = nullptr;
             std::vector<class Button*> _row_buttons;
-            // File id for each row, parallel to _row_buttons; the selected
-            // row's id is what load/delete act on.
-            std::vector<int>           _save_ids;
+            // The save's name for each row, parallel to _row_buttons; the
+            // selected row's name is what load/delete act on.
+            std::vector<std::string>   _save_names;
 
             struct ::wry::WorldState* _model = nullptr;
 

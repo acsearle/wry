@@ -375,8 +375,8 @@ namespace wry {
         install_displayed_world(*this, world);
     }
 
-    bool WorldState::load_from_save(int id) {
-        World* world = load_game(id);
+    bool WorldState::load_from_save(std::string const& name) {
+        World* world = load_game(name);
         if (!world)
             return false;
         _start_hosting((uint64_t)world->_time);
@@ -392,7 +392,7 @@ namespace wry {
         return _remote.get();
     }
 
-    void WorldState::_start_session(std::optional<int> save) {
+    void WorldState::_start_session(std::optional<std::string> save) {
         if (!save && !_gui.join_address.empty()) {
             _start_joining(_gui.join_address, _gui.join_port);
             // A placeholder to draw until the host's save arrives
@@ -723,7 +723,7 @@ namespace wry {
         (void) execution::sync_wait(_apply_step_async(step));
     }
 
-    bool WorldState::save_current(move_only_function<void(int)> on_done) {
+    bool WorldState::save_current(std::string name, move_only_function<void(SaveOutcome)> on_done) {
         // Hand a rooted snapshot of the displayed world to the async saver and
         // return to the frame immediately; the save no longer blocks the main
         // thread.  The world is an immutable persistent structure that
@@ -741,10 +741,10 @@ namespace wry {
         // have destroyed by then
         assert(_gui.scope);
         GuiContext* gui = &_gui;
-        _gui.scope->soon(save_game(w, [gui, on_done = std::move(on_done)](int id) mutable {
-            gui->post_notification(id ? "Saved." : "Save failed.");
+        _gui.scope->soon(save_game(w, std::move(name), [gui, on_done = std::move(on_done)](SaveOutcome outcome) mutable {
+            gui->post_notification(outcome ? "Saved." : "Save failed.");
             if (on_done)
-                on_done(id);
+                on_done(std::move(outcome));
         }));
         _worlds.push_front(std::move(w));
         return true;
@@ -1376,12 +1376,14 @@ namespace wry {
 
         // `save`: done once the background save has published (or failed).
         // The result is shared with the save's completion callback, which
-        // stores it on a worker thread; it holds no WorldState, so the save
+        // fills it on a worker thread; it holds no WorldState, so the save
         // may outlive the world it was taken from
         struct SaveResult {
-            // -1 until the save finishes; then the id published, or 0.
-            // The callback's store_release pairs with poll's load_acquire
-            Atomic<int> id{-1};
+            // Written once by the callback before `done`'s store_release,
+            // read by poll only after its load_acquire sees true: that pair
+            // is the happens-before edge publishing `outcome`
+            SaveOutcome outcome;
+            Atomic<bool> done{false};
         };
 
         struct SavePending final : command::Pending {
@@ -1389,26 +1391,25 @@ namespace wry {
             explicit SavePending(std::shared_ptr<SaveResult> r) : result(std::move(r)) {}
 
             std::optional<Reply> poll() override {
-                const int id = result->id.load_acquire();
-                if (id < 0)
+                if (!result->done.load_acquire())
                     return std::nullopt;
-                if (id == 0)
+                SaveOutcome const& outcome = result->outcome;
+                if (!outcome)
                     return Reply::error(String("the save failed"));
-                return Reply::ok(widen(save_name(id)));
+                return Reply::ok(widen((outcome.replaced ? "replaced " : "") + outcome.name));
             }
 
             // The save carries on; only the wait for it stops
             void cancel() override {}
         };
 
-        // The id of the save `name` names, as list-saves prints it, if
-        // there is one
-        std::optional<int> save_named(String const& name) {
-            const std::string wanted = narrow(name);
-            for (auto const& [file, id] : enumerate_games())
-                if (file == wanted)
-                    return id;
-            return std::nullopt;
+        // A save's name as a command argument names it (io/save.hpp
+        // check_save_name), or why it cannot be one
+        std::expected<std::string, Reply> checked_save_name(String const& name) {
+            auto checked = check_save_name(narrow(name));
+            if (!checked)
+                return std::unexpected(Reply::error(widen(checked.error())));
+            return std::move(*checked);
         }
 
         // new-game and load at the main menu: a WorldState for the host to
@@ -1416,7 +1417,7 @@ namespace wry {
         // constructor starts the session from the starting scenario (or
         // joins, on --join) or the save, as the in-game path's new_game
         // and load_from_save do
-        Reply show_new_world(Ctx& c, std::optional<int> save) {
+        Reply show_new_world(Ctx& c, std::optional<std::string> save) {
             if (!c.gui.on_world)
                 return Reply::error(String("this host cannot show a world"));
             if (c.gui.on_before_world)
@@ -1424,7 +1425,7 @@ namespace wry {
             std::shared_ptr<WorldState> world;
             {
                 LoadTimer timer("WorldState construction");
-                world = std::make_shared<WorldState>(c.gui, save);
+                world = std::make_shared<WorldState>(c.gui, std::move(save));
             }
             c.gui.on_world(std::move(world));
             return Reply::ok();
@@ -1578,11 +1579,23 @@ namespace wry {
             }));
 
         registry.add(make_command<Ctx>(
-            "save", "Save the displayed world as a new save; replies with its name once it is written", Category::session,
-            std::tuple<>{},
-            with_world([](WorldState& ws) {
+            "save", "Save the displayed world as saves/NAME.wry, replacing any save of that name, or with no name as the next save_N; replies with the name (\"replaced NAME\" if it replaced one) once it is written", Category::session,
+            std::tuple{
+                Param<Ctx, String>{"name", "the save's name (any UTF-8 but / \\ : and control characters, not starting with '.', at most 100 bytes); empty for the next save_N", String("")},
+            },
+            with_world([](WorldState& ws, String const& name) {
+                std::string checked;  // empty: the next save_N
+                if (!name.empty()) {
+                    auto r = checked_save_name(name);
+                    if (!r)
+                        return std::move(r.error());
+                    checked = std::move(*r);
+                }
                 auto result = std::make_shared<SaveResult>();
-                if (!ws.save_current([result](int id) { result->id.store_release(id); }))
+                if (!ws.save_current(std::move(checked), [result](SaveOutcome outcome) {
+                        result->outcome = std::move(outcome);
+                        result->done.store_release(true);
+                    }))
                     return Reply::error(String("no displayed world"));
                 return Reply::later(std::make_shared<SavePending>(std::move(result)));
             })));
@@ -1590,34 +1603,50 @@ namespace wry {
         registry.add(make_command<Ctx>(
             "load", "Load a save: from the main menu, or in place of the game showing (which ends its session)", Category::session,
             std::tuple{
-                Param<Ctx, String>{"name", "the save, as list-saves names it"},
+                Param<Ctx, String>{"name", "the save, as list-saves names it (a trailing .wry is allowed)"},
             },
             [](Ctx& c, String const& name) {
-                const std::optional<int> id = save_named(name);
-                if (!id)
-                    return Reply::error(widen("no save named " + narrow(name)));
+                auto checked = checked_save_name(name);
+                if (!checked)
+                    return std::move(checked.error());
+                if (!save_exists(*checked))
+                    return Reply::error(widen("no save named " + *checked));
                 // Refused files (an older save version, a hash the rebuilt
                 // World does not reproduce, damage) are an error here, not
                 // an empty world hosted as if it had loaded
                 if (!c.world) {
-                    if (!load_game(*id))
-                        return Reply::error(widen(narrow(name) + " could not be loaded (an older save version, or damaged)"));
-                    return show_new_world(c, id);
+                    if (!load_game(*checked))
+                        return Reply::error(widen(*checked + " could not be loaded (an older save version, or damaged)"));
+                    return show_new_world(c, std::move(*checked));
                 }
-                if (!c.world->load_from_save(*id))
-                    return Reply::error(widen(narrow(name) + " could not be loaded (an older save version, or damaged)"));
+                if (!c.world->load_from_save(*checked))
+                    return Reply::error(widen(*checked + " could not be loaded (an older save version, or damaged)"));
                 return Reply::ok();
             }));
 
         registry.add(make_command<Ctx>(
-            "list-saves", "The saves, one name per line, newest first", Category::session,
+            "delete-save", "Delete a save (its file, saves/NAME.wry)", Category::session,
+            std::tuple{
+                Param<Ctx, String>{"name", "the save, as list-saves names it (a trailing .wry is allowed)"},
+            },
+            [](Ctx&, String const& name) {
+                auto checked = checked_save_name(name);
+                if (!checked)
+                    return std::move(checked.error());
+                if (!delete_game(*checked))
+                    return Reply::error(widen("no save named " + *checked));
+                return Reply::ok(widen("deleted " + *checked));
+            }));
+
+        registry.add(make_command<Ctx>(
+            "list-saves", "The saves (the saves directory's .wry files), one name per line, newest first", Category::session,
             std::tuple<>{},
             [](Ctx&) {
                 std::string text;
-                for (auto const& [file, id] : enumerate_games()) {
+                for (std::string const& name : enumerate_games()) {
                     if (!text.empty())
                         text += "\n";
-                    text += file;
+                    text += name;
                 }
                 return Reply::ok(widen(text));
             }));
@@ -3086,6 +3115,9 @@ namespace wry {
             [[maybe_unused]] const Reply::Status got = gc.issue_with(Origin::console, "load", name).reply.status;
             require(got == Reply::OK);
         };
+        auto with_name = [&](const char* command, std::string const& name) {
+            return gc.issue_with(Origin::console, StringView(command), widen(name)).reply;
+        };
         auto displayed_hash = [&] { return narrow(issue("state-hash").reply.text); };
 
         // The main menu: nothing to save or leave; a save must exist
@@ -3093,6 +3125,12 @@ namespace wry {
         expect("main-menu", Reply::ERROR);
         expect("load \"no-such-save.wry\"", Reply::ERROR);
         expect("list-saves", Reply::OK);
+        expect("delete-save \"no-such-save\"", Reply::ERROR);
+        // Names that cannot be a file of the saves directory are refused
+        // before anything happens
+        for (const char* bad : {"a/b", "..", ".savetmp.x", "a:b", "a\\b"})
+            require(with_name("load", bad).status == Reply::ERROR
+                    && with_name("delete-save", bad).status == Reply::ERROR);
         require(!shown && !gc.world);
 
         // new-game from the menu: the host is handed the world to show
@@ -3106,30 +3144,51 @@ namespace wry {
         expect("corrupt Coordinate(5, 5) OPCODE::SWAP", Reply::OK);
         [[maybe_unused]] const std::string edited = displayed_hash();
         require(edited != start);
-        expect("save", Reply::PENDING);
-        const uint64_t save_seq = gc.history.back().seq;
-        auto save_entry = [&]() -> command::HistoryEntry const* {
-            for (auto const& e : gc.history)
-                if (e.seq == save_seq)
-                    return &e;
-            return nullptr;
+        // The reply of the save issued last, once it has been written
+        auto saved = [&]() -> coroutine::Future<command::HistoryEntry> {
+            const uint64_t save_seq = gc.history.back().seq;
+            auto save_entry = [&]() -> command::HistoryEntry const* {
+                for (auto const& e : gc.history)
+                    if (e.seq == save_seq)
+                        return &e;
+                return nullptr;
+            };
+            for (const auto deadline = testing::soon(); save_entry()->status == Reply::PENDING;) {
+                require(std::chrono::steady_clock::now() < deadline);
+                ++gc.frame;
+                gc.service_commands();
+                co_await testing::pause(std::chrono::milliseconds(1));
+            }
+            co_return *save_entry();
         };
-        for (const auto deadline = testing::soon(); save_entry()->status == Reply::PENDING;) {
-            require(std::chrono::steady_clock::now() < deadline);
-            ++gc.frame;
-            gc.service_commands();
-            co_await testing::pause(std::chrono::milliseconds(1));
-        }
-        require(save_entry()->status == Reply::OK);
-        const String name = save_entry()->reply;
-        const std::optional<int> id = save_named(name);
-        require(id);
-        if (!id)
-            co_return;
+        auto listed = [&](std::string const& n) {
+            const std::string all = "\n" + narrow(issue("list-saves").reply.text) + "\n";
+            return all.find("\n" + n + "\n") != std::string::npos;
+        };
+        expect("save", Reply::PENDING);
+        const command::HistoryEntry unnamed = co_await saved();
+        require(unnamed.status == Reply::OK);
+        const String name = unnamed.reply;
+        require(save_exists(narrow(name)) && listed(narrow(name)));
+
+        // A save under a name of the player's choosing, then replaced
+        // under it: the second reply says so.  Names are unique to the
+        // run, since the directory may hold the player's own saves
+        const std::string chosen = "session test "
+            + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        require(!save_exists(chosen));
+        require(with_name("save", chosen).status == Reply::PENDING);
         {
-            [[maybe_unused]] const std::string listed = "\n" + narrow(issue("list-saves").reply.text) + "\n";
-            require(listed.find("\n" + narrow(name) + "\n") != std::string::npos);
+            const command::HistoryEntry first = co_await saved();
+            require(first.status == Reply::OK && narrow(first.reply) == chosen);
         }
+        require(with_name("save", chosen + ".wry").status == Reply::PENDING);
+        {
+            const command::HistoryEntry second = co_await saved();
+            require(second.status == Reply::OK && narrow(second.reply) == "replaced " + chosen);
+        }
+        require(listed(chosen));
+        require(with_name("save", "a/b").status == Reply::ERROR);
 
         // new-game and load in place: the same WorldState, its world
         // replaced, the session ended and hosted afresh
@@ -3157,10 +3216,20 @@ namespace wry {
         [[maybe_unused]] const std::string menu_loaded = displayed_hash();
         require(menu_loaded == edited);
 
+        // The chosen name loads too (with or without its .wry)
+        co_await shown->end_session(std::chrono::milliseconds(200));
+        require(with_name("load", chosen + ".wry").status == Reply::OK);
+        [[maybe_unused]] const std::string chosen_loaded = displayed_hash();
+        require(chosen_loaded == edited);
+
         co_await shown->end_session(std::chrono::milliseconds(200));
         shown.reset();
-        delete_game(*id);
-        require(!save_named(name));
+        // delete-save removes the file; a second has nothing to remove
+        require(with_name("delete-save", narrow(name)).status == Reply::OK);
+        require(!save_exists(narrow(name)) && !listed(narrow(name)));
+        require(with_name("delete-save", chosen).status == Reply::OK);
+        require(with_name("delete-save", chosen).status == Reply::ERROR);
+        require(!save_exists(chosen) && !listed(chosen));
         (void) co_await scope.join();
         co_return;
     };

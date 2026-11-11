@@ -458,12 +458,24 @@ drag as its result (`transform.translate(value=...)`), not its path.
 - **world**: `write Coordinate Term` (what a click with a full hand
   does), `erase Coordinate` (right click).
 - **clock**: `pause`, `resume`, `step [n]`, plus local `frame [n]`.
-- **session**: `new-game`, `save`, `load name`, `list-saves`,
-  `main-menu`, `quit [clean|fast]`.  A save's name is its file's,
-  `save_ID.wry` (saves are not yet named by the user, so `save` takes
-  no name), and `save` replies with it once the background save has
-  been written; `list-saves` replies with the names, one per line,
-  newest first.  At the main menu `new-game` and `load` build a game
+- **session**: `new-game`, `save [name]`, `load name`,
+  `delete-save name`, `list-saves`, `main-menu`, `quit [clean|fast]`.
+  A save is a file `saves/NAME.wry` and its name is the file's stem, so
+  saves can be renamed, backed up, deleted, shared and dropped into
+  another installation's `saves` by hand: any `.wry` file there whose
+  stem is a valid name is a save (nothing inside the file records its
+  name).  `save name` writes `NAME.wry`, replacing a save of that name
+  in one atomic rename (never a half-written file); `save` with no name
+  writes the next `save_N` (one past the highest).  It replies with the
+  name once the background save has been written, `replaced NAME` if
+  it replaced one.  Names may be any UTF-8, spaces included, up to 100
+  bytes, but not empty, not starting with `.` (hidden files, and the
+  `.savetmp` temps of saves in progress), and without `/`, `\`, `:`
+  or control characters; a trailing `.wry` is dropped, so `load
+  "save_3.wry"` and `load "save_3"` are the same.  `list-saves`
+  replies with the names, one per line, newest (modification time)
+  first, and the Load list shows the same; `delete-save` removes one
+  (the Load list's Delete issues it).  At the main menu `new-game` and `load` build a game
   and hand it to the host to show (`GuiContext::on_world`); in a game
   they replace the world in place, ending the session and hosting a
   fresh one from the new world (a joined client leaves its game), as

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -19,10 +20,13 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 #include <fcntl.h>
+#include <stdio.h>  // renamex_np
 #include <unistd.h>
 
 #include "coroutine.hpp"
@@ -45,15 +49,95 @@ namespace wry {
             return p;
         }
 
-        std::filesystem::path save_path_for_id(int id) {
-            return saves_dir() / save_name(id);
+        // The file of a checked name
+        std::filesystem::path save_path(std::string_view name) {
+            std::string file(name);
+            file += ".wry";
+            return saves_dir() / file;
+        }
+
+        // The N of a stem save_N (decimal digits only), if it is one
+        std::optional<int> automatic_save_number(std::string_view stem) {
+            constexpr std::string_view prefix = "save_";
+            if (!stem.starts_with(prefix) || stem.size() == prefix.size())
+                return std::nullopt;
+            long long n = 0;
+            for (char c : stem.substr(prefix.size())) {
+                if (c < '0' || c > '9')
+                    return std::nullopt;
+                n = n * 10 + (c - '0');
+                if (n > 1'000'000'000)
+                    return std::nullopt;
+            }
+            return (int)n;
+        }
+
+        // Whether the bytes are well-formed UTF-8: no stray continuation
+        // bytes, truncations, overlong forms, surrogates or code points
+        // beyond U+10FFFF
+        bool is_utf8(std::string_view s) {
+            size_t i = 0;
+            while (i < s.size()) {
+                const unsigned char c = (unsigned char)s[i];
+                if (c < 0x80) {
+                    ++i;
+                    continue;
+                }
+                size_t n = 0;
+                unsigned lo = 0x80, hi = 0xBF;  // the second byte's range
+                if (c >= 0xC2 && c <= 0xDF) {
+                    n = 1;
+                } else if (c >= 0xE0 && c <= 0xEF) {
+                    n = 2;
+                    if (c == 0xE0) lo = 0xA0;   // overlong
+                    if (c == 0xED) hi = 0x9F;   // surrogates
+                } else if (c >= 0xF0 && c <= 0xF4) {
+                    n = 3;
+                    if (c == 0xF0) lo = 0x90;   // overlong
+                    if (c == 0xF4) hi = 0x8F;   // beyond U+10FFFF
+                } else {
+                    return false;
+                }
+                if (s.size() - i <= n)
+                    return false;
+                for (size_t k = 1; k <= n; ++k) {
+                    const unsigned char d = (unsigned char)s[i + k];
+                    const unsigned a = (k == 1) ? lo : 0x80;
+                    const unsigned b = (k == 1) ? hi : 0xBF;
+                    if (d < a || d > b)
+                        return false;
+                }
+                i += n + 1;
+            }
+            return true;
         }
     }
 
-    std::string save_name(int id) {
-        char buf[32];
-        std::snprintf(buf, sizeof buf, "save_%d.wry", id);
-        return buf;
+    std::expected<std::string, std::string> check_save_name(std::string_view name) {
+        if (name.ends_with(".wry"))
+            name.remove_suffix(4);
+        if (name.empty())
+            return std::unexpected(std::string("a save's name cannot be empty"));
+        if (name.size() > SAVE_NAME_MAX_BYTES)
+            return std::unexpected("a save's name can be at most "
+                                   + std::to_string(SAVE_NAME_MAX_BYTES) + " bytes");
+        if (name.front() == '.')
+            return std::unexpected(std::string("a save's name cannot start with '.'"));
+        for (char c : name) {
+            const unsigned char u = (unsigned char)c;
+            if (c == '/' || c == '\\' || c == ':')
+                return std::unexpected(std::string("a save's name cannot contain '") + c + "'");
+            if (u < 0x20 || u == 0x7F)
+                return std::unexpected(std::string("a save's name cannot contain a control character"));
+        }
+        if (!is_utf8(name))
+            return std::unexpected(std::string("a save's name must be UTF-8"));
+        return std::string(name);
+    }
+
+    bool save_exists(std::string_view name) {
+        std::error_code ec;
+        return std::filesystem::is_regular_file(save_path(name), ec);
     }
 
     std::filesystem::path saves_directory() {
@@ -140,46 +224,70 @@ namespace wry {
     }
 
     // Close the temp -- which also surfaces deferred write errors -- and, only
-    // if every step succeeded, atomically rename it into the next free save id
-    // (picked here, under a lock, so concurrent saves can't collide).  On any
-    // failure the temp is removed and nothing is published: a failed save leaves
-    // no file rather than a corrupt one.  Returns the id published, or 0 if
-    // none was (ids start at 1).
-    static int publish_or_discard(int fd, const std::filesystem::path& temp_path, bool ok) {
+    // if every step succeeded, atomically rename it into place: as `name`,
+    // replacing any save of that name (rename(2) swaps the directory entry in
+    // one step, so a reader sees the old save or the new, never neither), or,
+    // if `name` is empty, as the next save_N (picked here, under a lock, so
+    // concurrent saves can't collide).  On any failure the temp is removed and
+    // nothing is published: a failed save leaves no file rather than a corrupt
+    // one, and the save it would have replaced is untouched.
+    static SaveOutcome publish_or_discard(int fd, const std::filesystem::path& temp_path,
+                                          bool ok, std::string const& name) {
         ok = (close(fd) == 0) && ok;  // close() always runs; its error counts
-        int next_id = 0;
+        SaveOutcome outcome;
         if (ok) {
-            static std::mutex save_id_mutex;
-            std::scoped_lock guard{save_id_mutex};
-            next_id = 1;
-            for (auto& entry : std::filesystem::directory_iterator(saves_dir())) {
-                const auto& p = entry.path();
-                if (p.extension() != ".wry") continue;
-                int id = 0;
-                if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1)
-                    next_id = std::max(next_id, id + 1);
+            static std::mutex publish_mutex;
+            std::scoped_lock guard{publish_mutex};
+            if (!name.empty()) {
+                const std::filesystem::path destination = save_path(name);
+                std::error_code ec;
+                outcome.name = name;
+                outcome.replaced = std::filesystem::exists(destination, ec);
+                std::filesystem::rename(temp_path, destination, ec);
+                ok = !ec;
+            } else {
+                // One past the highest save_N.  The lock serializes this
+                // process's saves; another process saving into the same
+                // directory (a second client, a test run) could pick the same
+                // N, so the rename refuses to replace and the next N is tried
+                int next = 1;
+                for (std::string const& stem : enumerate_games())
+                    if (std::optional<int> n = automatic_save_number(stem))
+                        next = std::max(next, *n + 1);
+                for (int attempt = 0; ; ++attempt, ++next) {
+                    outcome.name = "save_" + std::to_string(next);
+                    const std::string destination = save_path(outcome.name).string();
+#if defined(__APPLE__)
+                    ok = renamex_np(temp_path.c_str(), destination.c_str(), RENAME_EXCL) == 0;
+                    if (!ok && errno == EEXIST && attempt < 1000)
+                        continue;
+#else
+                    std::error_code ec;
+                    std::filesystem::rename(temp_path, destination, ec);
+                    ok = !ec;
+#endif
+                    break;
+                }
             }
-            std::error_code ec;
-            std::filesystem::rename(temp_path, save_path_for_id(next_id), ec);
-            ok = !ec;
         }
         if (!ok) {
             std::error_code ec;
             std::filesystem::remove(temp_path, ec);
+            return {};
         }
-        return ok ? next_id : 0;
+        return outcome;
     }
 
     // Synchronous save: blocks on the flush -- fine, this is the synchronous API
-    // (only the round-trip test uses it now); callers that must not stall a pool
-    // worker spawn save_game.  Returns false on any I/O failure.
-    bool save_game(const World* world) {
+    // (only the tests use it now); callers that must not stall a pool worker
+    // spawn save_game.
+    SaveOutcome save_game(const World* world, std::string_view name) {
         std::vector<uint8_t> buffer = serialize_world(world);
         std::filesystem::path temp;
         int fd = make_temp_save(temp);
-        if (fd < 0) return false;
+        if (fd < 0) return {};
         bool ok = write_all(fd, buffer.data(), buffer.size()) && flush_temp_save(fd);
-        return publish_or_discard(fd, temp, ok) != 0;
+        return publish_or_discard(fd, temp, ok, std::string(name));
     }
 
     // Detached coroutine form of save_game.  Holds the rooted snapshot in its
@@ -187,13 +295,14 @@ namespace wry {
     // file write, and between file chunks -- so it never holds a worker's mutator
     // pin across the whole save, letting the epoch advance in between.  The
     // blocking F_FULLFSYNC is offloaded to a throwaway thread.  When the save
-    // finishes, it returns the id published (0 if none was).
-    static coroutine::Future<int> background_save_coroutine(Root<World const*> snapshot) {
+    // finishes, it returns what was published (an empty name if nothing was).
+    static coroutine::Future<SaveOutcome> background_save_coroutine(Root<World const*> snapshot,
+                                                                    std::string name) {
         std::vector<uint8_t> buffer = serialize_world(&*snapshot);
 
         co_await coroutine::TransferToPoolExecutor{};  // yield after the walk
 
-        int id = 0;
+        SaveOutcome outcome;
         std::filesystem::path temp;
         int fd = make_temp_save(temp);
         if (fd >= 0) {
@@ -222,25 +331,27 @@ namespace wry {
                 flushed = flush_temp_save(fd);
 #endif
             }
-            id = publish_or_discard(fd, temp, wrote && flushed);
+            outcome = publish_or_discard(fd, temp, wrote && flushed, name);
         }
         // Fall off the end: final_suspend frees this frame (and the Root, on a
         // mutator worker) and resumes the continuation.
-        co_return id;
+        co_return outcome;
     }
 
-    coroutine::Task save_game(Root<World const*> snapshot, move_only_function<void(int)> on_done) {
+    coroutine::Task save_game(Root<World const*> snapshot, std::string name,
+                              move_only_function<void(SaveOutcome)> on_done) {
         // The frame owns the Root snapshot; the spawner's scope owns the frame
-        int id = co_await background_save_coroutine(std::move(snapshot));
+        SaveOutcome outcome = co_await background_save_coroutine(std::move(snapshot), std::move(name));
         if (on_done)
-            on_done(id);
+            on_done(std::move(outcome));
     }
 
-    World* load_game(int id) {
-        auto path = save_path_for_id(id);
+    World* load_game(std::string_view name) {
+        auto path = save_path(name);
         std::ifstream in(path, std::ios::binary | std::ios::ate);
         if (!in) return nullptr;
         std::streamsize sz = in.tellg();
+        if (sz < 0) return nullptr;
         in.seekg(0, std::ios::beg);
 
         std::vector<uint8_t> buf((size_t)sz);
@@ -264,47 +375,63 @@ namespace wry {
     }
 
     World* continue_game() {
-        // Load the most-recent save by id.  Empty world if none.
-        int best_id = -1;
-        for (auto& entry : std::filesystem::directory_iterator(saves_dir())) {
-            const auto& p = entry.path();
-            if (p.extension() != ".wry") continue;
-            int id = 0;
-            if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1)
-                best_id = std::max(best_id, id);
-        }
-        if (best_id < 0) return nullptr;
-        return load_game(best_id);
+        std::vector<std::string> names = enumerate_games();
+        if (names.empty()) return nullptr;
+        return load_game(names.front());
     }
 
-    std::vector<std::pair<std::string, int>> enumerate_games() {
-        std::vector<std::pair<std::string, int>> v;
+    std::vector<std::string> enumerate_games() {
+        struct Entry {
+            std::string name;
+            std::filesystem::file_time_type modified;
+        };
+        std::vector<Entry> v;
         std::error_code ec;
         for (auto& entry : std::filesystem::directory_iterator(saves_dir(), ec)) {
             const auto& p = entry.path();
             if (p.extension() != ".wry") continue;
-            int id = 0;
-            if (std::sscanf(p.filename().string().c_str(), "save_%d.wry", &id) == 1) {
-                v.emplace_back(p.filename().string(), id);
-            }
+            std::error_code fec;
+            if (!entry.is_regular_file(fec)) continue;
+            // Only names `load` would accept, so every save listed can be
+            // named: a hand-made "a:b.wry" or ".x.wry" is not offered
+            std::string stem = p.stem().string();
+            auto checked = check_save_name(stem);
+            if (!checked || *checked != stem) continue;
+            auto modified = entry.last_write_time(fec);
+            if (fec) continue;  // gone since the scan saw it
+            v.push_back({std::move(stem), modified});
         }
-        // Newest (highest id) first.
-        std::sort(v.begin(), v.end(),
-                  [](auto& a, auto& b) { return a.second > b.second; });
-        return v;
+        // Newest first; ties (a coarse clock) by name, the later first
+        std::sort(v.begin(), v.end(), [](Entry const& a, Entry const& b) {
+            if (a.modified != b.modified)
+                return a.modified > b.modified;
+            return a.name > b.name;
+        });
+        std::vector<std::string> names;
+        names.reserve(v.size());
+        for (Entry& e : v)
+            names.push_back(std::move(e.name));
+        return names;
     }
 
-    void delete_game(int id) {
+    bool delete_game(std::string_view name) {
         std::error_code ec;
-        std::filesystem::remove(save_path_for_id(id), ec);
+        return std::filesystem::remove(save_path(name), ec);
     }
+
+    // ---- Tests ---------------------------------------------------------
+    //
+    // These write into the real saves directory (./saves relative to the
+    // process cwd), which may hold the player's own saves and other tests'
+    // concurrent ones, so every name they use is unique to the process
+    // and the test, and each test removes exactly the files it made.
 
     // Read a save file's raw bytes (empty vector if absent).  Used by the tests
-    // to identify their own file by exact content rather than by id arithmetic,
-    // which races when other tests save concurrently into the shared ./saves.
-    static std::vector<uint8_t> read_save_file(int id) {
+    // to identify their own file by exact content rather than by name
+    // arithmetic, which races when other tests save concurrently.
+    static std::vector<uint8_t> read_save_file(std::string_view name) {
         std::vector<uint8_t> b;
-        std::ifstream in(save_path_for_id(id), std::ios::binary | std::ios::ate);
+        std::ifstream in(save_path(name), std::ios::binary | std::ios::ate);
         if (in) {
             auto sz = in.tellg();
             in.seekg(0);
@@ -314,51 +441,180 @@ namespace wry {
         return b;
     }
 
-    // Round-trip through the real save files (save_game writes a numbered
-    // .wry, load_game reads it back), exercising the file glue that the
-    // in-memory save_format tests do not.  Self-cleaning: the file it
-    // creates is deleted at the end.  Writes under ./saves relative to the
-    // process cwd.
-    define_test("save_game_file_roundtrip") {
+    // A name no other test or process is using
+    static std::string unique_test_save_name(std::string_view label) {
+        static std::atomic<int> counter{0};
+        // Relaxed: only the values' distinctness matters
+        const int k = counter.fetch_add(1, std::memory_order_relaxed);
+        return "wry-test " + std::string(label) + " " + std::to_string(getpid())
+            + "-" + std::to_string(k);
+    }
 
+    static World* make_test_world(Time time, int value) {
         World* w = new World;
-        w->_time = Time{1234};
-        w->_term_for_coordinate.set(Coordinate{3, -7}, term_make_integer_with(99));
+        w->_time = Time{time};
+        w->_term_for_coordinate.set(Coordinate{3, -7}, term_make_integer_with(value));
         w->hack_repair_invariant();
+        return w;
+    }
 
-        // save_game is synchronous, so its file is complete on return; find it
-        // by exact bytes (the sentinel content is unique amid concurrent saves).
+    static bool holds_test_value(World const* w, int value) {
+        Term t;
+        bool has_term = w->_term_for_coordinate.try_get(Coordinate{3, -7}, t);
+        return has_term && t._data == term_make_integer_with(value)._data;
+    }
+
+    static bool listed(std::string const& name) {
+        auto names = enumerate_games();
+        return std::find(names.begin(), names.end(), name) != names.end();
+    }
+
+    define_test("save_name_validation") {
+        auto accepted = [](std::string_view in, std::string_view want) {
+            auto r = check_save_name(in);
+            return r && *r == want;
+        };
+        auto refused = [](std::string_view in) { return !check_save_name(in); };
+        require(accepted("base", "base"));
+        require(accepted("my base, take 2", "my base, take 2"));
+        require(accepted("save_3.wry", "save_3"));          // the file's name names it
+        require(accepted("a.b", "a.b"));
+        require(accepted("caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC", "caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC"));
+        require(accepted(std::string(SAVE_NAME_MAX_BYTES, 'x'), std::string(SAVE_NAME_MAX_BYTES, 'x')));
+        require(refused(""));
+        require(refused(".wry"));
+        require(refused(std::string(SAVE_NAME_MAX_BYTES + 1, 'x')));
+        require(refused("a/b"));
+        require(refused("a\\b"));
+        require(refused("a:b"));
+        require(refused(".hidden"));
+        require(refused("."));
+        require(refused(".."));
+        require(refused(".savetmp.ABCDEF"));
+        require(refused("tab\there"));
+        require(refused("line\nbreak"));
+        require(refused(std::string("nul\0byte", 8)));
+        require(refused("del\x7F"));
+        require(refused("\xC3"));                            // truncated
+        require(refused("\xC0\xAF"));                        // overlong '/'
+        require(refused("\xED\xA0\x80"));                    // a surrogate
+        require(refused("\xF4\x90\x80\x80"));                // beyond U+10FFFF
+        require(refused("\x80"));                            // a stray continuation
+        co_return;
+    };
+
+    // Round-trip through the real save files (save_game writes save_N.wry
+    // when given no name, load_game reads it back), exercising the file
+    // glue that the in-memory save_format tests do not.
+    define_test("save_game_file_roundtrip") {
+        World* w = make_test_world(1234, 99);
+
+        // save_game is synchronous, so its file is complete on return; it
+        // names the file it wrote, which holds exactly the serialization
         std::vector<uint8_t> ref = serialize_world(w);
-        bool saved = save_game(w);
+        SaveOutcome saved = save_game(w);
         require(saved);
+        require(automatic_save_number(saved.name).has_value());
+        require(!saved.replaced);
+        require(read_save_file(saved.name) == ref);
+        require(listed(saved.name));
 
-        int new_id = -1;
-        for (auto& [name, id] : enumerate_games())
-            if (read_save_file(id) == ref) { new_id = id; break; }
-        require(new_id >= 0);
-
-        World* w2 = load_game(new_id);
+        World* w2 = load_game(saved.name);
         require(w2);
         require(w2->_time == w->_time);
-        Term t;
-        bool has_term = w2->_term_for_coordinate.try_get(Coordinate{3, -7}, t);
-        require(has_term);
-        (void) has_term;
-        require(t._data == term_make_integer_with(99)._data);
+        require(holds_test_value(w2, 99));
 
-        delete_game(new_id);
-        require(read_save_file(new_id).empty());
+        require(delete_game(saved.name));
+        require(read_save_file(saved.name).empty());
+        require(!delete_game(saved.name));                  // nothing left to delete
+        require(!listed(saved.name));
+        co_return;
+    };
 
+    // A save made under a name: saving it again replaces it (and says so),
+    // and the replacement is what loads
+    define_test("save_game_named_overwrite") {
+        const std::string name = unique_test_save_name("overwrite");
+        require(check_save_name(name).value_or("") == name);
+        require(!save_exists(name));
+
+        World* first = make_test_world(11, 1);
+        SaveOutcome a = save_game(first, name);
+        require(a && a.name == name && !a.replaced);
+        require(save_exists(name) && listed(name));
+
+        World* second = make_test_world(22, 2);
+        SaveOutcome b = save_game(second, name);
+        require(b && b.name == name && b.replaced);
+        require(read_save_file(name) == serialize_world(second));
+
+        World* loaded = load_game(name);
+        require(loaded && loaded->_time == second->_time && holds_test_value(loaded, 2));
+
+        require(delete_game(name));
+        require(!save_exists(name) && !listed(name));
+        co_return;
+    };
+
+    // Any *.wry file in the directory is a save, whatever made it: a file
+    // put there by hand lists by its stem and loads by it, newest first;
+    // files whose stem is not a valid name, and files of other kinds, are
+    // not listed.  The automatic save_N numbering ignores foreign names
+    define_test("save_listing_foreign_files") {
+        const std::string older = unique_test_save_name("foreign caf\xC3\xA9");
+        const std::string newer = unique_test_save_name("foreign (copy)");
+        const std::string hidden = "." + unique_test_save_name("hidden");
+        const std::string other = unique_test_save_name("not a save") + ".txt";
+        World* w = make_test_world(77, 7);
+        const std::vector<uint8_t> bytes = serialize_world(w);
+        auto put = [&](std::string const& file) {
+            std::ofstream out(saves_directory() / file, std::ios::binary);
+            out.write((const char*)bytes.data(), (std::streamsize)bytes.size());
+            return (bool)out;
+        };
+        require(put(older + ".wry"));
+        require(put(newer + ".wry"));
+        require(put(hidden + ".wry"));
+        require(put(other));
+        // Order them by modification time, the way a player's copies are
+        const auto now = std::filesystem::file_time_type::clock::now();
+        std::error_code ec;
+        std::filesystem::last_write_time(save_path(older), now - std::chrono::hours(2), ec);
+        require(!ec);
+        std::filesystem::last_write_time(save_path(newer), now - std::chrono::hours(1), ec);
+        require(!ec);
+
+        const std::vector<std::string> names = enumerate_games();
+        auto at = [&](std::string const& n) {
+            return std::find(names.begin(), names.end(), n) - names.begin();
+        };
+        require(at(older) < (ptrdiff_t)names.size());
+        require(at(newer) < at(older));                       // newest first
+        require(!listed(hidden) && !listed(hidden.substr(1)));
+        for (std::string const& n : names)
+            require(n.find("not a save") == std::string::npos);
+
+        World* loaded = load_game(older);
+        require(loaded && loaded->_time == w->_time && holds_test_value(loaded, 7));
+
+        // An unnamed save is numbered past the save_N files only
+        SaveOutcome numbered = save_game(w);
+        require(numbered && automatic_save_number(numbered.name).has_value());
+        require(delete_game(numbered.name));
+
+        require(delete_game(older));
+        require(delete_game(newer));
+        std::filesystem::remove(saves_directory() / (hidden + ".wry"), ec);
+        std::filesystem::remove(saves_directory() / other, ec);
+        require(!listed(older) && !listed(newer));
         co_return;
     };
 
     // Exercises the detached background-save coroutine end to end: launch it
-    // against a rooted snapshot, then poll (yielding so the saver gets worker
-    // time) until a save file appears whose bytes match a reference
-    // serialization of the same world.  `serialize_world` is deterministic, so
-    // the async write must reproduce it exactly; the distinctive `_time`
-    // sentinel makes the file unambiguous amid any concurrent saves.  Reads
-    // raw bytes (never `load_game`) so a half-written file is simply a non-match.
+    // against a rooted snapshot and wait for it to report the save it
+    // published, whose bytes must match a reference serialization of the same
+    // world (`serialize_world` is deterministic), first as save_N and then
+    // under a name, replacing it.
     define_test("save_game_async_roundtrip") {
 
         World* w = new World;
@@ -368,27 +624,32 @@ namespace wry {
 
         std::vector<uint8_t> ref = serialize_world(w);
 
-        // The completion callback (-1 pending, 0 fail, 1 ok) fires once the
-        // save has fully published; wait for it with a wall-clock deadline.
-        // (The old iteration-counted poll deflated with optimization: 200k
-        // yields is seconds of budget in Debug but ~50ms at -O, less than
-        // one F_FULLFSYNC, and asserted spuriously.)  The result and the
-        // event are shared_ptr-held so a timed-out -- thereby detached --
-        // save still writes somewhere valid; the payload store is relaxed
-        // because signal()'s release / the wait's acquire is the publishing
-        // edge.
-        Root<World const*> root(w);
+        // Wait for the save with a wall-clock deadline.  (The old
+        // iteration-counted poll deflated with optimization: 200k yields is
+        // seconds of budget in Debug but ~50ms at -O, less than one
+        // F_FULLFSYNC, and asserted spuriously.)
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-        std::optional<int> result = co_await with_deadline(deadline, background_save_coroutine(std::move(root)));
-        require(result.value_or(0) > 0);
+        std::optional<SaveOutcome> result
+            = co_await with_deadline(deadline, background_save_coroutine(Root<World const*>(w), std::string()));
+        require(result && *result);
+        if (!result || !*result)
+            co_return;
+        require(automatic_save_number(result->name).has_value() && !result->replaced);
+        // The name reported is the file published
+        require(read_save_file(result->name) == ref);
+        require(delete_game(result->name));
 
-        int found = -1;
-        for (auto& [name, id] : enumerate_games())
-            if (read_save_file(id) == ref) { found = id; break; }
-        require(found >= 0);
-        // The id reported is the file published
-        require(result.value_or(0) == found);
-        delete_game(found);
+        const std::string name = unique_test_save_name("async");
+        for (bool replacing : {false, true}) {
+            deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            result = co_await with_deadline(deadline, background_save_coroutine(Root<World const*>(w), name));
+            require(result && *result);
+            if (!result || !*result)
+                co_return;
+            require(result->name == name && result->replaced == replacing);
+            require(read_save_file(name) == ref);
+        }
+        require(delete_game(name));
 
         co_return;
     };

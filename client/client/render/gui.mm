@@ -1728,22 +1728,22 @@ namespace wry {
             // selection (doesn't load); the action bar's Load/Delete act on
             // the selection.  Capture by [this, i] so the lambda flips the
             // overlay's selection index.
-            auto games = enumerate_games();  // (filename, id), newest first
+            auto games = enumerate_games();  // names, newest first
 
             auto rows_col = std::make_unique<Column>();
             rows_col->set_spacing(1.0f);
             _row_buttons.clear();
-            _save_ids.clear();
+            _save_names.clear();
             _row_buttons.reserve(games.size());
-            _save_ids.reserve(games.size());
+            _save_names.reserve(games.size());
             for (int i = 0; i < (int)games.size(); ++i) {
-                auto btn = std::make_unique<Button>(games[i].first.c_str(),
+                auto btn = std::make_unique<Button>(games[i].c_str(),
                     [this, i] {
                         _selected_index = i;
                         update_selection_visuals();
                     });
                 _row_buttons.push_back(btn.get());
-                _save_ids.push_back(games[i].second);
+                _save_names.push_back(std::move(games[i]));
                 rows_col->add(std::move(btn));
             }
             _scroll->set_child(std::move(rows_col));
@@ -1785,12 +1785,12 @@ namespace wry {
 
         void SaveListOverlay::load_selected() {
             if (_selected_index < 0 ||
-                _selected_index >= (int)_save_ids.size())
+                _selected_index >= (int)_save_names.size())
                 return;  // empty list / no selection
             // The `load` command, by the save's name
             if (_model)
                 (void) _model->_gui.issue_with(command::Origin::gui, "load",
-                    String(StringView(save_name(_save_ids[_selected_index]).c_str())));
+                    String(StringView(_save_names[_selected_index].c_str())));
             // Pop the save list; the main menu below remains for the user to
             // dismiss (CONTINUE / ESC) back into the freshly-loaded game.
             wants_close = true;
@@ -1798,9 +1798,13 @@ namespace wry {
 
         void SaveListOverlay::delete_selected() {
             if (_selected_index < 0 ||
-                _selected_index >= (int)_save_ids.size())
+                _selected_index >= (int)_save_names.size())
                 return;
-            delete_game(_save_ids[_selected_index]);
+            // The `delete-save` command, by the save's name, so the GUI's
+            // delete is the console's (and is in the history)
+            if (_model)
+                (void) _model->_gui.issue_with(command::Origin::gui, "delete-save",
+                    String(StringView(_save_names[_selected_index].c_str())));
             rebuild_rows();  // selection re-clamped to the shrunken list
         }
 
