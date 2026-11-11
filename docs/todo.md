@@ -10,6 +10,7 @@
 - Surprising there was no undo (which would be, write back the prior state of last write?)
 
 ## Hazards found 2026-11-12
+- Transport: a kicked connection's reader can still queue a few Messages after the kick (a recv already past its readiness completes; transport.cpp kick_connection).  Decide whether consumers should drop messages from a kicked connection (check `kicked` in events(), or a stop check after recv)
 - Tests and every offscreen/GUI session write into the real ~/Desktop/assets/saves (main.mm chdirs to the hard-coded assets path; saves_dir has a TODO for a per-user location).  Session logs keep only the newest 10, so scripted runs rotate real session logs out: an agent's 10 offscreen runs on 2026-11-12 deleted antony's session-20261111-161742, -20261112-085535, -20261112-090807.  Give tests and driven runs their own saves directory (e.g. --saves DIR, defaulting to a temp dir under --offscreen / --test-only)
 - ~21 stale .savetmp.* files in assets/saves from June/July crashes: harmless (never listed), could be swept at startup
 - Debug --test-only still prints ~2.8k "save: ... refusing to load" lines from the save fuzz tests
