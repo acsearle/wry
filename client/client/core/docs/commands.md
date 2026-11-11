@@ -487,7 +487,10 @@ drag as its result (`transform.translate(value=...)`), not its path.
   hashes first differ), `dump [file]` (the displayed world as text, for
   diffing against another's), `corrupt Coordinate Term` (a tile
   changed off the stream: a deliberate desync, kicked at the next hash
-  report).
+  report), and local `gc-verbose [true|false]` (the garbage collector's
+  per-pass trace and sweep lines, per-cycle lines and HeapString
+  lifecycle lines on stdout; off by default, `WRY_GC_VERBOSE=1` turns
+  them on from launch).
 
 ## 8. Time
 

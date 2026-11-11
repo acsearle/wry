@@ -1137,7 +1137,9 @@ pieces stay, standing:
 ## 5. Throughput model
 
 *(Stage-1 dashboard, 2026-07-12: per-pass `alloc+=`/`shaded+=` volumes and
-per-cycle `passes=P in T` lines.)*
+per-cycle `passes=P in T` lines.  Since 2026-11-12 these `C0:` trace,
+sweep and `cycle complete` lines print only while verbose:
+`WRY_GC_VERBOSE=1` at launch, or the console's `gc-verbose`.)*
 
 Variables: mutators quiesce every $T_m$ (one frame); each period allocates
 $N$ objects and unlinks $N$; live set $L$; heap $M = L + F$ where $F$ is

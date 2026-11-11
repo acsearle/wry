@@ -1086,6 +1086,16 @@ namespace wry {
                 return Reply::ok(String(buffer));
             }));
 
+        registry.add(make_command<Ctx>(
+            "gc-verbose", "Print the garbage collector's per-pass trace, sweep and cycle lines to stdout (off by default; WRY_GC_VERBOSE=1 sets it at launch)", Category::local,
+            std::tuple{
+                Param<Ctx, bool>{"verbose", "true to print, false to stop", true},
+            },
+            [](Ctx&, bool verbose) {
+                garbage_collected_set_verbose(verbose);
+                return Reply::ok(String(verbose ? "on" : "off"));
+            }));
+
         // ---- Input injection (commands.md section 7).  Below the command
         // layer: these exercise the GUI exactly as a user would.  Positions
         // are view points, top-left origin.

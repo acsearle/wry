@@ -12,7 +12,8 @@
 namespace wry {
     
     HeapString::~HeapString() {
-        printf("%p:%s\n", this, __PRETTY_FUNCTION__);
+        if (garbage_collected_is_verbose())
+            printf("%p:%s\n", this, __PRETTY_FUNCTION__);
     }
 
     const HeapString* HeapString::make(std::string_view view) {
@@ -78,7 +79,8 @@ namespace wry {
         a->_size = n;
         std::memcpy(a->_bytes, view.data(), n);
         a->seal();
-        printf("%p:%s\n", a, __PRETTY_FUNCTION__);
+        if (garbage_collected_is_verbose())
+            printf("%p:%s\n", a, __PRETTY_FUNCTION__);
         return a;
     }
 

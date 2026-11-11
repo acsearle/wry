@@ -33,6 +33,15 @@ namespace wry {
     void collector_register_cycle_callback(uint64_t number_of_cycles,
                                            void* _Nonnull callback) noexcept;
 
+    // Diagnostic chatter: the collector's per-pass trace and sweep lines,
+    // its per-cycle "cycle complete" lines and HeapString's per-object
+    // lifecycle lines go to stdout only while verbose.  Off by default;
+    // WRY_GC_VERBOSE=1 (exactly "1") turns it on from launch, and the
+    // console's `gc-verbose` sets it at run time.  Errors, the invariant
+    // report and the unpinned-thread assert print regardless.
+    bool garbage_collected_is_verbose() noexcept;
+    void garbage_collected_set_verbose(bool) noexcept;
+
 
     // Garbage collected base
 

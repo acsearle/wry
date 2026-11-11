@@ -316,6 +316,28 @@ namespace wry {
     }
 #endif
 
+    // The verbose switch (header).  Relaxed both ways: it publishes no
+    // data -- every line it gates is formatted from the reader's own state
+    // -- so there is no happens-before edge to want; a reader that sees a
+    // flip late prints (or skips) a few lines more.  A function-local
+    // static so its initialization (thread-safe, once) cannot race a
+    // first use from another translation unit's static initializer.
+    static Atomic<bool>& _verbose_flag() noexcept {
+        static Atomic<bool> flag{[] {
+            const char* value = getenv("WRY_GC_VERBOSE");
+            return value && strcmp(value, "1") == 0;
+        }()};
+        return flag;
+    }
+
+    bool garbage_collected_is_verbose() noexcept {
+        return _verbose_flag().load_relaxed();
+    }
+
+    void garbage_collected_set_verbose(bool verbose) noexcept {
+        _verbose_flag().store_relaxed(verbose);
+    }
+
     GarbageCollected::GarbageCollected()
     : _gray{_thread_local_gray_for_allocation}
     , _black{_thread_local_black_for_allocation}
@@ -1191,11 +1213,12 @@ namespace wry {
                         transitioned |= bit;
                         --_live_count;
                         _window_base = _live_count ? (k + 1) & 15 : _next_start;
-                        printf("C0: k=%d cycle complete: iters=%llu in %.3gs\n",
-                               k,
-                               (unsigned long long)(_scan_passes - _cycle_pass0[k]),
-                               std::chrono::duration<double>(
-                                   std::chrono::steady_clock::now() - _cycle_t0[k]).count());
+                        if (garbage_collected_is_verbose())
+                            printf("C0: k=%d cycle complete: iters=%llu in %.3gs\n",
+                                   k,
+                                   (unsigned long long)(_scan_passes - _cycle_pass0[k]),
+                                   std::chrono::duration<double>(
+                                       std::chrono::steady_clock::now() - _cycle_t0[k]).count());
                         _on_cycle_completed(bit);
                     } break;
                         
@@ -1512,16 +1535,23 @@ namespace wry {
                 if (_is_weak_deciding[k])
                     kstate[k].scans += 1;
 
+            // The per-line counters reset whether or not the line prints,
+            // so turning verbose on shows this pass's work, not a backlog.
             if (_marked_since_line | _allocated_since_scan | _shaded_since_scan) {
-                auto t1 = std::chrono::steady_clock::now();
-                printf("C0: trace marked=%zd,alloc+=%zd,shaded+=%zd,roots=%zd,weak=%zd,heap=%zd in %.3gs\n",
-                       std::exchange(_marked_since_line, size_t{0}),
-                       std::exchange(_allocated_since_scan, size_t{0}),
-                       std::exchange(_shaded_since_scan, size_t{0}),
-                       _root_registry.size(),
-                       _weak_registry.size(),
-                       _heap_objects,
-                       std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+                size_t marked = std::exchange(_marked_since_line, size_t{0});
+                size_t allocated = std::exchange(_allocated_since_scan, size_t{0});
+                size_t shaded = std::exchange(_shaded_since_scan, size_t{0});
+                if (garbage_collected_is_verbose()) {
+                    auto t1 = std::chrono::steady_clock::now();
+                    printf("C0: trace marked=%zd,alloc+=%zd,shaded+=%zd,roots=%zd,weak=%zd,heap=%zd in %.3gs\n",
+                           marked,
+                           allocated,
+                           shaded,
+                           _root_registry.size(),
+                           _weak_registry.size(),
+                           _heap_objects,
+                           std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+                }
             }
 
         } // void Collector::collector_trace()
@@ -1646,21 +1676,23 @@ namespace wry {
                 if (_is_sweeping[k])
                     kstate[k].scans += 1;
 
-            int nonempty = 0;
-            for (auto& c : _cohorts_by_key)
-                if (!c.objects.is_empty())
-                    ++nonempty;
-            auto t1 = std::chrono::steady_clock::now();
-            printf("C0: sweep mask=%04x visited=%zd deleted=%zd stripped=%04x heap=%zd cohorts=%d window=[%d,%d) in %.3gs\n",
-                   sweep_mask,
-                   visited,
-                   delete_count,
-                   stripped,
-                   _heap_objects,
-                   nonempty,
-                   _window_base,
-                   _next_start,
-                   std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            if (garbage_collected_is_verbose()) {
+                int nonempty = 0;
+                for (auto& c : _cohorts_by_key)
+                    if (!c.objects.is_empty())
+                        ++nonempty;
+                auto t1 = std::chrono::steady_clock::now();
+                printf("C0: sweep mask=%04x visited=%zd deleted=%zd stripped=%04x heap=%zd cohorts=%d window=[%d,%d) in %.3gs\n",
+                       sweep_mask,
+                       visited,
+                       delete_count,
+                       stripped,
+                       _heap_objects,
+                       nonempty,
+                       _window_base,
+                       _next_start,
+                       std::chrono::nanoseconds{t1 - t0}.count() * 1e-9);
+            }
 
         } // void Collector::collector_sweep_walk()
 

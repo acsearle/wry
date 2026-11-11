@@ -135,17 +135,20 @@ namespace wry {
             if (before.has_value()) {
                 // It does exist, try to get permission:
                 if (before.value()->mutator_try_upgrade()) {
-                    printf("%p:HeapString: mutator upgraded\n", before.value()->_weak);
+                    if (garbage_collected_is_verbose())
+                        printf("%p:HeapString: mutator upgraded\n", before.value()->_weak);
                     if (did_emplace)
                         *did_emplace = false;
                     return WeakDict::AlterChoice::keep();
                 }
-                printf("%p:HeapString: mutator upgrade failed\n", before.value()->_weak);
+                if (garbage_collected_is_verbose())
+                    printf("%p:HeapString: mutator upgrade failed\n", before.value()->_weak);
                 // On this path, _weak is GONE and may already be invalid
             }
             // Compete to install a new string
             HeapString const* nhs = HeapString::make(s);
-            printf("%p:HeapString: mutator tries to install\n", nhs);
+            if (garbage_collected_is_verbose())
+                printf("%p:HeapString: mutator tries to install\n", nhs);
             WeakHolder<HeapString> const* nwh = new WeakHolder<HeapString>{nhs};
             if (did_emplace)
                 *did_emplace = true;
@@ -161,10 +164,12 @@ namespace wry {
         std::string s{victim->_weak->as_string_view()};
         (void) t->alter(s, [victim, &s](std::optional<WeakHolder<HeapString> const*> before) {
             if (before.has_value() && before.value() == victim) {
-                printf("HeapString: collector erases\n");
+                if (garbage_collected_is_verbose())
+                    printf("HeapString: collector erases\n");
                 return WeakDict::AlterChoice::erase();
             } else {
-                printf("HeapString: collector found replacement\n");
+                if (garbage_collected_is_verbose())
+                    printf("HeapString: collector found replacement\n");
                 return WeakDict::AlterChoice::keep();
             }
         });
