@@ -8,6 +8,7 @@
 #ifndef coroutine_hpp
 #define coroutine_hpp
 
+#include <cstddef>
 #include <cstdio>
 
 #include <chrono>
@@ -173,12 +174,26 @@ namespace wry::coroutine {
     // awaitable, an operation state, a static, or a promise's parking space
     // -- so there is deliberately no virtual destructor: a parked delegate
     // must be trivially destructible (see BasicPromise::emplace_delegate)
+    //
+    // The two end-of-frame hooks are symmetric.  Each NAMES a handle and
+    // does nothing else that may free what the frame's parameters refer to;
+    // the handle is continued only once the frame is gone, parameter copies
+    // and storage included:
+    //
+    //   final_await_suspend()  value or error: the handle to RESUME (word 0)
+    //   unhandled_stopped()    stopped: the handle to DESTROY (word 1)
+    //
+    // unhandled_stopped is called from ~BasicPromise (the frame was
+    // destroyed with the delegate still set); it may record the stop (an
+    // Outcome's set_stopped) but must not retire, resume or destroy
+    // anything itself.  A null or noop handle continues nothing.  See
+    // BasicPromise::operator delete
     template<typename T>
     struct Delegate {
         virtual std::coroutine_handle<> final_await_suspend() noexcept = 0;
         virtual void return_value(T value) noexcept { /* discard */ };
         virtual void unhandled_exception() noexcept { abort(); }
-        virtual void unhandled_stopped() noexcept { abort(); }
+        virtual std::coroutine_handle<> unhandled_stopped() noexcept { abort(); }
         virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
     };
 
@@ -187,9 +202,55 @@ namespace wry::coroutine {
         virtual std::coroutine_handle<> final_await_suspend() noexcept = 0;
         virtual void return_void() noexcept {};
         virtual void unhandled_exception() noexcept { abort(); }
-        virtual void unhandled_stopped() noexcept { abort(); }
+        virtual std::coroutine_handle<> unhandled_stopped() noexcept { abort(); }
         virtual std::stop_token get_stop_token() noexcept { return std::stop_token{}; }
     };
+
+    // The stopped continuations of frames between ~BasicPromise and their
+    // operator delete, on this thread.  Strictly nested: between a frame's
+    // ~BasicPromise and its operator delete only its parameter copies are
+    // destroyed, and a parameter destructor that destroys another frame
+    // pushes and pops that frame's entry inside the window.  So a short
+    // stack, keyed by the promise's address, which lies inside the frame
+    // being freed.  Depth beyond one needs a parameter destructor that
+    // cancels a frame whose parameter destructor cancels a frame, ...
+    struct StoppedContinuations {
+        static constexpr int CAPACITY = 16;
+        struct Entry {
+            void const* promise;
+            std::coroutine_handle<> stopped;
+        };
+        Entry entries[CAPACITY];
+        int depth;
+    };
+
+    inline constinit thread_local StoppedContinuations t_stopped_continuations = {};
+
+    inline void stopped_continuation_push(void const* promise, std::coroutine_handle<> stopped) noexcept {
+        StoppedContinuations& s = t_stopped_continuations;
+        if (s.depth == StoppedContinuations::CAPACITY) [[unlikely]] {
+            fprintf(stderr, "stopped_continuation_push: more than %d frames nested in parameter destructors\n",
+                    StoppedContinuations::CAPACITY);
+            abort();
+        }
+        s.entries[s.depth++] = {promise, stopped};
+    }
+
+    // The entry of the frame occupying [frame, frame + size), if it was
+    // destroyed on the stopped path; null otherwise (the value path, which
+    // continued through final_await_suspend)
+    inline std::coroutine_handle<> stopped_continuation_pop(void const* frame, std::size_t size) noexcept {
+        StoppedContinuations& s = t_stopped_continuations;
+        if (s.depth == 0)
+            return {};
+        StoppedContinuations::Entry const& top = s.entries[s.depth - 1];
+        std::byte const* first = static_cast<std::byte const*>(frame);
+        std::byte const* promise = static_cast<std::byte const*>(top.promise);
+        if ((promise < first) || (promise >= first + size))
+            return {};
+        --s.depth;
+        return top.stopped;
+    }
 
     // TODO: Should Delegate take Promise<T>* as an argument?  Is that enough
     // to allow us to not hold a Promise<T>* in the delegate?
@@ -257,9 +318,30 @@ namespace wry::coroutine {
             return FinalAwaitable{};
         }
 
+        // The stopped path's counterpart of FinalAwaitable: the frame is
+        // being destroyed with the delegate still set.  Ask the delegate
+        // for the stopped continuation now (it may be parked in this very
+        // frame), but continue it only from operator delete below, once
+        // the parameter copies -- whose lifetime ends after the promise's
+        // -- are destroyed and the storage is freed.  So on both paths the
+        // awaiter, joiner or receiver hears of the frame only once it is
+        // entirely gone
         ~BasicPromise() {
             if (_delegate)
-                take(_delegate)->unhandled_stopped();
+                stopped_continuation_push(this, take(_delegate)->unhandled_stopped());
+        }
+
+        // The frame's deallocation function (found in the promise's scope;
+        // the allocation is the global operator new).  The last act of a
+        // frame's destruction: free, then continue a stopped frame's
+        // awaiter through its destroy word.  The continuation runs nested
+        // here, so the native stack grows by one level per frame of a
+        // cascade
+        static void operator delete(void* frame, std::size_t size) noexcept {
+            std::coroutine_handle<> stopped = stopped_continuation_pop(frame, size);
+            ::operator delete(frame, size);
+            if (stopped)
+                stopped.destroy();
         }
 
         std::stop_token get_stop_token() const noexcept {
@@ -466,9 +548,11 @@ namespace wry::coroutine {
             return _outcome;
         }
 
-        virtual void unhandled_stopped() noexcept override {
+        // The outer frame is destroyed (the cascade continues) once the
+        // inner is gone
+        virtual std::coroutine_handle<> unhandled_stopped() noexcept override {
             set_stopped(_outcome);
-            handle_from_promise(take(_outer_promise)).destroy();
+            return handle_from_promise(take(_outer_promise));
         }
 
         virtual std::coroutine_handle<> final_await_suspend() noexcept override {
@@ -510,8 +594,9 @@ namespace wry::coroutine {
     //
     // The coroutine's continuation is the operation state itself.  Its
     // resume word is reached by final_suspend and splits value / error on the
-    // exception slot; its destroy word is reached by ~Promise during
-    // cancellation unwinding and is the stopped channel.
+    // exception slot; its destroy word is reached once a cancelled
+    // coroutine's frame is gone (BasicPromise::operator delete) and is the
+    // stopped channel.
 
 } // namespace wry::coroutine
 
@@ -572,11 +657,12 @@ namespace wry::coroutine {
             return _frame._outcome;
         }
 
-        virtual void unhandled_stopped() noexcept override {
+        // Names the destroy word: once the coroutine's frame is gone,
+        // Frame::_static_destroy forwards stopped to the receiver, which
+        // may destroy this operation state (last touch)
+        virtual std::coroutine_handle<> unhandled_stopped() noexcept override {
             set_stopped(_frame._outcome);
-            // This hook is the destroy word: forward stopped to the receiver,
-            // which may destroy this operation state (last touch)
-            Frame::_static_destroy(&_frame);
+            return std::coroutine_handle<>::from_address(&_frame);
         }
 
         virtual std::coroutine_handle<> final_await_suspend() noexcept override {

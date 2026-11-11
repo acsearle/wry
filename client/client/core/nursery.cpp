@@ -62,6 +62,71 @@ namespace wry::coroutine {
         co_return;
     };
 
+    // A cancelled child's parameter copies are destroyed before its retire
+    // (BasicPromise::operator delete continues the Nursery's word 1 only
+    // once the frame is freed), so a joiner that resumes from the last,
+    // cancelled, retire finds them gone, through either stopped hook
+    // (Nursery::Inner for a bald soon, NurseryChildDelegate for a
+    // targeted one).  Until 2026-11-12 the retire ran inside the child's
+    // ~Promise, before its parameters died, and the joiner resumed with
+    // them alive.
+
+    namespace {
+
+        // Counts its destruction; moved into the frame's parameter copy,
+        // the moved-from argument counts nothing
+        struct DestroyWitness {
+            std::atomic<int>* _destroyed;
+            explicit DestroyWitness(std::atomic<int>* destroyed) : _destroyed(destroyed) {}
+            DestroyWitness(DestroyWitness&& other) : _destroyed(take(other._destroyed)) {}
+            ~DestroyWitness() {
+                if (_destroyed)
+                    _destroyed->fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+
+        // Waits until the joiner has armed (the counter is the live
+        // children plus one for an unarmed join), so that this child's
+        // retire is the last and resumes the joiner, nested in the
+        // child's destruction; then cancels itself
+        Future<int> cancel_after_join_armed(Nursery* scope, DestroyWitness parameter) {
+            while (scope->_counter.load_relaxed() != 0)
+                co_await TransferToPoolExecutor{};
+            co_await SuspendAndCancel{};
+            co_return 0;  // unreachable
+        }
+
+        Task cancel_after_join_armed_void(Nursery* scope, DestroyWitness parameter) {
+            [[maybe_unused]] int never = co_await cancel_after_join_armed(scope, std::move(parameter));
+        }
+
+    }
+
+    define_test("nursery_cancelled_child_parameters") {
+        // Bald soon: Nursery::Inner.  The witness moves on into the
+        // awaited inner, whose frame the cancellation destroys first
+        {
+            std::atomic<int> destroyed{0};
+            Nursery nursery;
+            nursery.soon(cancel_after_join_armed_void(&nursery, DestroyWitness{&destroyed}));
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            require(cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+        }
+        // Targeted soon: NurseryChildDelegate, parked in the child's frame
+        {
+            std::atomic<int> destroyed{0};
+            execution::Outcome<int> target;
+            Nursery nursery;
+            nursery.soon(target, cancel_after_join_armed(&nursery, DestroyWitness{&destroyed}));
+            std::ptrdiff_t cancelled = co_await nursery.join();
+            require(cancelled == 1);
+            require(destroyed.load(std::memory_order_relaxed) == 1);
+            require(target.is_stopped());
+        }
+        co_return;
+    };
+
     namespace {
 
         Future<int> rethrow_child() {

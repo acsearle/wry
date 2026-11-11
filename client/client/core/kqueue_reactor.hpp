@@ -42,9 +42,15 @@ namespace wry {
 
 
     // At `duration` from now, invoke `f` on the pool -- unless `token` is
-    // requested first, in which case `f` is destroyed unrun.  A stop request
-    // against an unfired timer withdraws it synchronously; a timer that has
-    // already fired runs `f` regardless, so `f` must tolerate a late stop
+    // requested first, in which case `f` is destroyed unrun.  The stop and
+    // the fire race through one claim, and exactly one of them disposes of
+    // `f`.  A stop that wins against an armed timer the reactor has not yet
+    // delivered withdraws it and destroys `f` inside request_stop.  It is
+    // NOT always synchronous: if the knote was already delivered (the
+    // fire-won window), or the arm is still in progress on another thread,
+    // `f` is destroyed unrun just after request_stop returns, on the pool
+    // or on the arming thread (coroutines.md 9.3).  A fire that wins runs
+    // `f` even though a stop is arriving, so `f` must tolerate a late stop
     // (with_deadline's does: a second request_stop is idempotent).  A failed
     // timer registration aborts (it is resource-exhaustion grade).
     void cancelable_after(std::stop_token token,
@@ -66,7 +72,12 @@ namespace wry {
     // No deadlines here: compose one with with_deadline below, which times
     // the wait out by requesting an interior stop source.  A stop request on
     // the awaiting chain's token destroys the parked frame (cancellation
-    // unwinding) and withdraws the knote promptly.
+    // unwinding) and withdraws the knote promptly: inside request_stop for
+    // a settled wait, or just after it on the pool or the awaiting thread
+    // in the fire-won and arming windows (as cancelable_after above).  A
+    // join or a receiver hears of the destroy either way; only a caller
+    // that assumes the frame is gone when request_stop returns cannot
+    // build on these leaves.
 
     // recv: bytes received, 0 for end of stream, or -errno
     [[nodiscard]] coroutine::Future<ssize_t>
@@ -114,10 +125,11 @@ namespace wry {
     //                      request propagates instead of being absorbed
     //
     // The inner's completion requests the interior source before
-    // delivering, which withdraws an unfired timer synchronously; a timer
-    // that has already fired holds only its own copy of the source (shared
-    // stop state), so it outlives this operation state harmlessly and its
-    // late request is idempotent.
+    // delivering, which withdraws a timer the reactor has not delivered,
+    // synchronously; a timer that has already fired holds only its own
+    // copy of the source (shared stop state), so it outlives this
+    // operation state harmlessly, whether its callable then runs (a late
+    // request, idempotent) or is destroyed unrun on the pool.
 
     template<execution::Sender S>
     struct WithDeadlineSender {

@@ -90,7 +90,7 @@ aborts in Debug and names both delegate types):
 | `co_return v` / `co_return` | `return_value(T)` / `return_void()` |
 | `unhandled_exception()` | `unhandled_exception()` (records only; final suspend still follows) |
 | final suspend (`FinalAwaitable::await_suspend`) | `final_await_suspend()` -> the continuation |
-| `~BasicPromise` with the delegate still set | `unhandled_stopped()` |
+| `~BasicPromise` with the delegate still set | `unhandled_stopped()` -> the handle to destroy once the frame is freed (`BasicPromise::operator delete`) |
 | `get_stop_token(promise)` | `get_stop_token()` |
 
 `Future<T>` is a move-only owner of a not-yet-started frame
@@ -133,13 +133,16 @@ and `shield` (receiver adaptors), `when_any` (the race, section 7.2) and
 
 A suspended frame is cancelled by destroying it, never by resuming it with
 an error.  The destroy runs the frame's live locals' destructors and then
-`~BasicPromise`, which finds the delegate still set and calls
-`unhandled_stopped()`, which destroys or notifies the frame's awaiter, whose
-`~BasicPromise` does the same, and so on up the chain until a delegate
+`~BasicPromise`, which finds the delegate still set and asks
+`unhandled_stopped()` for the awaiter's handle; then the language destroys
+the frame's parameter copies and calls `BasicPromise::operator delete`,
+which frees the frame and destroys that handle (its word 1).  The
+awaiter's frame does the same, and so on up the chain until a delegate
 absorbs the stop (an adaptor, a Nursery under an unrequested outer token)
 or a root records it.  Test `coroutine_unwind_chain` (ext/coroutine.cpp)
 pins the shape: three frames, each probe destroyed exactly once, no code
-after any `co_await` runs.
+after any `co_await` runs; `coroutine_unwind_parameters` pins the order: a
+cancelled frame's parameters die before its awaiter's locals (section 2.4).
 
 Nothing in the chain polls.  Only leaves -- the awaitables that actually
 park a frame -- look at the stop token, and they do so by registering a
@@ -167,7 +170,8 @@ The hook only NAMES the continuation.  Completion's side effects -- a
 nursery's retire, a receiver's `set_value` -- belong to that continuation's
 word 0, which runs after step 3, when the child's frame (its parameter
 copies included) is gone.  See section 8.2 for why the Nursery relies on
-that, and 2.4 for the stopped path, where it does not hold.
+that, and 2.4 for the stopped path, which has the same shape (since
+2026-11-12; before, it did not).
 
 The value itself has already been delivered by `return_value` /
 `return_void` into whatever Outcome the delegate names
@@ -177,23 +181,33 @@ party that reads the Outcome by whatever edge carries the continuation
 (symmetric transfer on one thread, the Nursery's counter, the
 `SenderAwaitable` exchange, a semaphore).
 
-### 2.2 The stopped hook is the destroy word and must forward
+### 2.2 The stopped hook names the destroy word and must forward
 
 `unhandled_stopped()` is called from `~BasicPromise` -- that is, from inside
-the frame's destruction.  It is the stopped channel's only signal, so every
-delegate must forward it to whoever is waiting, or that party waits forever.
-`Delegate`'s default aborts, which is the right default: a delegate that
-cannot forward should not silently drop.  The forwarding delegates on main:
+the frame's destruction -- and returns the handle whose destroy word
+(word 1) continues the cancellation; `BasicPromise::operator delete`
+destroys it once the frame is freed (section 2.4).  It is the stopped
+channel's only signal, so every delegate must forward it to whoever is
+waiting, or that party waits forever.  `Delegate`'s default aborts, which is
+the right default: a delegate that cannot forward should not silently
+drop.  The hook may record the stop (an Outcome's `set_stopped`) while the
+frame, and a delegate parked in it, is still alive, but must not retire,
+resume or destroy anything itself.  A null or noop handle continues
+nothing.  The forwarding delegates on main:
 
-| delegate | forwards stopped by |
-|---|---|
-| `FutureAwaitable` | `set_stopped(_outcome)`, then `destroy()` the outer frame (continues the cascade) |
-| `FutureOperationState` | `set_stopped(_frame._outcome)`, then `Frame::_static_destroy` -> `set_stopped(receiver)` |
-| `Nursery::Inner` | `Nursery::_static_destroy` (count it cancelled, retire) |
-| `NurseryChildDelegate<T>` | `set_stopped(*_target)`, then `Nursery::_static_destroy` |
-| `WithDeadlineAwaitable` | `set_stopped(_outcome)`, then destroy the outer if the outer's token is requested, else resume it (absorb) |
-| `UnwindFence` (test) | records 2; it is a root, nothing above it |
-| `NurseryChildValueDelegate<T>`, `Delegate` default | abort (a bald target has no stopped channel) |
+| delegate | records | names (destroyed once the frame is gone) |
+|---|---|---|
+| `FutureAwaitable` | `set_stopped(_outcome)` | the outer frame (the cascade continues) |
+| `FutureOperationState` | `set_stopped(_frame._outcome)` | `&_frame`: `Frame::_static_destroy` -> `set_stopped(receiver)` |
+| `Nursery::Inner` | -- | the Nursery: `_static_destroy` (count it cancelled, retire) |
+| `NurseryChildDelegate<T>` | `set_stopped(*_target)` | the Nursery, as above |
+| `UnwindFence` (test) | -- | its own `Words`, whose word 1 records 2; a root |
+| `NurseryChildValueDelegate<T>`, `Delegate` default | abort (a bald target has no stopped channel) | |
+
+`with_deadline` is a sender (section 9.5 is stale on this): its inner
+Future reaches it through `FutureOperationState`, and the absorb-or-forward
+decision is `WithDeadlineBase::_deliver_stopped`, run from that
+`Frame::_static_destroy`, so after the inner's frame is gone.
 
 `OutcomeDelegate` deliberately leaves `unhandled_stopped` to `Derived`:
 what "forward" means differs per delegate (the comment on
@@ -219,28 +233,66 @@ nothing ever destroys, so a parked delegate must have nothing to destroy.
 a delegate holding a `std::stop_token`, say, is not trivially destructible
 and cannot be parked.)
 
-### 2.4 Where the stopped hook runs, and what is still alive
+### 2.4 Where the stopped continuation runs, and what is still alive
 
-Because the hook runs inside `~BasicPromise`, everything the hook does --
-destroying the awaiter, retiring a nursery, resuming an absorbing awaiter
--- runs NESTED inside the dying frame's destruction:
+The language ends a destroyed frame in a fixed order: the locals in scope
+at the suspend point, then the promise (`~BasicPromise`), then the
+parameter copies ("the lifetime of parameter copies ends immediately after
+the lifetime of the coroutine promise object ends"), then the deallocation
+function.  The stopped path uses both ends of that:
 
-- the frame's locals are already destroyed (they die before the promise);
-- its parameter copies are NOT yet destroyed (their lifetime ends
-  immediately after the promise's) and its storage is not yet freed;
-- the native stack grows by one destroy per level of the cascade, and an
-  absorbing delegate (`WithDeadlineAwaitable`, a Nursery whose joiner
-  resumes) runs the awaiter's code on top of that stack until the awaiter
-  next suspends.
+- `~BasicPromise` calls the hook, which records the stop and NAMES the
+  continuation (2.2).  Locals are dead; parameter copies are alive; the
+  storage is not freed.  This is the last moment a delegate parked in the
+  frame (`NurseryChildDelegate`) can be called.
+- `BasicPromise::operator delete` (the frame's class-specific deallocation
+  function; the allocation is the global `operator new`) frees the frame
+  and then destroys the named handle.  Everything of the frame is gone:
+  a joiner, awaiter or receiver never sees a cancelled frame's parameter
+  copies alive, exactly as on the value path (2.1).
 
-This is the asymmetry with section 2.1: on the value path the continuation
-runs after the frame is gone; on the stopped path it runs before the
-frame's parameter copies die.  A cancellable coroutine must therefore not
-have a parameter whose destructor touches state that its awaiter or joiner
-may free on resumption.  The tests put their probes in body locals for
-nursery children (`UnwindProbe`) for this reason among others; the reactor
-tests put theirs in a callable (`CancelableProbe`) because a never-started
-frame has only parameters.  (Listed as an open question in section 12.)
+The handle travels from one to the other through `t_stopped_continuations`
+(`ext/coroutine.hpp`), a thread-local stack of (promise address, handle).
+The destroy is synchronous, so both ends run on one thread; and the window
+between them contains only parameter destructors, so entries nest
+strictly: a parameter destructor that destroys another cancelled frame
+pushes and pops that frame's entry inside the window.  `operator delete`
+pops the top entry only if its promise address lies inside the block being
+freed; a frame destroyed on the value path pushed nothing and pops
+nothing.  The capacity is 16 nested entries, and overflow aborts with a
+message: depth beyond one needs a parameter destructor that cancels a frame
+whose parameter destructor cancels a frame.
+
+Assumption: every `Promise<T>` frame is heap-allocated, so its destruction
+reaches `operator delete`.  A frame whose allocation clang elided into its
+caller (HALO, CoroElide) would never pop its entry, and its stopped
+continuation would never run.  Elision needs the caller to destroy the
+handle itself on every path; here a frame destroys itself (final suspend)
+or is destroyed by whoever holds its handle (a leaf, a delegate, the
+pool), and the opt-in `[[clang::coro_await_elidable]]` is not used.
+
+The continuation still runs NESTED: inside `operator delete`, which is
+inside the destroy of the frame, which is inside whatever destroyed it (a
+leaf's stop callback, say).  So the native stack grows by one destroy per
+level of the cascade, and an absorbing party (a Nursery whose joiner
+resumes, `with_deadline` delivering `nullopt` to an awaiting frame) runs
+the awaiter's code on top of that stack until the awaiter next suspends.
+
+History.  Until 2026-11-12 the hooks did the work themselves inside
+`~BasicPromise` (destroyed the outer frame, retired the nursery, delivered
+to the receiver), so on the stopped path the continuation ran before the
+frame's parameter copies died, and this section required that a
+cancellable coroutine have no parameter whose destructor touches state its
+awaiter or joiner may free on resumption (decision 18a,
+docs/decisions_2026-11-08.md).  No UAF instance existed, but parameters
+with side-effecting destructors did, and their effects landed after the
+join: `Publisher` (`render/asset_preload.cpp`, publishes into its slot),
+`Root<T>` parameters (`io/save.cpp`, `game/world_map.cpp`,
+`game/host.cpp`; the root subtract), and `shared_ptr` parameters whose
+last reference can run `~Transport` or a `Shared`'s destructor
+(`io/transport.cpp`, `game/relay.cpp`, `game/host.cpp`).  Tests
+`coroutine_unwind_parameters` and `nursery_cancelled_child_parameters`
+fail on the old order.
 
 ## 3. Cancellation
 
@@ -315,9 +367,10 @@ The concrete interleaving (the comment on `Nursery::Callback`): a child
 parked in `recv_some` under a Nursery whose outer token is requested.  The
 outer `request_stop` runs `Nursery::Callback`, which requests
 `_inner_stop_source`; that runs the leaf's `CancelableKEventFrame::Callback`,
-which destroys the child frame; `~BasicPromise` calls
-`Nursery::_static_destroy`, the last retire sees the outer requested and
-destroys the joiner frame, which holds the Nursery.  Without the local, the
+which destroys the child frame; once it is freed,
+`BasicPromise::operator delete` reaches `Nursery::_static_destroy` (2.4),
+the last retire sees the outer requested and destroys the joiner frame,
+which holds the Nursery.  Without the local, the
 inner source's iteration continues over a freed `stop_source`.
 
 `RaceBase::hasten` is the exception that proves the rule: the winner
@@ -402,8 +455,9 @@ the inner's final suspend transfers back to the outer.
 `Frame` member, a fake frame whose two words split the channels:
 `final_await_suspend` names `&_frame` as the continuation, so normal
 completion arrives at `Frame::_static_resume` (value or error, by the
-Outcome's index, to the receiver); `unhandled_stopped` calls
-`Frame::_static_destroy` directly (stopped to the receiver).  Each word's
+Outcome's index, to the receiver); `unhandled_stopped` names `&_frame` too,
+so a cancelled coroutine's frame, once freed, reaches
+`Frame::_static_destroy` (stopped to the receiver) through word 1.  Each word's
 receiver call is its last touch of the state.  `start` takes the promise,
 sets the delegate, and resumes the coroutine, which may run to completion
 inline; tests `coroutine_sender_seam` and `coroutine_sender_seam_cancel`
@@ -516,9 +570,11 @@ joiner in place -- so every interleaving of "last child retires" against
 `nursery_scope_cancel_empty`, `nursery_outer_bridge`,
 `nursery_interior_cancel`).
 
-On the stopped path the retire is NOT after the frame is gone: it is called
-from `NurseryChildDelegate::unhandled_stopped` / `Inner::unhandled_stopped`
-inside the child's `~BasicPromise` (section 2.4).
+On the stopped path the retire is after the frame is gone too:
+`NurseryChildDelegate::unhandled_stopped` / `Inner::unhandled_stopped`
+name the Nursery, and `BasicPromise::operator delete` destroys it (word 1,
+`_static_destroy`) once the child's frame is freed (section 2.4; test
+`nursery_cancelled_child_parameters`, both delegates).
 
 ### 8.3 The fork-to-join rule
 
@@ -891,14 +947,16 @@ the frame; 10 `await_ready` on `signaledValue`; 11 and 12 the six tests.
 
 ## 12. Known gaps and open questions
 
-- Stopped-path ordering (2.4, 8.2): a stopped hook runs inside the dying
-  frame's `~BasicPromise`, so a nursery's last retire, and an absorbing
-  `WithDeadlineAwaitable`'s resume of its outer, run before the cancelled
-  frame's parameter copies are destroyed.  No current coroutine is known to
-  have a parameter whose destructor this would break; nothing enforces it.
+- Stopped-path ordering (2.4, 8.2): RESOLVED 2026-11-12.  The stopped
+  continuation runs from `BasicPromise::operator delete`, after the
+  cancelled frame's parameter copies; it ran inside `~BasicPromise` before.
 - Reactor leaves are synchronous on cancel only outside the fire-won and
-  arming windows (9.3); `metal_event.hpp`'s "as the reactor's leaves do"
-  holds for the settled case.
+  arming windows (9.3).  The comments now say so (`cancelable_after` and
+  the socket operations in `kqueue_reactor.hpp`, `metal_event.{hpp,mm}`,
+  `io/transport.cpp`), and nothing relies on the stronger property.
+  Whether to make the stop-won destroy synchronous here too (the callback
+  that wins `_state` destroying `_f` at once, as `WaitState::Callback`
+  does) is open (decision 18b).
 - `get_stop_token` walks the delegate chain per leaf await (docs/todo.md).
 - `with_deadline`'s sender rebuild is in review, not on main (9.5).
 - An arm outside any task leaks its frame at shutdown (9.4).
@@ -906,7 +964,8 @@ the frame; 10 `await_ready` on `signaledValue`; 11 and 12 the six tests.
 ## File map
 
 ```
-ext/coroutine.hpp             Header, Promise, Delegate, OutcomeDelegate, Future,
+ext/coroutine.hpp             Header, Promise, Delegate, StoppedContinuations,
+                              OutcomeDelegate, Future,
                               FutureAwaitable, FutureOperationState,
                               SenderAwaitable/AwaitableBase, lift_awaitable,
                               DebugWaitForCollectionCycles, SuspendAndCancel

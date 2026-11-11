@@ -34,7 +34,11 @@ namespace wry::coroutine {
 
             virtual void return_void() noexcept override {}
             virtual void unhandled_exception() noexcept override { abort(); }
-            virtual void unhandled_stopped() noexcept override { _static_destroy(_self); }
+            // Word 1 of the Nursery: retire, counted cancelled, once the
+            // child's frame is gone (BasicPromise::operator delete)
+            virtual std::coroutine_handle<> unhandled_stopped() noexcept override {
+                return std::coroutine_handle<>::from_address(_self);
+            }
             virtual std::stop_token get_stop_token() noexcept override { return _self->_inner_stop_source.get_token(); }
             virtual std::coroutine_handle<> final_await_suspend() noexcept override {
                 return std::coroutine_handle<>::from_address(_self);
@@ -47,8 +51,10 @@ namespace wry::coroutine {
         struct Callback {
             std::stop_source _inner_stop_source;
             void operator()() {
-                // A child parked in a cancelable leaf (recv_some) unwinds
-                // synchronously inside this request_stop; the last child's
+                // A child parked in a cancelable leaf (recv_some) usually
+                // unwinds synchronously inside this request_stop (not in
+                // the reactor's fire-won and arming windows, coroutines.md
+                // 9.3); the last child's
                 // retire can destroy the joiner frame -- this Nursery, this
                 // functor, and _inner_stop_source with it -- and free the
                 // inner stop state under the iteration.  Pin it on the
@@ -283,12 +289,14 @@ namespace wry::coroutine {
         execution::Outcome<T>& outcome() noexcept {
             return *_target;
         }
-        virtual void unhandled_stopped() noexcept override {
+        // Records the stop in the target now, while the frame (and this
+        // delegate, parked in it) is alive; the retire is the Nursery's
+        // word 1, which runs once the frame is gone, as word 0 does on the
+        // value path.  So the joiner never sees a cancelled child's
+        // parameter copies alive
+        virtual std::coroutine_handle<> unhandled_stopped() noexcept override {
             set_stopped(*_target);
-            // TODO: Is this type-info-discarding static call a wart or a
-            // virtuous sign of same-interface everywhere.  Is _static_destroy
-            // called exclusively via this path?
-            Nursery::_static_destroy(_nursery);
+            return std::coroutine_handle<>::from_address(_nursery);
         }
         virtual std::stop_token get_stop_token() noexcept override {
             return _nursery->_inner_stop_source.get_token();

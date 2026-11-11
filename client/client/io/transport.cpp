@@ -382,7 +382,9 @@ namespace wry {
                 reason = connection->reason.empty() ? std::string("closed") : connection->reason;
             }
             // Idempotent on most paths; here it withdraws a kick timer
-            // that has not fired (deleted synchronously by its callback)
+            // that has not fired (deleted by its callback, synchronously
+            // unless the reactor has just delivered it: then its callable
+            // is destroyed unrun on the pool, coroutines.md 9.3)
             connection->stop.request_stop();
             {
                 std::scoped_lock lock{shared.mutex};
@@ -419,7 +421,9 @@ namespace wry {
             }
             Shared& shared = *connection->shared;
             // Nothing further from the peer is processed: a reader parked
-            // in its recv unwinds here, on this thread
+            // in its recv unwinds here, on this thread (or just after, on
+            // the pool, if its readiness was delivered as the stop
+            // arrived: it still never reads, coroutines.md 9.3)
             connection->reader_stop.request_stop();
             Transport::Codec const& codec = *shared.codec;
             connection->out.emplace(Outgoing{codec.frame(codec.farewell(reason)), false});
@@ -1056,9 +1060,10 @@ namespace wry {
 
     void Transport::close() {
         // The cancellation unwinds frames parked on this thread, inside
-        // request_stop; frames running on workers finish there, and the
-        // spawner's join waits for them.  The accepting source follows
-        // through the bridge in serve_under
+        // request_stop (a reactor leaf in its fire-won window unwinds just
+        // after, on the pool); frames running on workers finish there, and
+        // the spawner's join waits for them all.  The accepting source
+        // follows through the bridge in serve_under
         _stop.request_stop();
         _unlink_path();
     }

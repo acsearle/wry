@@ -134,6 +134,64 @@ namespace wry::coroutine {
         co_return;
     };
 
+    // A cancelled frame's parameter copies outlive its promise: the
+    // language destroys them after ~Promise.  The stopped hook only names
+    // the awaiter's frame, and BasicPromise::operator delete destroys it
+    // once the cancelled frame is entirely gone, so a parameter of the leaf
+    // dies BEFORE the awaiter's locals, as it would on the value path.
+    // (Until 2026-11-12 the hook destroyed the awaiter from inside
+    // ~Promise: the awaiter's local died first, and the leaf's parameter
+    // was destroyed after the fence had already reported.)
+
+    namespace {
+
+        // Records, on its destruction, the tick of a shared clock.  Moved
+        // into the frame's parameter copy; the moved-from argument records
+        // nothing
+        struct OrderWitness {
+            std::atomic<int>* _clock;
+            std::atomic<int>* _at;
+            OrderWitness(std::atomic<int>* clock, std::atomic<int>* at)
+            : _clock(clock), _at(at) {}
+            OrderWitness(OrderWitness&& other)
+            : _clock(take(other._clock)), _at(other._at) {}
+            ~OrderWitness() {
+                if (_clock)
+                    _at->store(_clock->fetch_add(1, std::memory_order_relaxed), std::memory_order_relaxed);
+            }
+        };
+
+        Task unwind_parameter_leaf(OrderWitness parameter) {
+            co_await SuspendAndCancel{};
+        }
+
+        Task unwind_parameter_host(std::atomic<int>* clock,
+                                   std::atomic<int>* leaf_parameter_at,
+                                   std::atomic<int>* host_local_at) {
+            OrderWitness local{clock, host_local_at};
+            co_await unwind_parameter_leaf(OrderWitness{clock, leaf_parameter_at});
+        }
+
+    }
+
+    define_test("coroutine_unwind_parameters") {
+        UnwindFence fence;
+        std::atomic<int> clock{0};
+        std::atomic<int> leaf_parameter_at{-1};
+        std::atomic<int> host_local_at{-1};
+        Task task = unwind_parameter_host(&clock, &leaf_parameter_at, &host_local_at);
+        task._promise->set_delegate(&fence);
+        global_work_queue_schedule(handle_from_future(std::move(task)));
+        while (fence._outcome.load(std::memory_order_acquire) == 0)
+            co_await TransferToPoolExecutor{};
+        require(fence._outcome.load(std::memory_order_relaxed) == 2);
+        // Both recorded before the fence (it reports once the host is
+        // freed), the leaf's parameter first
+        require(leaf_parameter_at.load(std::memory_order_relaxed) == 0);
+        require(host_local_at.load(std::memory_order_relaxed) == 1);
+        co_return;
+    };
+
     // ---- Sender / receiver seam ---------------------------------------------
 
     // Routes a sender through the generic path even when it is also

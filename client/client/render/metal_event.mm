@@ -54,7 +54,10 @@ namespace wry {
     //   - stop: the stop_callback (on the requesting thread, inside
     //     request_stop, or inline in emplace when the token is already
     //     requested) sets STOPPED and destroys the continuation there --
-    //     cancellation as destruction, as the reactor's leaves do.
+    //     cancellation as destruction, always on the requester (the
+    //     reactor's leaves can defer it to the pool or the arming thread,
+    //     coroutines.md 9.3; this one has no such window, since the
+    //     claim and the destroy are one act of the callback).
     //
     //   - fire: the block (on the listener's queue) FIRST resets the
     //     stop_callback, THEN sets FIRED; if STOPPED was not set it schedules

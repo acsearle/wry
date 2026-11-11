@@ -84,7 +84,9 @@ namespace wry {
         // kernel orders it: a global witness atomic (until 2026-11-09) also
         // ordered unrelated knotes, which could hide races
         // (docs/tsan_2026-11-08.md N1).  Frame atomics are otherwise
-        // relaxed except for an acquire re-load on the winning path.
+        // relaxed except for the reference count (release decrements, the
+        // deleter's acquire load); the Callback's acquire re-load of
+        // _state was dropped on 2026-11-10 (the model check).
 
         // ---- Reactor service loop ------------------------------------------
 
@@ -458,8 +460,11 @@ namespace wry {
     // The callable a CancelableKEventFrame runs when its knote fires, when the
     // awaiting coroutine's continuation is what should run: scheduled onto
     // the pool on the fire, destroyed (cancellation unwinding) if dropped
-    // unrun.  release() takes the handle back when the frame was never
-    // armed and the awaitable must continue the coroutine itself.
+    // unrun -- which is when the frame's last reference goes: inside
+    // request_stop for a settled wait, on the pool (fire-won) or the
+    // arming thread otherwise.  release() takes the handle back when the
+    // frame was never armed and the awaitable must continue the coroutine
+    // itself.
     struct ContinuationThunk {
         std::coroutine_handle<> _handle;
         explicit ContinuationThunk(std::coroutine_handle<> handle) : _handle(handle) {}
@@ -768,8 +773,11 @@ namespace wry {
             co_await census.drained();
         }
 
-        // Cancel path: cancellation is a synchronous join -- when
-        // request_stop returns, the armed task is already destroyed
+        // Cancel path: for a settled arm whose knote the reactor has not
+        // delivered (a 10 s timer cannot have been), cancellation is a
+        // synchronous join -- when request_stop returns, the armed task is
+        // already destroyed.  Not in the fire-won or arming windows
+        // (coroutines.md 9.3), which this case avoids by construction
         {
             std::stop_source source;
             std::atomic<int> ran{0};
