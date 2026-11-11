@@ -20,7 +20,7 @@ roughly by how much they unblock.
    or recorded below) plus uncommitted comparison screenshots in their
    `docs/` folders. Their `build/` folders are already deleted. Remove them
    all with `git worktree remove` once you have looked at the screenshots?
-   **Decided 2026-11-10:** remove each worktree once its decision is made. Done: 18 removed (their untracked screenshots moved to `~/.Trash/wry-worktree-screenshots-2026-11-10/`); the three whose decisions are open (codoc 18, session 14, sender 22) moved to `~/Desktop/worktrees.nosync/`, where future agent worktrees go (off the iCloud Desktop).
+   **Decided 2026-11-10:** remove each worktree once its decision is made. Done: 18 removed (their untracked screenshots moved to `~/.Trash/wry-worktree-screenshots-2026-11-10/`); the three whose decisions are open (codoc 18, session 14, sender 22) moved to `~/Desktop/worktrees.nosync/` (2026-11-11: their tracked files turned out empty, evicted by iCloud before the move; restored from git, nothing lost), where future agent worktrees go (off the iCloud Desktop).
 
 ## Look and feel (screenshots in assets/ or the worktrees' docs/)
 
@@ -118,7 +118,8 @@ roughly by how much they unblock.
 22. **`with_deadline`**: when an outer stop request races an inner that stops
     for another reason, the result can be nullopt or stopped; this is
     deliberate. OK?
-    **Explained 2026-11-10** (in chat; summary): the timer only *asks* the inner to stop. Outcomes: inner value -> value (even after the deadline or a cancel); inner error -> error; inner stopped and the outer token reads requested -> STOPPED; inner stopped otherwise (timer, its own reason) -> nullopt; an inner that ignores stop overruns the deadline. The race: an unrelated outer stop concurrent with an inner stopping for another reason can be reported as nullopt (the caller runs its timeout branch, then unwinds at its next stop check) or as STOPPED. Nothing completed is ever discarded. Awaiting the OK.
+    **Explained 2026-11-10** (in chat; summary): the timer only *asks* the inner to stop. Outcomes: inner value -> value (even after the deadline or a cancel); inner error -> error; inner stopped and the outer token reads requested -> STOPPED; inner stopped otherwise (timer, its own reason) -> nullopt; an inner that ignores stop overruns the deadline. The race: an unrelated outer stop concurrent with an inner stopping for another reason can be reported as nullopt (the caller runs its timeout branch, then unwinds at its next stop check) or as STOPPED. Nothing completed is ever discarded.
+    **Decided 2026-11-11:** accept; keep with_deadline as it is. (Considered and rejected: value-or-stopped plus an adaptor for nullopt. `shield` would also detach the outer token, and `stopped_as_optional` would absorb the caller's own cancellation, because a stopped completion carries no reason; and the deadline's stop is with_deadline's own request, which it should answer itself rather than leak outward as a stopped nobody outside asked for. If a timeout should unwind, add a variant that turns expiry into an error, as Trio's fail_after does.) Worktree wry-sender removed.
 23. **GC CRASH-1 trap tier**: the unpinned detector is now an assert, after
     clean sweeps. Strip the freed-object ring and quarantine tier too?
     **Explained 2026-11-10** (in chat). Recommendation: one recorded soak (mac-debug ASan suite x20 with WRY_GC_QUARANTINE=1), then strip the freed-object ring, walk labels and ASan narration (24 MiB + per-object stores in every Debug build; built only for CRASH-1), keeping the unpinned detector (move it out of the TEMP block) and keeping quarantine as a documented opt-in (~15 lines; fix it to require the value 1: today any value, 0 included, enables it).

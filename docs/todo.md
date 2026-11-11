@@ -1,7 +1,16 @@
 # Todo
 
+## Feedback 2026-11-11
+- When tracking a truck, the truck jitters because the view and truck position aren't exactly consistent
+- Clicking on a truck to track it seems to stop working after a while
+- When not holding anything, or holding a blank symbol, need to restore some kind of cursor.  Cursor should never be invisible.
+- Surprising/inconsistent that mine, dump, bury don't apply to the square containing symbol
+- Ambient occlusion seemed to produce a strange "bow wave" at full screen
+- Not obvious how to clear a cell
+- Surprising there was no undo (which would be, write back the prior state of last write?)
+
 ## Things to build
-- Terrain on demand: built 2026-11-08 (see done.md).  Left: the minimap only covers its fixed 256x256 window; the background frontier precompute, when the generator gets expensive
+-  Terrain on demand: built 2026-11-08 (see done.md).  Left: the minimap only covers its fixed 256x256 window; the background frontier precompute, when the generator gets expensive
 - `shared_event_wait` (coroutines that wait on Metal: built 2026-11-08; see done.md) follow-ups:
   - a block can wait in ~stop_callback while a requester destroys a coroutine tower, delaying the serial queue's other blocks
   - a command-buffer-completion awaitable (addCompletedHandler, before commit) if a caller wants status
