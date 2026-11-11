@@ -1107,6 +1107,33 @@ same one-generation slack for lagging pins (three slabs, 4.10's drain-pin
 contract); the colour ladder was the one consumer of epoch progress that had
 not.
 
+**Forensics.**  Both crashes were root-caused by a Debug-build trap in
+`garbage_collected.cpp`: a 1M-entry ring of recently deleted objects (pointer,
+gray, black, sweep mask, pass), per-object labels naming what the collector
+was walking (root registry, child trace, weak registry, sweep) and on which
+object, and an ASan error-report callback that printed both -- the
+collector's phase per bit, the walk object's colour words, and the ring entry
+covering the faulting address.  The narration quoted above came from it.
+Paired with *quarantine* -- swept objects poisoned and leaked instead of
+deleted, so a late read reports as use-after-poison even where recycled
+memory would have hidden it -- it turned a rare flake into a deterministic
+report.  The trap was stripped on 2026-11-12 (commit "GC: strip the CRASH-1
+trap tier") after a clean soak: the mac-debug (ASan + UBSan) suite x20 with
+`WRY_GC_QUARANTINE=1`, no ASan report, every run complete.  It is intact in
+`c6a68ae` and earlier; if a collector use-after-free ever recurs, recover it
+with `git show c6a68ae:client/client/core/garbage_collected.cpp`.  Two
+pieces stay, standing:
+
+- *Quarantine*, an opt-in in ASan builds: `WRY_GC_QUARANTINE=1` (exactly
+  `1`; any other value is ignored with one warning -- before the strip any
+  value, `0` included, enabled it).  It announces itself on stderr when the
+  collector starts.  Swept objects leak, so memory grows with the swept
+  count (the suite peaks near 3 GB resident under it).
+- The *unpinned detector* (Debug builds): allocate, shade, root-up and
+  weak registration assert that the calling thread is epoch-pinned, the GC
+  entry contract, naming the site and thread first.  It found both feeders
+  of the thread-reap lost-report crash.
+
 ## 5. Throughput model
 
 *(Stage-1 dashboard, 2026-07-12: per-pass `alloc+=`/`shaded+=` volumes and

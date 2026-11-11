@@ -29,36 +29,33 @@
 
 #include "test.hpp"
 
-// ==== WRY_GC_DEBUG instrumentation (2026-08-15) ============================
-// Two tiers, born from two rare crashes:
+// ==== Standing debug checks ================================================
+// Two survive from the 2026-08 crash hunts (docs 4.12, "Forensics"):
 //
-// STANDING (keep): _debug_note_unpinned, the dynamic check of the real GC
+// _debug_note_unpinned (Debug builds): the dynamic check of the real GC
 // entry contract (pinned-ness) at allocate/shade/root_up/register_weak.  It
 // found both feeders of the thread-reap lost-report crash; an assert since
 // 2026-11-08, after clean suite and GUI sweeps.
 //
-// CRASH-1 TRAP (remove once the fixes below have soaked): the freed-object
-// ring, walk phase/object labels, ASan report narration, and
-// WRY_GC_QUARANTINE mode.  Built for the collector-trace use-after-free (a
-// swept next_ready skiplist head read by a later child-marking pass); its
-// narration root-caused that crash on 2026-08-18/19 -- a k-white birth
-// under a stale colour sample adopted by a born-k-black World inside one
-// pinned World::step, made possible by phase gates stamped one epoch too
-// early -- and, on the fix's soak, a second latent one (weak decision
-// judging a referent reachable when black for ANY deciding bit while the
-// sweep deletes on white for ANY sweeping bit).  Both fixed 2026-08-19; see
-// docs 4.12 and WeakHolder::_garbage_collected_decide_weak.  Keep running
-// WRY_GC_QUARANTINE=1 routinely for a while; when it stays silent, strip
-// this tier in its own commit, stall-instrumentation style: recover from git
-// if it ever recurs.
-#ifndef NDEBUG
-#define WRY_GC_DEBUG 1
-#endif
+// WRY_GC_QUARANTINE=1 (ASan builds, opt-in): swept objects are poisoned and
+// leaked instead of deleted, so any late touch reports at once as a
+// use-after-poison.  Exactly "1" enables it; any other value is ignored
+// with one warning.
+//
+// The CRASH-1 trap that used to sit beside them (a 1M-entry freed-object
+// ring, per-object walk phase/object labels, and an ASan report callback
+// narrating both) root-caused the collector-trace use-after-free of
+// 2026-08-18/19 and the weak-decision one found on its soak (docs 4.12).
+// It was stripped 2026-11-12, after a clean mac-debug suite soak (x20 with
+// WRY_GC_QUARANTINE=1), in the commit "GC: strip the CRASH-1 trap tier".
+// It is intact in c6a68ae and earlier: if a collector UAF ever recurs,
+// recover it with
+//   git show c6a68ae:client/client/core/garbage_collected.cpp
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
 #include <sanitizer/asan_interface.h>
 #include <malloc/malloc.h>
-#define WRY_GC_DEBUG_ASAN 1
+#define WRY_GC_ASAN 1
 #endif
 #endif
 #include <pthread.h>
@@ -272,34 +269,14 @@ namespace wry {
     static_assert(std::is_trivially_destructible_v<
                       decltype(_thread_local_gc_allocated_objects)>);
 
-#if WRY_GC_DEBUG
-    // ==== TEMP: collector-side crash forensics ====
-    // Ring of recently deleted objects (collector thread only).
-    struct DebugFreedRecord {
-        const void* ptr;
-        uint16_t gray;
-        uint16_t black;
-        uint16_t sweep_mask;
-        uint64_t pass;
-    };
-    constexpr size_t DEBUG_FREED_RING_SIZE = (size_t)1 << 20;
-    static DebugFreedRecord* _debug_freed_ring = nullptr;
-    static size_t _debug_freed_count = 0;
-    // Collector-loop pass counter and what the collector is doing right now.
-    static uint64_t _debug_gc_pass = 0;
-    static const char* _debug_walk_phase = "(idle)";
-    static const GarbageCollected* _debug_walk_object = nullptr;
-    static int _debug_window_base = 0;
-    static int _debug_next_start = 0;
-    static int _debug_live_count = 0;
-
-    // Detector for GC traffic from unpinned threads (the lost-report
-    // feeder for the thread-reap crash).  It began as a soft detector that
-    // printed the first offenders per site; promoted to an assert
-    // 2026-11-08 after the suite and offscreen GUI sweeps (new game, map,
-    // follow, writes, save, main menu, a second game, a resize; with and
-    // without WRY_GC_QUARANTINE) printed nothing.  It still names the
-    // site and thread first, since the abort's stack is the offender's.
+#ifndef NDEBUG
+    // STANDING: detector for GC traffic from unpinned threads (the
+    // lost-report feeder for the thread-reap crash; see the banner).  It
+    // began as a soft detector that printed the first offenders per site;
+    // promoted to an assert 2026-11-08 after the suite and offscreen GUI
+    // sweeps (new game, map, follow, writes, save, main menu, a second
+    // game, a resize) printed nothing.  It still names the site and thread
+    // first, since the abort's stack is the offender's.
     static void _debug_note_unpinned(const char* site, const void* ptr) {
         if (epoch::local_state.is_pinned)
             return;
@@ -313,7 +290,31 @@ namespace wry {
 #else
     static void _debug_note_unpinned(const char*, const void*) {}
 #endif
-    // ==== END TEMP ====
+
+#if WRY_GC_ASAN
+    // STANDING opt-in (see the banner): WRY_GC_QUARANTINE=1 turns a rare
+    // read-after-sweep flake into a deterministic use-after-poison report:
+    // swept objects are poisoned and leaked (no destructor), so ANY late
+    // touch -- even one that would have landed in still-valid recycled
+    // memory -- reports at once.  Read once (the collector thread calls it
+    // at start, before any sweep).
+    static bool _quarantine_is_enabled() {
+        static const bool enabled = [] {
+            const char* value = getenv("WRY_GC_QUARANTINE");
+            if (!value)
+                return false;
+            if (strcmp(value, "1") == 0) {
+                fprintf(stderr, "WRY_GC_QUARANTINE=1: swept objects are "
+                        "poisoned and leaked, not deleted\n");
+                return true;
+            }
+            fprintf(stderr, "WRY_GC_QUARANTINE=\"%s\" ignored: only 1 "
+                    "enables quarantine\n", value);
+            return false;
+        }();
+        return enabled;
+    }
+#endif
 
     GarbageCollected::GarbageCollected()
     : _gray{_thread_local_gray_for_allocation}
@@ -332,13 +333,13 @@ namespace wry {
         // constructor has completed.
 
         // TODO: We can require non-null
-        _debug_note_unpinned("GarbageCollected()", this); // TEMP
+        _debug_note_unpinned("GarbageCollected()", this);
         _thread_local_new_objects.push(this);
     }
 
     void garbage_collected_shade(GarbageCollected const* ptr) {
         if (ptr) {
-            _debug_note_unpinned("shade", ptr); // TEMP
+            _debug_note_unpinned("shade", ptr);
             const uint16_t gray = _thread_local_gray_for_allocation;
             const uint16_t before = ptr->_gray.fetch_or_relaxed(gray);
             const uint16_t did_shade = gray & ~before;
@@ -351,14 +352,14 @@ namespace wry {
 
     void _garbage_collected_root_up(GarbageCollected const* ptr) {
         assert(ptr);
-        _debug_note_unpinned("root_up", ptr); // TEMP
+        _debug_note_unpinned("root_up", ptr);
         // garbage_collected_shade(ptr);
         _thread_local_rooted_objects.push(ptr);
     }
 
     void garbage_collected_register_weak(GarbageCollected const* ptr) {
         assert(ptr);
-        _debug_note_unpinned("register_weak", ptr); // TEMP
+        _debug_note_unpinned("register_weak", ptr);
         _thread_local_weak_registrations.push(ptr);
     }
 
@@ -516,66 +517,6 @@ namespace wry {
     
     std::array<KState, 16> kstate = {};
 
-#if WRY_GC_DEBUG && WRY_GC_DEBUG_ASAN
-    // ==== TEMP: narrate the collector's state into the ASan report ====
-    // Parses the faulting address out of the report text, looks it up in
-    // the freed-object ring, and prints what the collector was doing.
-    static void _wry_gc_asan_report_callback(const char* text) {
-        fprintf(stderr, "WRY-GC-REPORT: pass=%llu phase=%s window=[%d,%d) live=%d\n",
-                (unsigned long long)_debug_gc_pass,
-                _debug_walk_phase,
-                _debug_window_base, _debug_next_start, _debug_live_count);
-        for (int k = 0; k != 16; ++k) {
-            if (kstate[k].kphase != UNUSED)
-                fprintf(stderr, "WRY-GC-REPORT: k=%d %s scans=%d\n",
-                        k, _KPhase_names[kstate[k].kphase], kstate[k].scans);
-        }
-        if (const GarbageCollected* p = _debug_walk_object) {
-            if (__asan_region_is_poisoned((void*)p, sizeof(GarbageCollected))) {
-                fprintf(stderr,
-                        "WRY-GC-REPORT: walk object %p IS ITSELF FREED/POISONED\n",
-                        (const void*)p);
-            } else {
-                fprintf(stderr,
-                        "WRY-GC-REPORT: walk object %p count=%d gray=%04x black=%04x -- ",
-                        (const void*)p,
-                        (int)p->_count.load_relaxed(),
-                        (unsigned)p->_gray.load_relaxed(),
-                        (unsigned)p->_black);
-                p->_garbage_collected_debug();
-            }
-        }
-        // Faulting address, if the report names one.
-        const char* s = text ? strstr(text, "on address 0x") : nullptr;
-        if (s) {
-            uintptr_t addr = (uintptr_t)strtoull(s + 13, nullptr, 16);
-            fprintf(stderr, "WRY-GC-REPORT: faulting address %p\n", (void*)addr);
-            if (_debug_freed_ring) {
-                size_t n = _debug_freed_count < DEBUG_FREED_RING_SIZE
-                         ? _debug_freed_count : DEBUG_FREED_RING_SIZE;
-                for (size_t back = 1; back <= n; ++back) {
-                    const DebugFreedRecord& r =
-                        _debug_freed_ring[(_debug_freed_count - back)
-                                          & (DEBUG_FREED_RING_SIZE - 1)];
-                    uintptr_t base = (uintptr_t)r.ptr;
-                    if (addr - base < 4096) {
-                        fprintf(stderr,
-                                "WRY-GC-REPORT: freed %zu deletes ago: ptr=%p "
-                                "gray=%04x black=%04x sweep_mask=%04x pass=%llu "
-                                "(%lld passes before now)\n",
-                                back, r.ptr,
-                                (unsigned)r.gray, (unsigned)r.black,
-                                (unsigned)r.sweep_mask,
-                                (unsigned long long)r.pass,
-                                (long long)(_debug_gc_pass - r.pass));
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    // ==== END TEMP ====
-#endif
 
     struct Collector {
 
@@ -902,26 +843,11 @@ namespace wry {
 
             printf("C0: garbage collector starts\n");
 
-#if WRY_GC_DEBUG
-            // TEMP: forensics ring + ASan report narration
-            if (!_debug_freed_ring)
-                _debug_freed_ring = (DebugFreedRecord*)calloc(DEBUG_FREED_RING_SIZE,
-                                                              sizeof(DebugFreedRecord));
-#if WRY_GC_DEBUG_ASAN
-            __asan_set_error_report_callback(&_wry_gc_asan_report_callback);
-#endif
+#if WRY_GC_ASAN
+            (void) _quarantine_is_enabled(); // announce it before any sweep
 #endif
 
             while (!_is_canceled.load_relaxed()) {
-
-#if WRY_GC_DEBUG
-                ++_debug_gc_pass;                    // TEMP
-                _debug_window_base = _window_base;   // TEMP
-                _debug_next_start = _next_start;     // TEMP
-                _debug_live_count = _live_count;     // TEMP
-                _debug_walk_phase = "receive";       // TEMP
-                _debug_walk_object = nullptr;        // TEMP
-#endif
 
                 assert(epoch::local_state.is_pinned);
                 epoch::Epoch current_epoch = epoch::local_state.known;
@@ -1455,10 +1381,6 @@ namespace wry {
                 const GarbageCollected* object = nullptr;
                 while (_root_registry.try_pop(object)) {
                     assert(object);
-#if WRY_GC_DEBUG
-                    _debug_walk_phase = "root-registry"; // TEMP
-                    _debug_walk_object = object;         // TEMP
-#endif
                     int32_t reference_count = object->_count.load_relaxed();
                     if (reference_count == 0)
                         continue;
@@ -1497,10 +1419,6 @@ namespace wry {
                 const GarbageCollected* parent = nullptr;
                 while (_graystack.try_pop(parent)) {
                     assert(parent);
-#if WRY_GC_DEBUG
-                    _debug_walk_phase = "trace-children"; // TEMP: the child
-                    _debug_walk_object = parent;          // reads below run
-#endif                                                    // under this parent
                     uint16_t parent_black = parent->_black & _black_for_allocation;
                     parent->_garbage_collected_scan();
                     const GarbageCollected* child = nullptr;
@@ -1546,10 +1464,6 @@ namespace wry {
                 const GarbageCollected* object = nullptr;
                 while (_weak_registry.try_pop(object)) {
                     assert(object);
-#if WRY_GC_DEBUG
-                    _debug_walk_phase = "weak-registry"; // TEMP
-                    _debug_walk_object = object;         // TEMP
-#endif
                     if (_is_weak_deciding.raw)
                         object->_garbage_collected_decide_weak(_is_weak_deciding.raw,
                                                                _gray_for_allocation,
@@ -1664,10 +1578,6 @@ namespace wry {
                 const GarbageCollected* object = nullptr;
                 while (c.objects.try_pop(object)) {
                     assert(object);
-#if WRY_GC_DEBUG
-                    _debug_walk_phase = "sweep"; // TEMP
-                    _debug_walk_object = object; // TEMP
-#endif
                     ++visited;
                     uint16_t before_gray = object->_gray.load_relaxed();
                     uint16_t before_black = object->_black;
@@ -1689,25 +1599,9 @@ namespace wry {
                         // requires a reachable pointer, so a white object
                         // cannot be rooted -- the standing S1 oracle.
                         assert(reference_count == 0);
-#if WRY_GC_DEBUG
-                        if (_debug_freed_ring) { // TEMP: record the delete
-                            DebugFreedRecord& r =
-                                _debug_freed_ring[_debug_freed_count++
-                                                  & (DEBUG_FREED_RING_SIZE - 1)];
-                            r = {object, before_gray, before_black,
-                                 sweep_mask, _debug_gc_pass};
-                        }
-#endif
-#if WRY_GC_DEBUG_ASAN
-                        // TEMP: WRY_GC_QUARANTINE=1 turns the rare
-                        // read-after-sweep flake into a deterministic
-                        // use-after-poison report: swept objects are
-                        // poisoned and leaked (no destructor) so ANY late
-                        // touch -- even one that would have landed in
-                        // still-valid recycled memory -- reports at once.
-                        static const bool _debug_quarantine =
-                            getenv("WRY_GC_QUARANTINE") != nullptr;
-                        if (_debug_quarantine) {
+#if WRY_GC_ASAN
+                        // Standing opt-in WRY_GC_QUARANTINE=1 (banner).
+                        if (_quarantine_is_enabled()) {
                             __asan_poison_memory_region(object,
                                                         malloc_size(object));
                         } else
