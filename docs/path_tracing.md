@@ -1,6 +1,6 @@
 # Path-traced reference renderer
 
-Status: BUILT (2026-11-19), uncommitted.  `path-trace` in the console.
+Status: BUILT 2026-11-19 (b89779f, branch path-trace).  `path-trace` in the console.
 
 A slow, noisy, progressive path tracer for the world view, as a reference
 the fast deferred renderer (shadow map, split-sum IBL, GTAO) can be judged
