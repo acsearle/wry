@@ -9,6 +9,7 @@
 #define world_state_hpp
 
 #include "ShaderTypes.h"
+#include "PathTraceTypes.h"
 
 #include <chrono>
 #include <deque>
@@ -134,6 +135,48 @@ namespace wry {
         // 0 shows the same captions baked into the atlas (the palette and
         // the cursor always show those)
         int _caption_decals = 100;
+        // The path-traced reference (the `path-trace` command;
+        // docs/path_tracing.md): which view (WRY_PT_VIEW_*; off is the
+        // fast renderer), pixel-centre rays filtered as the raster or
+        // jittered unfiltered ones, the indirect bounces at most, the
+        // margin of cells beyond the view whose objects cast and reflect,
+        // and the samples per pixel to stop at.  Issuing the command bumps
+        // the generation, which restarts the accumulation
+        int _path_trace_view = WRY_PT_VIEW_OFF;
+        bool _path_trace_antialias = false;
+        int _path_trace_bounces = 16;
+        int _path_trace_margin = 4;
+        int64_t _path_trace_target = 4096;
+        uint64_t _path_trace_generation = 0;
+        // What the renderer reports back (`path-trace-status`,
+        // `path-trace-wait`): shared, so a pending wait outlives the world
+        struct PathTraceProgress {
+            // The settings, mirrored by `path-trace` for the pending
+            // replies (which must not touch the WorldState)
+            int view = WRY_PT_VIEW_OFF;
+            int64_t target = 0;
+            uint64_t generation = 0;
+            // The renderer's: the generation it last traced, and the
+            // samples every pixel of that accumulation has
+            uint64_t traced_generation = ~uint64_t{0};
+            uint64_t samples = 0;           // every pixel has at least this many
+            uint64_t restarts = 0;          // accumulations begun
+            uint64_t restart_streak = 0;    // consecutive frames that restarted it
+            uint64_t dropped = 0;           // non-finite samples, at the last noise report
+            bool active = false;            // accumulating this frame (path-trace on, not the map)
+            bool alive = true;              // false once the world is gone
+            double frame_ms = 0.0;          // the last traced frame's GPU time
+            int samples_per_frame = 0;      // the last dispatch's shape
+            int rows_per_frame = 0;
+            // The standard error of the beauty's mean, relative to it,
+            // over the pixels (luminance): asked for by bumping
+            // noise_asked, answered by the renderer into noise_answered
+            uint64_t noise_asked = 0;
+            uint64_t noise_answered = 0;
+            double noise_median = 0.0;
+            double noise_p90 = 0.0;
+        };
+        std::shared_ptr<PathTraceProgress> _path_trace_progress = std::make_shared<PathTraceProgress>();
 
 
         // user interface state

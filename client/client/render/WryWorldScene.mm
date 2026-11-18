@@ -22,6 +22,7 @@
 
 #include "load_timing.hpp"
 #include "WryMesh.h"
+#include "WryPathTracer.h"
 #include "WryRenderContext.h"
 #include "WryWorldScene.h"
 
@@ -252,9 +253,8 @@ struct WryNumberGlyph {
     std::array<simd_float4, std::size(wry::MATTER_NAMES)> _matter_coordinate;
     std::array<bool, std::size(wry::MATTER_NAMES)> _matter_has_coordinate;
 
-    // The shake of a digging machine (Machine::PHASE_MINING): a fresh
-    // random offset each frame.  Renderer-side only.
-    std::minstd_rand _shake;
+    // The path-traced reference (`path-trace`; docs/path_tracing.md), made on first use
+    WryPathTracer* _pathTracer;
     
     // The opcode palette's data and selection now live on
     // _model->_palette_overlay; the renderer reads it for painting only.
@@ -1974,6 +1974,12 @@ struct WryNumberGlyph {
     }
 
     const bool show_map = _model->show_map();
+    // The path-traced reference replaces the raster passes (not the map)
+    const bool path_tracing = !show_map && _model->_path_trace_view != WRY_PT_VIEW_OFF;
+    _model->_path_trace_progress->active = path_tracing;
+    // Off: let the accumulator (two float4 per pixel) go; on again remakes it
+    if (_model->_path_trace_view == WRY_PT_VIEW_OFF)
+        _pathTracer = nil;
 
     // Another atlas asked for (the `atlas` command): asked of the pool,
     // and swapped in before anything samples the symbols in the frame
@@ -2044,6 +2050,12 @@ struct WryNumberGlyph {
 
     // The ground cells in view, as render-space offsets from the focus tile
     rect<i32> grid_bounds;
+    // The path tracer gathers beyond them (`path-trace` margin): what
+    // lies there casts and reflects, though the primary rays pass it as
+    // the raster would not draw it (view_bounds is what it would); the
+    // board's kinds reach farther still (board_bounds)
+    rect<i32> view_bounds;
+    rect<i32> board_bounds;
     {
         simd_float4x4 A = uniforms.viewprojection_transform;
         
@@ -2065,6 +2077,18 @@ struct WryNumberGlyph {
         // in the camera and/or shadow frustums
         
     }
+    view_bounds = grid_bounds;
+    board_bounds = grid_bounds;
+    if (path_tracing) {
+        const int m = _model->_path_trace_margin;
+        grid_bounds.a -= m;
+        grid_bounds.b += m;
+        board_bounds.a = view_bounds.a - 32;
+        board_bounds.b = view_bounds.b + 32;
+    }
+    auto in_view = [&view_bounds](int i, int j) {
+        return i >= view_bounds.a.x && i < view_bounds.b.x && j >= view_bounds.a.y && j < view_bounds.b.y;
+    };
     
     
     
@@ -2091,6 +2115,28 @@ struct WryNumberGlyph {
     WryBufferSlice map_indices = {};
     NSUInteger map_index_count = 0;
     MeshInstanced map_instanced = mesh_instanced_things;
+    // The frame's symbol slabs and decals (kept for the path tracer, with
+    // whether the raster would have drawn each: onscreen)
+    std::vector<WrySymbolInstance> symbols;
+    std::vector<bool> symbol_onscreen;
+    std::vector<WryDecalInstance> prints;   // image decals: the digits on number tiles
+    std::vector<WryDecalInstance> strings;  // image decals from the decal font (_decalFontTexture)
+    std::vector<uint8_t> board_kinds;       // the board's kind map (terrain_kinds' bytes)
+    // The meshes, in the path tracer's slots, and whether the raster would
+    // have drawn each instance
+    WryMesh* const meshes[WRY_PT_MAX_MESHES] = {
+        _furnace_mesh, _mine_mesh, _truck_mesh, _container_mesh,
+        _sandbox_mesh, _ship_prow_mesh, _ship_hold_mesh, _ship_stern_mesh,
+    };
+    std::vector<bool> mesh_onscreen[WRY_PT_MAX_MESHES];
+    // What is being emitted lies in view (the path tracer's margin: not)
+    bool emitting_onscreen = true;
+    auto add_mesh_instance = [&](WryMesh* mesh, MeshInstanced const& instance) {
+        [mesh addInstance:instance];
+        for (int k = 0; k != WRY_PT_MAX_MESHES; ++k)
+            if (meshes[k] == mesh)
+                mesh_onscreen[k].push_back(emitting_onscreen);
+    };
     _furnace_mesh.instanceCount = 0;
     _mine_mesh.instanceCount = 0;
     _truck_mesh.instanceCount = 0;
@@ -2175,20 +2221,35 @@ struct WryNumberGlyph {
         std::sort(visible_ids.begin(), visible_ids.end());
         visible_ids.erase(std::unique(visible_ids.begin(), visible_ids.end()),
                           visible_ids.end());
+        // Those the raster would draw, when the path tracer has gathered
+        // more (located at a cell in view_bounds)
+        std::vector<EntityID> onscreen_ids;
+        if (path_tracing) {
+            visit_in_region(new_world->_located_for_coordinate,
+                            tile_at(view_bounds.a.x, view_bounds.a.y),
+                            tile_at(view_bounds.b.x - 1, view_bounds.b.y - 1),
+                            [&onscreen_ids](Coordinate, const EntityIDSet& located) {
+                                located.for_each([&onscreen_ids](EntityID id) {
+                                    if (id) onscreen_ids.push_back(id);
+                                });
+                            });
+            std::sort(onscreen_ids.begin(), onscreen_ids.end());
+        }
         std::vector<Entity const*> ptrs;
+        std::vector<bool> ptr_onscreen;
         ptrs.reserve(visible_ids.size());
         for (EntityID id : visible_ids) {
             Entity const* e = nullptr;
-            if (entities.try_get(id, e) && e)
+            if (entities.try_get(id, e) && e) {
                 ptrs.push_back(e);
+                ptr_onscreen.push_back(!path_tracing
+                                       || std::binary_search(onscreen_ids.begin(), onscreen_ids.end(), id));
+            }
         }
 
         // Accumulate the symbol slabs into a growable buffer and upload it
         // once below.  Reserve a rough lower bound (one per grid cell and
         // per entity, plus the cursor); this is only a hint.
-        std::vector<WrySymbolInstance> symbols;
-        std::vector<WryDecalInstance> prints;   // image decals: the digits on number tiles
-        std::vector<WryDecalInstance> strings;  // image decals from the decal font (_decalFontTexture)
         size_t symbol_hint = 2
             + (size_t)(grid_bounds.b.x - grid_bounds.a.x) * (size_t)(grid_bounds.b.y - grid_bounds.a.y)
             + ptrs.size();
@@ -2299,6 +2360,7 @@ struct WryNumberGlyph {
             s.bottom_radius = fillet;
             s.clear_coat = _model->_coat_tiles;
             symbols.push_back(s);
+            symbol_onscreen.push_back(emitting_onscreen);
         };
         // A symbol: as thick as its cell's stroke, filleted by a quarter of it
         auto emit_symbol = [&](simd_float4 location, simd_float4 coordinate,
@@ -2388,7 +2450,7 @@ struct WryNumberGlyph {
             pile.albedo = make<float4>(wry::from_sRGB(c[0] / 255.0f),
                                        wry::from_sRGB(c[1] / 255.0f),
                                        wry::from_sRGB(c[2] / 255.0f), 1.0f);
-            [_sandbox_mesh addInstance:pile];
+            add_mesh_instance(_sandbox_mesh, pile);
         };
         auto emit_matter_tile = [&](simd_float4 location, wry::Term value) {
             const size_t m = (size_t)value.as_matter();
@@ -2414,7 +2476,7 @@ struct WryNumberGlyph {
             m.model_transform = A;
             m.inverse_transpose_model_transform = inverse(transpose(A));
             m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-            [_container_mesh addInstance:m];
+            add_mesh_instance(_container_mesh, m);
         };
 
         // The exploded stack follows the followed machine: a new one
@@ -2445,7 +2507,9 @@ struct WryNumberGlyph {
                 
         // for (const auto& [qi, q] : entities->data) {
             // Entity* q = entities[qi];
-        for (Entity const* q : ptrs) {
+        for (size_t qi = 0; qi != ptrs.size(); ++qi) {
+            Entity const* q = ptrs[qi];
+            emitting_onscreen = ptr_onscreen[qi];
             
             if (auto p = dynamic_cast<const wry::Machine*>(q)) { // ugh
 
@@ -2508,11 +2572,17 @@ struct WryNumberGlyph {
                 if (p->_entity_id == _model->_follow)
                     _model->_follow_drawn_at = x1;
                 if (digging) {
-                    // a new small random offset every frame; the carried
-                    // stack shakes with the token
-                    std::uniform_real_distribution<float> jiggle(-0.035f, 0.035f);
-                    location.x += jiggle(_shake);
-                    location.y += jiggle(_shake);
+                    // a small offset that changes with each world step;
+                    // the carried stack shakes with the token.  A pure
+                    // function of the machine and the time, so a paused
+                    // world stands still (the path tracer converges) and
+                    // both renderers show the same frame
+                    const uint64_t h = wry::hash(p->_entity_id.data ^ wry::hash((uint64_t)tnow));
+                    auto jiggle = [](uint64_t bits) {
+                        return ((float)(bits & 0xFFFFFFu) / 16777215.0f * 2.0f - 1.0f) * 0.035f;
+                    };
+                    location.x += jiggle(h);
+                    location.y += jiggle(h >> 24);
                 }
                 
                 
@@ -2604,7 +2674,7 @@ struct WryNumberGlyph {
                     WryMesh* mesh = (k == 0) ? _ship_prow_mesh
                         : (k == wry::Ship::SHIP_LENGTH - 1) ? _ship_stern_mesh
                         : _ship_hold_mesh;
-                    [mesh addInstance:m];
+                    add_mesh_instance(mesh, m);
                     if ((k != 0) && (k != wry::Ship::SHIP_LENGTH - 1))
                         ship_holds.push_back(c);
                 }
@@ -2628,7 +2698,7 @@ struct WryNumberGlyph {
                     m.model_transform = A;
                     m.inverse_transpose_model_transform = inverse(transpose(A));
                     m.albedo = make<float4>(1.0, 1.0, 1.0, 1.0);
-                    [s addInstance:m];
+                    add_mesh_instance(s, m);
                 }
 
                 
@@ -2655,6 +2725,7 @@ struct WryNumberGlyph {
 
         for (int i = grid_bounds.a.x; i != grid_bounds.b.x; ++i) {
             for (int j = grid_bounds.a.y; j != grid_bounds.b.y; ++j) {
+                emitting_onscreen = in_view(i, j);
 
                 simd_float4 location = make<float4>(i, j, 0.1f, 1.0f);
                 simd_float4 coordinate = _border_coordinate;
@@ -2721,7 +2792,8 @@ struct WryNumberGlyph {
             // clear colour.
             {
                 constexpr int kMaxCells = 512;
-                simd_int2 a = grid_bounds.a, b = grid_bounds.b;
+                emitting_onscreen = true;
+                simd_int2 a = board_bounds.a, b = board_bounds.b;
                 for (int axis = 0; axis != 2; ++axis) {
                     if (b[axis] - a[axis] > kMaxCells) {
                         int c = (a[axis] + b[axis]) / 2;
@@ -2748,6 +2820,7 @@ struct WryNumberGlyph {
                     map[(size_t)j * (size_t)board.size.x + (size_t)i] = (uint8_t)t;
                 });
                 terrain_kinds = [_ctx.arena copyBytes:map.data() length:map.size()];
+                board_kinds = std::move(map);
 
                 // The look: a pastel per kind, near-black ink, and the
                 // lattice's opacity and reach per kind, with the
@@ -2794,7 +2867,8 @@ struct WryNumberGlyph {
         // console is open: it is modal, and the world shows no hover.
         // (WorldState::handle_events still tracks the pointer, so the
         // tile is right again the moment the console closes.)
-        if (!_model->_gui.console_overlay.active()) {
+        // Nor while path tracing: every move would restart the accumulation
+        if (!_model->_gui.console_overlay.active() && !path_tracing) {
             simd_float4 location = _model->_mouse4;
             location.x = round(location.x);
             location.y = round(location.y);
@@ -2825,6 +2899,26 @@ struct WryNumberGlyph {
     // of tiny objects being obstructed by foreground geometry; everything
     // appears at a similar LOD, a similar distance, and doesn't overlap other
     // geometry much (except the local ground plane)
+
+    // The sun's irradiance at normal incidence (the Lambert term divides
+    // by pi); see ibl_scale below for the balance.  A warm sun against the
+    // blue sky, so a white board lands near white rather than blue.  The
+    // raster's directional light and the path tracer both read it
+    const simd_float3 sun_irradiance = simd_make_float3(1.08f, 1.0f, 0.84f) * _model->_exposure;
+
+    if (path_tracing) {
+        [self encodePathTraceWithCommandBuffer:command_buffer
+                                      uniforms:uniforms
+                                sunIrradiance:sun_irradiance
+                                       symbols:symbols
+                                symbolOnscreen:symbol_onscreen
+                                        prints:prints
+                                       strings:strings
+                                        meshes:meshes
+                                  meshOnscreen:mesh_onscreen
+                                         board:board
+                                         kinds:board_kinds];
+    } else {
 
     // Render a shadow map for a directional light source at infinity
     //
@@ -3228,7 +3322,7 @@ struct WryNumberGlyph {
                 // term divides by pi); see ibl_scale above for the balance
                 // A warm sun against the blue sky, so a white board lands
                 // near white rather than blue
-                uniforms.radiance = simd_make_float3(1.08f, 1.0f, 0.84f) * _model->_exposure;
+                uniforms.radiance = sun_irradiance;
                 [encoder setFragmentBytes:&uniforms
                                    length:sizeof(MeshUniforms)
                                   atIndex:AAPLBufferIndexUniforms];
@@ -3400,6 +3494,8 @@ struct WryNumberGlyph {
         [encoder endEncoding];
 
     }
+
+    } // !path_tracing
         
     ++_frame_count;
 
@@ -3409,6 +3505,88 @@ struct WryNumberGlyph {
     // (acquired as late as possible) and presents + commits the command buffer.
     return _deferredLightColorAttachmentTexture;
 
+}
+
+
+// The path-traced reference in place of the raster passes
+// (docs/path_tracing.md): the tracer takes the frame's instance lists,
+// traces its band of samples, and the composite pass shows its mean, then
+// the GUI on top, as the raster's composite would
+- (void)encodePathTraceWithCommandBuffer:(id<MTLCommandBuffer>)command_buffer
+                                uniforms:(const MeshUniforms&)uniforms
+                          sunIrradiance:(simd_float3)sun_irradiance
+                                 symbols:(const std::vector<WrySymbolInstance>&)symbols
+                          symbolOnscreen:(const std::vector<bool>&)symbol_onscreen
+                                  prints:(const std::vector<WryDecalInstance>&)prints
+                                 strings:(const std::vector<WryDecalInstance>&)strings
+                                  meshes:(WryMesh* const*)meshes
+                            meshOnscreen:(const std::vector<bool>*)mesh_onscreen
+                                   board:(const WryTerrainUniforms&)board
+                                   kinds:(const std::vector<uint8_t>&)kinds
+{
+    if (!_pathTracer)
+        _pathTracer = [[WryPathTracer alloc] initWithContext:_ctx];
+
+    wry::PathTraceFrame frame = {};
+    frame.camera_position_world = uniforms.camera_position_world;
+    frame.camera_ray_centre = uniforms.camera_ray_centre;
+    frame.camera_ray_dx = uniforms.camera_ray_dx;
+    frame.camera_ray_dy = uniforms.camera_ray_dy;
+    frame.viewport = simd_make_int2((int)_deferredLightColorAttachmentTexture.width,
+                                    (int)_deferredLightColorAttachmentTexture.height);
+    // The projection's clip planes (WorldState::_regenerate_uniforms),
+    // as view depth: 5 and 50 times the dolly
+    const float dolly = 1.0f / _model->_zoom;
+    frame.near_depth = 5.0f * dolly;
+    frame.far_depth = 50.0f * dolly;
+    frame.light_direction = simd_normalize(uniforms.light_direction);
+    frame.sun_irradiance = sun_irradiance;
+    frame.exposure = _model->_exposure;
+    frame.environment = _model->_environment;
+    frame.view = _model->_path_trace_view;
+    frame.antialias = _model->_path_trace_antialias;
+    frame.bounces = _model->_path_trace_bounces;
+    frame.target = _model->_path_trace_target;
+    frame.generation = _model->_path_trace_generation;
+    frame.progress = _model->_path_trace_progress;
+    frame.symbols = &symbols;
+    frame.symbol_onscreen = &symbol_onscreen;
+    frame.prints = &prints;
+    frame.strings = &strings;
+    for (int k = 0; k != WRY_PT_MAX_MESHES; ++k) {
+        frame.meshes[k] = meshes[k];
+        frame.mesh_onscreen[k] = &mesh_onscreen[k];
+    }
+    frame.board = board;
+    frame.kinds = &kinds;
+    frame.field = _symbolField;
+    frame.symbol_atlas = _symbols;
+    frame.glyphs = _glyphs;
+    frame.decal_font = _model->_caption_decals > 0 ? _decalFontTexture : nil;
+    [_pathTracer encodeFrame:frame commandBuffer:command_buffer];
+
+    // The composite pass as the raster has it (the colour, the ambient
+    // the pipelines declare, the depth buffer), the resolve in place of
+    // the composite
+    MTLRenderPassDescriptor* descriptor = [MTLRenderPassDescriptor new];
+    descriptor.colorAttachments[AAPLColorIndexColor].texture = _deferredLightColorAttachmentTexture;
+    descriptor.colorAttachments[AAPLColorIndexColor].loadAction = MTLLoadActionClear;
+    descriptor.colorAttachments[AAPLColorIndexColor].clearColor = MTLClearColorMake(0, 0, 0, 1);
+    descriptor.colorAttachments[AAPLColorIndexColor].storeAction = MTLStoreActionStore;
+    descriptor.colorAttachments[AAPLColorIndexAmbient].texture = _deferredAmbientColorAttachmentTexture;
+    descriptor.colorAttachments[AAPLColorIndexAmbient].loadAction = MTLLoadActionDontCare;
+    descriptor.colorAttachments[AAPLColorIndexAmbient].storeAction = MTLStoreActionDontCare;
+    descriptor.depthAttachment.texture = _deferredDepthAttachmentTexture;
+    descriptor.depthAttachment.loadAction = MTLLoadActionClear;
+    descriptor.depthAttachment.clearDepth = 1.0;
+    descriptor.depthAttachment.storeAction = MTLStoreActionDontCare;
+    id<MTLRenderCommandEncoder> encoder = [command_buffer renderCommandEncoderWithDescriptor:descriptor];
+    encoder.label = @"Path trace resolve and GUI";
+    [_pathTracer resolveWithEncoder:encoder];
+    [encoder setDepthStencilState:_ctx.disabledDepthStencilState];
+    [encoder setCullMode:MTLCullModeNone];
+    [self drawOverlay:encoder];
+    [encoder endEncoding];
 }
 
 

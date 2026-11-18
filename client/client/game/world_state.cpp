@@ -492,6 +492,8 @@ namespace wry {
     }
 
     WorldState::~WorldState() {
+        _path_trace_progress->alive = false;
+        _path_trace_progress->active = false;
         _end_session(std::chrono::milliseconds(500));
         if (_gui.world == this)
             _gui.world = nullptr;
@@ -1945,6 +1947,148 @@ namespace wry {
                     return Reply::error(String(("no " + n + ".png in assets").c_str()));
                 ws._environment = n;
                 return Reply::ok();
+            })));
+
+        // The path-traced reference (docs/path_tracing.md)
+        registry.add(make_command<Ctx>(
+            "path-trace", "Render the world view by path tracing, a slow and noisy reference for the fast renderer that converges as it accumulates (pause the world first): the view (off for the fast renderer; beauty, or one term of it: direct, ambient, sky, sky-open, indirect; or occlusion, albedo, normal, error), then whether to jitter the rays over each pixel unfiltered (else one ray through its centre, filtered as the raster), the indirect bounces at most, the cells beyond the view whose objects still cast and reflect, and the samples per pixel to stop at.  Issuing it restarts the accumulation", Category::local,
+            std::tuple{
+                Param<Ctx, String>{"view", "off, beauty, direct, ambient, sky, sky-open, indirect, occlusion, albedo, normal or error", String("beauty"), nullptr,
+                                   {"off", "beauty", "direct", "ambient", "sky", "sky-open", "indirect",
+                                    "occlusion", "albedo", "normal", "error"}},
+                Param<Ctx, bool>{"antialias", "true: jittered unfiltered rays; false: pixel centres filtered as the raster", false},
+                Param<Ctx, int64_t>{"bounces", "indirect bounces at most, 0 to 64", 16},
+                Param<Ctx, int64_t>{"margin", "cells beyond the view, 0 to 32", 4},
+                Param<Ctx, int64_t>{"target", "samples per pixel to stop at, 1 to 1048576", 4096},
+            },
+            with_world([](WorldState& ws, String const& view, bool antialias, int64_t bounces, int64_t margin, int64_t target) {
+                static constexpr std::pair<std::string_view, int> kViews[] = {
+                    {"off", WRY_PT_VIEW_OFF}, {"beauty", WRY_PT_VIEW_BEAUTY}, {"direct", WRY_PT_VIEW_DIRECT},
+                    {"ambient", WRY_PT_VIEW_AMBIENT}, {"sky", WRY_PT_VIEW_SKY}, {"sky-open", WRY_PT_VIEW_SKY_OPEN},
+                    {"indirect", WRY_PT_VIEW_INDIRECT}, {"occlusion", WRY_PT_VIEW_OCCLUSION},
+                    {"albedo", WRY_PT_VIEW_ALBEDO}, {"normal", WRY_PT_VIEW_NORMAL}, {"error", WRY_PT_VIEW_ERROR},
+                };
+                std::string_view v((const char*)view.chars.data(), view.chars.size());
+                int which = -1;
+                for (auto const& [name, code] : kViews)
+                    if (name == v)
+                        which = code;
+                if (which < 0)
+                    return Reply::error(String("view must be off, beauty, direct, ambient, sky, sky-open, indirect, occlusion, albedo, normal or error"));
+                bounces = std::clamp<int64_t>(bounces, 0, 64);
+                margin = std::clamp<int64_t>(margin, 0, 32);
+                target = std::clamp<int64_t>(target, 1, int64_t{1} << 20);
+                // The error view shows the beauty's accumulation, so
+                // switching between the two with nothing else changed
+                // keeps it; anything else restarts
+                auto beauty = [](int v) { return v == WRY_PT_VIEW_ERROR ? WRY_PT_VIEW_BEAUTY : v; };
+                const bool keep = beauty(which) == WRY_PT_VIEW_BEAUTY
+                    && beauty(ws._path_trace_view) == WRY_PT_VIEW_BEAUTY
+                    && which != ws._path_trace_view
+                    && antialias == ws._path_trace_antialias
+                    && bounces == ws._path_trace_bounces
+                    && margin == ws._path_trace_margin
+                    && target == ws._path_trace_target;
+                ws._path_trace_view = which;
+                ws._path_trace_antialias = antialias;
+                ws._path_trace_bounces = (int)bounces;
+                ws._path_trace_margin = (int)margin;
+                ws._path_trace_target = target;
+                if (!keep)
+                    ++ws._path_trace_generation;
+                auto& progress = *ws._path_trace_progress;
+                progress.view = which;
+                progress.target = target;
+                progress.generation = ws._path_trace_generation;
+                return Reply::ok();
+            })));
+
+        registry.add(make_command<Ctx>(
+            "path-trace-wait", "Wait until every pixel of the path-traced view has this many samples (at most its target); fails if path tracing is off or the world goes away", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"samples", "samples per pixel", 1},
+            },
+            with_world([](WorldState& ws, int64_t samples) {
+                if (ws._path_trace_view == WRY_PT_VIEW_OFF)
+                    return Reply::error(String("path tracing is off"));
+                if (samples > ws._path_trace_target)
+                    return Reply::error(String("more samples than the target; raise it with path-trace"));
+                // Done once the renderer has traced this accumulation (the
+                // generation current now) to the count; fails if another
+                // source turns tracing off, restarts it or lowers the
+                // target under the count meanwhile
+                struct Waiting final : command::Pending {
+                    std::shared_ptr<WorldState::PathTraceProgress> progress;
+                    uint64_t samples;
+                    uint64_t generation;
+                    Waiting(std::shared_ptr<WorldState::PathTraceProgress> p, uint64_t n, uint64_t g)
+                    : progress(std::move(p)), samples(n), generation(g) {}
+                    std::optional<Reply> poll() override {
+                        const auto& p = *progress;
+                        if (!p.alive)
+                            return Reply::error(String("the world went away"));
+                        if (p.view == WRY_PT_VIEW_OFF)
+                            return Reply::error(String("path tracing was turned off"));
+                        if (p.generation != generation)
+                            return Reply::error(String("the accumulation was restarted"));
+                        if (p.target < (int64_t)samples)
+                            return Reply::error(String("the target was lowered below the samples"));
+                        if (p.traced_generation != generation || p.samples < samples)
+                            return std::nullopt;
+                        return Reply::ok();
+                    }
+                };
+                return Reply::later(std::make_shared<Waiting>(ws._path_trace_progress,
+                                                              (uint64_t)std::max<int64_t>(samples, 0),
+                                                              ws._path_trace_generation));
+            })));
+
+        registry.add(make_command<Ctx>(
+            "path-trace-status", "Report the path-traced view's progress: samples per pixel, restarts, the last frame's GPU time and shape, and the beauty's noise (the standard error of each pixel's mean relative to it: median and 90th percentile)", Category::local,
+            std::tuple{},
+            with_world([](WorldState& ws) {
+                auto describe = [](WorldState::PathTraceProgress const& p, int64_t target, bool noise) {
+                    char buffer[400];
+                    int n = std::snprintf(buffer, sizeof(buffer),
+                                          "%llu of %lld samples per pixel, %llu restarts, %.1f ms per frame (%d samples x %d rows)",
+                                          (unsigned long long)p.samples, (long long)target,
+                                          (unsigned long long)p.restarts, p.frame_ms,
+                                          p.samples_per_frame, p.rows_per_frame);
+                    if (p.restart_streak > 2 && n > 0 && (size_t)n < sizeof(buffer))
+                        n += std::snprintf(buffer + n, sizeof(buffer) - (size_t)n,
+                                           "; restarting every frame (is the world paused?)");
+                    if (noise && p.noise_median < 0.0 && n > 0 && (size_t)n < sizeof(buffer))
+                        std::snprintf(buffer + n, sizeof(buffer) - (size_t)n, "; noise not measurable yet");
+                    else if (noise && n > 0 && (size_t)n < sizeof(buffer))
+                        std::snprintf(buffer + n, sizeof(buffer) - (size_t)n,
+                                      "; relative standard error median %.4f, 90th percentile %.4f; %llu non-finite samples dropped",
+                                      p.noise_median, p.noise_p90, (unsigned long long)p.dropped);
+                    return String(buffer);
+                };
+                auto progress = ws._path_trace_progress;
+                if (ws._path_trace_view == WRY_PT_VIEW_OFF)
+                    return Reply::ok(String("path tracing is off"));
+                if (ws.show_map())
+                    return Reply::ok(String("path tracing is not accumulating (the map is showing)"));
+                struct Reporting final : command::Pending {
+                    std::shared_ptr<WorldState::PathTraceProgress> progress;
+                    uint64_t asked;
+                    int64_t target;
+                    decltype(describe) say;
+                    Reporting(std::shared_ptr<WorldState::PathTraceProgress> p, uint64_t a, int64_t t, decltype(describe) d)
+                    : progress(std::move(p)), asked(a), target(t), say(d) {}
+                    std::optional<Reply> poll() override {
+                        if (!progress->alive)
+                            return Reply::error(String("the world went away"));
+                        if (progress->view == WRY_PT_VIEW_OFF)
+                            return Reply::ok(String("path tracing is off"));
+                        if (progress->noise_answered < asked)
+                            return std::nullopt;
+                        return Reply::ok(say(*progress, target, true));
+                    }
+                };
+                uint64_t asked = ++progress->noise_asked;
+                return Reply::later(std::make_shared<Reporting>(progress, asked, ws._path_trace_target, describe));
             })));
 
         // Factorio's Q: a full hand is emptied; an empty hand picks up the
