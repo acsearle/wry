@@ -252,8 +252,8 @@ namespace wry {
         // not write the user's history.
         void persist_console_history();
         // Block for up to `timeout` until there is input to frame on: a
-        // line on the control socket, or news on the world's connection
-        // (finalized steps, donation requests, a save transfer), taking
+        // line on the control socket, or news from the world (the step
+        // pump has published a World the frame has not adopted), taking
         // nothing.  Returns early and spuriously as it likes; the caller
         // re-checks idle().  The idle of a host that renders only on
         // demand (multiplayer.md section 8, "Waiting")

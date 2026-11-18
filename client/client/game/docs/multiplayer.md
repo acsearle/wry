@@ -227,10 +227,13 @@ smoke test keeps its current timing.  A pure client's `pause` is
 refused in this revision; majority-rule pause voting (the 2026-08-25
 design, kept in open item 11.4) comes later.
 
-**Clients keep two clocks.**  The *step clock* applies finalized steps:
-one per frame when current, several per frame (bounded, so the GUI
-stays live) when behind.  The *frame clock* renders whatever the newest
-applied World is.  The smoothed render delay and rubber-banding of the
+**Clients keep two clocks.**  The *step clock* applies finalized steps
+as they arrive, off the main thread: the step pump, one pool task per
+session ([docs/step_pump.md](../../../../docs/step_pump.md), since
+2026-11-19; before it, the main thread applied at most 64 a frame).  The
+*frame clock* renders whatever the newest applied World is, adopting
+the pump's latest snapshot once per frame, so a slow frame lowers the
+frame rate and never the step rate.  The smoothed render delay and rubber-banding of the
 2026-08-25 design (an audio-style jitter buffer) are deferred to open
 item 11.6; the first version renders the latest applied step and
 accepts the jitter.  Gameplay absorbs what the network cannot: no
@@ -566,8 +569,9 @@ which is the property that keeps the trust rules checkable.  The timer is
 Bulk work per event is bounded (a save transfer is chunked, one chunk
 per event) so relay traffic cannot starve the clock.
 
-**The client** owns one `Connection` to its server, whose inbox the main
-thread takes once per frame alongside the control socket's events.  The
+**The client** owns one `Connection` to its server, whose inbox the
+step pump takes (docs/step_pump.md; until 2026-11-19 the main thread
+took it once per frame alongside the control socket's events).  The
 `Server` seam of `game/server.hpp` keeps its shape in spirit:
 `submit(action)` frames and queues an `ACTION`; `poll()` becomes
 `take_steps()`, yielding zero or more finalized steps; `World::step`
@@ -576,9 +580,9 @@ consumes exactly one, with that step's commands as its input (section
 the same code over a socket pair.
 
 **Waiting.**  The headless and offscreen hosts idle on the control
-socket and on the connection's inbox at once, for finalized steps,
-donation requests and save completions (landed 2026-10-26 as
-`GuiContext::wait_for_input`): one `when_any` (ext/execution.hpp) over
+socket and on the world's news at once (landed 2026-10-26 as
+`GuiContext::wait_for_input`, on the connection's inbox; since the step
+pump, on the pump's news queue, one item per World it publishes): one `when_any` (ext/execution.hpp) over
 the two queues' non-consuming `wait()`s, added to the queue for this,
 so that a tie's loser drops nothing; the frame that follows takes from
 both.  The alternative considered, every producer posting to one
@@ -586,7 +590,8 @@ main-thread inbox, was not needed.
 
 **The host's client** is a client like any other, plus the private
 donation channel: a queue from the server task to the main thread
-carrying `Donate{boundary, transfer}`, and the reverse path is the save
+carrying `Donate{boundary, transfer}` (to the step pump, which serves
+it once its head is at the boundary), and the reverse path is the save
 task's completion (`io/save.cpp`'s coroutine, which already serializes a
 rooted snapshot off the main thread) handing its buffer to the server's
 inbox.  No GC object crosses into the server task: the Root lives in

@@ -169,7 +169,7 @@ namespace wry {
                     require(std::chrono::steady_clock::now() < deadline);
                     host.frame();
                     WorldState* world = host.world();
-                    if (!(world && world->has_server_input()))
+                    if (!(world && world->has_world_news()))
                         co_await testing::pause(std::chrono::milliseconds(1));
                 }
             };

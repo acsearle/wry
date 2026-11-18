@@ -77,7 +77,7 @@ struct WryNumberGlyph {
     // The world's state (MVC model): world pipeline, session view/input state,
     // overlays, and the per-frame logic (update / input).  This scene is a thin
     // Metal renderer over it -- _model->_world_to_render is the world the
-    // renderer draws, advanced by _model->update().
+    // renderer draws, adopted from the step pump by _model->update().
     std::shared_ptr<wry::WorldState> _model;
 
     
@@ -1956,9 +1956,10 @@ struct WryNumberGlyph {
     using namespace ::simd;
     using namespace ::wry;
 
-    // -update advanced the displayed world (and serviced the GC) immediately
-    // before this -encode, on the same thread and frame; we only read it here.
-    Root<World*>& new_world = _model->_world_to_render;
+    // -update adopted the newest World the step pump published (and
+    // serviced the GC) immediately before this -encode, on the same thread
+    // and frame; we only read it here (docs/step_pump.md)
+    Root<World const*> const& new_world = _model->_world_to_render;
     assert(new_world);
 
     // Adopt a freshly built world map, if the background builder finished

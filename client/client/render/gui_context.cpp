@@ -258,8 +258,9 @@ namespace wry {
         if (console_source.busy() || !detached.empty() || !events.empty()
             || !screenshot_requests.empty())
             return false;
-        // Finalized steps waiting to be applied are a frame's work too
-        if (world && world->has_server_input())
+        // A World the step pump has published and the frame not yet
+        // adopted is a frame's work too
+        if (world && world->has_world_news())
             return false;
         for (auto const& [id, source] : socket_sources)
             if (source->busy())
@@ -554,7 +555,7 @@ namespace wry {
     void GuiContext::wait_for_input(std::chrono::milliseconds timeout) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         Inbox* commands = control_socket ? &control_socket->events() : nullptr;
-        Inbox* server = world ? world->server_inbox() : nullptr;
+        Inbox* server = world ? world->news_inbox() : nullptr;
         if (commands && server) {
             (void) execution::sync_wait(with_deadline(deadline, wait_either(*commands, *server)));
         } else if (commands || server) {

@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "concurrent_queue.hpp"
+#include "atomic.hpp"
 #include "contiguous_deque.hpp"
 #include "entity.hpp"
 #include "functional.hpp"
@@ -32,6 +32,8 @@
 #include "gui_overlay.hpp"
 #include "hash.hpp"
 #include "machine.hpp"
+#include "mpsc_queue.hpp"
+#include "nursery.hpp"
 #include "palette.hpp"
 #include "save.hpp"
 #include "simd.hpp"
@@ -44,6 +46,8 @@
 #include "server.hpp"
 #include "host.hpp"
 #include "session_log.hpp"
+#include "single_consumer_event.hpp"
+#include "transport.hpp"
 
 namespace wry {
     
@@ -66,12 +70,7 @@ namespace wry {
         // console, notifications).  Set in the constructor; see gui_context.hpp.
         GuiContext& _gui;
 
-        // simulation state
-        // World* _world;
-        // BlockingDeque<World const*> _worlds;
-        BlockingDeque<Root<World const*>> _worlds;
-
-
+        // simulation state: see the step pump (_pump), below
 
         // debug toggles ('j' / 'p' / 'w')
         bool _show_jacobian = false;
@@ -296,48 +295,14 @@ namespace wry {
         // constructor's regenerate call, before any renderer exists.
         float2 _shadow_map_size = { 2048.0f, 2048.0f };
 
-        // The world advanced one step by update(), read by the renderer the
-        // same frame (the _worlds deque stays the source of truth).
-        Root<World*> _world_to_render;
-
-        // Steps this WorldState has applied: what `step n` waits on
-        uint64_t _steps_taken = 0;
-
-        // Finalized steps taken from the server and not yet applied: a
-        // frame applies at most max_steps_per_frame, so catching up (a
-        // join replaying the stream) keeps the GUI live
-        std::deque<Step> _backlog;
-        static constexpr size_t max_steps_per_frame = 64;
-
-        // The session (multiplayer.md section 2): a Host -- the relay and
-        // this client over a socket pair -- when playing alone or hosting
-        // others, or a bare RemoteServer when joined into another's game.
-        // _server is the seam in either case: input is submitted there and
-        // update() takes the finalized steps back as the step's input.
-        // This client has no Player until the relay's JOIN rides a step
-        // (requested whenever a world is installed).
-        std::unique_ptr<Host> _host;
-        std::unique_ptr<RemoteServer> _remote;
-        Server* _server = nullptr;
-        RemoteServer::State _logged_state = RemoteServer::State::CONNECTING;
-
-        // A joiner holds its stream until the donated save has landed
-        // (multiplayer.md section 6): the displayed world is a placeholder
-        // meanwhile.  A host's client serves the relay's donation requests
-        // once its World is at the requested boundary
-        bool _awaiting_save = false;
-        std::vector<RemoteServer::Donation> _donations;
-        void _serve_donations();
-
-        // The session log (multiplayer.md section 5, game/session_log.hpp):
-        // the installed World as the checkpoint, then every applied step
-        // and the hash it produced here.  Opened when a session gets its
-        // World, closed with the session; the file appears at the first
-        // step.  The directory is the saves' unless set before the
-        // session's World is installed (tests)
-        std::filesystem::path _log_directory;
-        std::unique_ptr<SessionLog> _log;
-        void _open_log(World const* world);
+        // ---- The step pump (docs/step_pump.md) ---------------------------
+        //
+        // The finalized steps are applied off the main thread, by one pool
+        // task per session (step_pump in world_state.cpp), as they arrive:
+        // the world keeps pace with the server however slow the frames
+        // are.  The main thread never applies a step.  Once per frame
+        // (take_published, from update) it ADOPTS the newest World the pump
+        // has published, and everything the frame does reads that.
 
         // A replay (the `replay` command): the log's checkpoint installed,
         // its steps the backlog, each applied step's hash checked against
@@ -351,9 +316,159 @@ namespace wry {
             bool same_build = true;         // this build wrote the log
             std::optional<String> result;
         };
-        std::optional<Replay> _replay;
+
+        // What the main thread sees of a replay
+        struct ReplayView {
+            std::filesystem::path path;
+            uint64_t through = 0;
+            std::optional<String> result;
+        };
+
+        // A snapshot of the pump's state, as the main thread adopts it
+        struct Published {
+            Root<World const*> world;       // the pump's head
+            uint64_t steps_taken = 0;
+            bool awaiting_save = false;
+            std::optional<ReplayView> replay;
+            std::filesystem::path log_path;  // empty: no log file (yet)
+            std::vector<String> messages;    // log lines, taken by the adopter
+        };
+
+        struct Pump {
+
+            // ---- Owned by the pump task while it runs, and by the main
+            //      thread while it is stopped (docs/step_pump.md section 4):
+            //      never both, so unlocked
+
+            // The newest applied World: the stream's position
+            Root<World const*> head;
+            // Steps applied since `head`'s lineage was installed: what
+            // `step n` counts
+            uint64_t steps_taken = 0;
+            // Finalized steps taken and not yet applied, or a replay's
+            std::deque<Step> backlog;
+            // A joiner holds its stream until the donated save has landed
+            // (multiplayer.md section 6): head is a placeholder meanwhile.
+            // A host's client serves the relay's donation requests once
+            // head is at the requested boundary
+            bool awaiting_save = false;
+            std::vector<RemoteServer::Donation> donations;
+            // The session log (multiplayer.md section 5,
+            // game/session_log.hpp): the installed World as the checkpoint,
+            // then every applied step and the hash it produced here.  The
+            // directory is the GUI's (empty: no file) unless set before the
+            // session's World is installed (tests)
+            std::filesystem::path log_directory;
+            std::unique_ptr<SessionLog> log;
+            std::optional<Replay> replay;
+            // Lines for the main thread's log, moved into the snapshot at
+            // each publish
+            std::vector<String> messages;
+
+            // ---- Written by the main thread only, while the pump is
+            //      stopped; read by both
+
+            // The session's connection, borrowed from the WorldState's
+            // _host or _remote; null when sessionless (a replay)
+            RemoteServer* client = nullptr;
+            // Where donations' serializations run
+            coroutine::Nursery* scope = nullptr;
+
+            // ---- Shared
+
+            // steps_taken, as the pump last stored it: `step n`'s
+            // baseline.  Relaxed: a counter, publishing nothing
+            Atomic<uint64_t> applied{0};
+            // The snapshot (guarded by published_mutex, a leaf lock held
+            // only to copy into or out of it)
+            std::mutex published_mutex;
+            Published published;
+            // One item per publish, consumed by the main thread only: what
+            // a host idling between frames waits on (wait_for_input), the
+            // transport inbox being the pump's
+            coroutine::MultiProducerSingleConsumerQueue<Transport::Event> news;
+
+            // ---- The pump's operations, on the state above; the
+            //      owner's thread
+
+            // `world` as head, a new lineage: the count restarts, a JOIN
+            // is asked for, and the log restarts from it (unless it is a
+            // joiner's placeholder)
+            void install(World* world);
+            void open_log(World const* world);
+            // The connection's news: steps into the backlog, donation
+            // requests, a donated save installed.  Whether anything but
+            // the backlog changed (worth a publish)
+            bool take_input();
+            void serve_donations();
+            void replay_check(Step const& step);
+            // Copy into the snapshot, then a news item
+            void publish();
+        };
+        Pump _pump;
+
+        // One run of the pump task: main asks it to end with `stop` and a
+        // wake (the transport inbox); its last act is `ended`
+        struct PumpRun {
+            Atomic<bool> stop{false};
+            coroutine::SingleConsumerEvent ended;
+            RemoteServer* client = nullptr;     // what to wake
+        };
+        std::shared_ptr<PumpRun> _pump_run;
+
+        // Stop the pump (if it runs) and wait until it has ended: then the
+        // main thread owns _pump.  At most one step plus a pool hop.
+        // Blocking, or awaited
+        void _stop_pump();
+        [[nodiscard]] coroutine::Task _stop_pump_async();
+        // Start a run, if there is anything to pump (a session, or a
+        // replay's backlog)
+        void _start_pump();
+        // RAII around each lifecycle entry point: stop the pump; at the
+        // outermost exit publish, adopt, and start it again
+        int _pump_stopped_depth = 0;
+        struct PumpStopped {
+            WorldState& ws;
+            explicit PumpStopped(WorldState& w);
+            ~PumpStopped();
+        };
+
+        // The displayed snapshot (main thread): adopted from the pump by
+        // take_published, read by the renderer and every command
+        Root<World const*> _world_to_render;
+        uint64_t _steps_taken = 0;
+        bool _awaiting_save = false;
+        std::optional<ReplayView> _replay_view;
+        std::filesystem::path _log_path;
+        // Adopt the newest snapshot: once per frame (update), and at the
+        // end of each lifecycle change
+        void take_published();
+
+        // The session (multiplayer.md section 2): a Host -- the relay and
+        // this client over a socket pair -- when playing alone or hosting
+        // others, or a bare RemoteServer when joined into another's game.
+        // _server is the seam in either case: input is submitted there and
+        // update() takes the finalized steps back as the step's input.
+        // This client has no Player until the relay's JOIN rides a step
+        // (requested whenever a world is installed).
+        std::unique_ptr<Host> _host;
+        std::unique_ptr<RemoteServer> _remote;
+        Server* _server = nullptr;
+        RemoteServer::State _logged_state = RemoteServer::State::CONNECTING;
+
+        // The session log is the pump's (_pump.log): opened when a session
+        // gets its World, closed with the session; the file appears at the
+        // first step.  The pump stopped
+        void _open_log(World const* world);
+
+        // Replay a session log (the `replay` command); stop one in
+        // progress, leaving the World where it got to
         std::expected<void, String> replay(String const& path, std::optional<uint64_t> through);
-        void _replay_check(Step const& step);
+        void cancel_replay();
+
+        // A stand-in for a slow frame (the `frame-stall` command): update()
+        // sleeps this long, every frame
+        std::chrono::milliseconds _frame_stall{0};
 
         // The displayed World as a game of our own from here: a fork
         // (leave), or a replayed World played on (host)
@@ -368,8 +483,7 @@ namespace wry {
         void _start_hosting(uint64_t head);
         void _start_joining(String const& address, uint16_t port);
         void _end_session(std::chrono::milliseconds grace);
-        void _apply_step(Step const& step);
-        [[nodiscard]] coroutine::Task _apply_step_async(Step const& step);
+        void _clear_session();
 
         // The session commands (commands.md section 7): listen for players
         // (the bound port), join another's game at address:port (the
@@ -379,11 +493,12 @@ namespace wry {
         void join(String const& address, uint16_t port);
         void leave();
 
-        // Whether finalized steps or the connection's news are waiting
-        bool has_server_input();
-        // The connection's inbox, for a host that idles on it; null
-        // without a session
-        coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* server_inbox();
+        // Whether the pump has published since the last adoption: a frame
+        // to run (the headless and offscreen hosts' idle)
+        bool has_world_news();
+        // What a host idling between frames waits on for that (the
+        // pump's news queue; the main thread is its consumer)
+        coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* news_inbox();
 
         // Graceful end of the session, for an owner that can await it
         // (tests); the destructor does the same, blocking, if it has not
@@ -406,8 +521,9 @@ namespace wry {
 
             // The session and the first world: our own host and the
             // starting scenario or the save, or, on --join and no save, a
-            // client of another's game.  At construction _worlds is empty,
-            // so the drain inside is a no-op.
+            // client of another's game; then the pump that steps it
+            _pump.log_directory = _gui.session_log_directory;
+            _pump.scope = _gui.scope;
             _start_session(std::move(save));
 
             _regenerate_uniforms();
@@ -417,12 +533,9 @@ namespace wry {
 
         }
 
-        // Replace the displayed world wholesale, re-pointing _local_player at
-        // the new world's Player.  new_game builds the starting scenario;
-        // load_from_save deserializes a save file.  Both run on the main
-        // thread between the event pump and the renderer, when _worlds holds
-        // exactly the one displayed world, so draining and refilling it is
-        // race-free.  Defined in model.cpp (needs io/save.hpp).
+        // Replace the world wholesale, in a new session.  new_game builds
+        // the starting scenario; load_from_save deserializes a save file.
+        // Both run on the main thread, the pump stopped around them.
         void new_game();
         // False, changing nothing, if the save cannot be loaded
         bool load_from_save(std::string const& name);
@@ -431,8 +544,7 @@ namespace wry {
         // (io/save.hpp): as `name` (a checked name), replacing any save of
         // that name, or as the next save_N if `name` is empty.  `on_done`
         // runs on a worker thread once it has published the save, or
-        // failed (an empty name).  The world is read non-destructively
-        // (popped and re-pushed).  False, and nothing saved, if there is
+        // failed (an empty name).  False, and nothing saved, if there is
         // no displayed world
         bool save_current(std::string name = {},
                           move_only_function<void(SaveOutcome)> on_done = {});
@@ -440,8 +552,8 @@ namespace wry {
         void _regenerate_uniforms();
 
         // Per-frame logic, driven by the scene (which is now a thin Metal
-        // renderer over this state): advance the simulation and process input.
-        // Defined in model.cpp.
+        // renderer over this state): adopt the newest World the pump has
+        // published, and process input.
         void update(double dt);
         void handle_events(float2 view_size_pt);
         void pump_legacy_event(gui::Event const& e);  // legacy world-input fallback

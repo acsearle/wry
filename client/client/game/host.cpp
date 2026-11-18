@@ -42,6 +42,7 @@ namespace wry {
         enum Posted : uint64_t {
             DIAL_FAILED = 1,    // bytes: u64 errno
             SAVE_READY = 2,     // bytes: u64 transfer, u64 boundary, the save
+            WAKE = 3,           // nothing: wake() for the inbox's consumer
         };
 
         std::string u64_bytes(uint64_t x) {
@@ -102,11 +103,43 @@ namespace wry {
     }
 
     int RemoteServer::adopt(int fd) {
+        std::scoped_lock lock{_mutex};
         return _transport->adopt(fd);
     }
 
     void RemoteServer::dial(std::string address, uint16_t port) {
+        std::scoped_lock lock{_mutex};
         _scope->soon(dial_task(_transport, _dial_stop, std::move(address), port));
+    }
+
+    void RemoteServer::wake() {
+        // The transport is never reassigned; post is thread-safe
+        _transport->post(WAKE, std::string());
+    }
+
+    RemoteServer::State RemoteServer::state() const {
+        std::scoped_lock lock{_mutex};
+        return _state;
+    }
+
+    ClientID RemoteServer::client_id() const {
+        std::scoped_lock lock{_mutex};
+        return _client_id;
+    }
+
+    uint64_t RemoteServer::quantum_ns() const {
+        std::scoped_lock lock{_mutex};
+        return _quantum_ns;
+    }
+
+    uint64_t RemoteServer::head() const {
+        std::scoped_lock lock{_mutex};
+        return _next_step - 1;
+    }
+
+    std::string RemoteServer::reason() const {
+        std::scoped_lock lock{_mutex};
+        return _reason;
     }
 
     void RemoteServer::_send(std::string message) {
@@ -124,6 +157,11 @@ namespace wry {
     }
 
     bool RemoteServer::submit(Player::Action action) {
+        std::scoped_lock lock{_mutex};
+        return _submit(std::move(action));
+    }
+
+    bool RemoteServer::_submit(Player::Action action) {
         if (_state == State::DISCONNECTED)
             return false;
         // What can travel is decided before the queue, so a held action is
@@ -146,10 +184,12 @@ namespace wry {
     }
 
     std::vector<RemoteServer::Donation> RemoteServer::take_donations() {
+        std::scoped_lock lock{_mutex};
         return take(_donations);
     }
 
     void RemoteServer::donate(Donation const& donation, Root<World const*> snapshot, coroutine::Nursery& scope) {
+        // Touches only the transport, which is never reassigned
         scope.soon(donate_task(_transport, donation, std::move(snapshot)));
     }
 
@@ -162,15 +202,18 @@ namespace wry {
     }
 
     std::optional<RemoteServer::DonatedSave> RemoteServer::take_save() {
+        std::scoped_lock lock{_mutex};
         return std::exchange(_save, std::nullopt);
     }
 
     void RemoteServer::report_hash(uint64_t step, uint64_t hash) {
+        std::scoped_lock lock{_mutex};
         if ((_state == State::SUBSCRIBED) || (_state == State::JOINED))
             _send(wire::encode_hash(step, hash));
     }
 
     void RemoteServer::request_join() {
+        std::scoped_lock lock{_mutex};
         _join_requested = true;
         if ((_state == State::SUBSCRIBED) && !_join_sent) {
             _join_sent = true;
@@ -274,7 +317,7 @@ namespace wry {
                         std::vector<Player::Action> queued = std::move(_queued);
                         _queued.clear();
                         for (Player::Action& a : queued)
-                            (void) submit(std::move(a));
+                            (void) _submit(std::move(a));
                     }
                 }
                 _steps.push_back(std::move(*step));
@@ -339,6 +382,7 @@ namespace wry {
     }
 
     std::vector<Step> RemoteServer::take_steps() {
+        std::scoped_lock lock{_mutex};
         for (Transport::Event& event : _transport->events().try_take()) {
             if (auto* opened = std::get_if<Transport::Opened>(&event)) {
                 assert(_connection == 0);
@@ -371,6 +415,7 @@ namespace wry {
     }
 
     bool RemoteServer::has_input() {
+        // The transport is never reassigned; the queue locks itself
         return _transport->events().size() != 0;
     }
 
@@ -379,10 +424,12 @@ namespace wry {
     }
 
     void RemoteServer::disconnect(std::string reason) {
+        std::scoped_lock lock{_mutex};
         _disconnect(std::move(reason));
     }
 
     void RemoteServer::leave() {
+        std::scoped_lock lock{_mutex};
         if (_state == State::DISCONNECTED)
             return;
         _send(wire::encode_quit());
@@ -390,12 +437,16 @@ namespace wry {
     }
 
     coroutine::Task RemoteServer::shutdown(std::chrono::milliseconds grace) {
-        _dial_stop.request_stop();
+        {
+            std::scoped_lock lock{_mutex};
+            _dial_stop.request_stop();
+        }
         co_await _transport->shutdown(grace);
         co_await _transport->wait_finished();
     }
 
     void RemoteServer::close() {
+        std::scoped_lock lock{_mutex};
         _dial_stop.request_stop();
         _transport->close();
     }

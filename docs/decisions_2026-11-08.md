@@ -159,3 +159,37 @@ roughly by how much they unblock.
     cannot write under an occupant. A truck on HALT is safe (its cell is not
     empty). Is the code or the doc right?
     **Decided 2026-11-12:** document the code's behaviour, subject to a TBD: machine_language.md 8.13 "Under vs beside" (719ecaf), part of the larger under-vs-beside question the playtesters raised.
+
+## Raised 2026-11-19
+
+The step pump ([`docs/step_pump.md`](step_pump.md), branch `step-pump`):
+world stepping moved off the render frame onto one pool task per
+session, which keeps pace with the server's 60 Hz however slow the
+frames are.  Measured under 1.5 s frames: 60.0 world steps/s, never more
+than 1 step behind the relay (the base: 41 steps/s and 439 steps behind
+after 15 s).  Three things are antony's call:
+
+26. **Render clock.**  The renderer still interpolates machines at the
+    displayed World's integer time, so slow frames advance motion in
+    jumps of frame-time x 60 steps (as they must), and 120 Hz frames
+    repeat each step.  A sub-step clock is a small change (draw at
+    `t + f`, f the fraction of a quantum since adoption, clamped below 1;
+    every moving machine has `_new_time > t`, so it never overshoots a
+    move; step_pump.md section 7).  It is multiplayer.md open item 11.6.
+    Build it now, or wait for the jitter-buffer design?
+    Recommendation: build the clamped fraction now; it is local to
+    `tnow` in WryWorldScene.mm, and ProMotion displays show the repeats.
+27. **Commands read the displayed World, not the head.**  `get`, `dump`,
+    `state-hash`, `pipette`, `follow` and `save` answer for the World on
+    screen, which while the clock runs is up to a frame behind the
+    pump's head; paused, they agree once the pump has drained.  (`host`
+    of a replay and `corrupt` act on the head.)  Keep it so?
+    Recommendation: keep it: what you see is what you get, and `step n`
+    replies only once the displayed World has the steps.
+28. **Where the pump runs.**  Built as a pool coroutine, not a dedicated
+    thread: `World::step` already fans out over the pool, so a thread
+    would only block on it, and would need its own pinning and waking.
+    Lifecycle commands (new game, load, join, leave, replay, corrupt)
+    stop the pump around their change, blocking the main thread for at
+    most one step.  OK?  Recommendation: yes; revisit only if a
+    saturated pool is seen delaying steps.

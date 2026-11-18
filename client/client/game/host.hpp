@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -104,14 +105,20 @@ namespace wry {
         };
         std::optional<DonatedSave> take_save();
 
-        // The connection's inbox, for a host that idles on it (with
-        // wait(), taking nothing: take_steps is the consumer)
+        // The connection's inbox, for the one consumer that idles on it
+        // (the step pump: wait(), taking nothing; take_steps takes)
         coroutine::MultiProducerSingleConsumerQueue<Transport::Event>& inbox();
-        State state() const { return _state; }
-        ClientID client_id() const { return _client_id; }
-        uint64_t quantum_ns() const { return _quantum_ns; }   // the relay's step quantum, from WELCOME
-        uint64_t head() const { return _next_step - 1; }   // the last step taken
-        std::string const& reason() const { return _reason; }
+
+        // Put a no-op event into the inbox: wakes a consumer parked on
+        // it, or makes its next wait return at once.  take_steps ignores
+        // it.  Any thread
+        void wake();
+
+        State state() const;
+        ClientID client_id() const;
+        uint64_t quantum_ns() const;   // the relay's step quantum, from WELCOME
+        uint64_t head() const;         // the last step taken
+        std::string reason() const;
 
         // Tell the relay we are leaving.  Its end of stream follows
         void leave();
@@ -135,9 +142,14 @@ namespace wry {
     private:
         RemoteServer() = default;
 
+        // The unlocked bodies, for the paths that already hold _mutex
+        bool _submit(Player::Action action);
         void _send(std::string message);
         void _disconnect(std::string reason);
         void _on_message(std::string const& bytes);
+
+        // Guards every field below; taken by every public method
+        mutable std::mutex _mutex;
 
         coroutine::Nursery* _scope = nullptr;
         std::shared_ptr<Transport> _transport;  // shared with a dial in flight

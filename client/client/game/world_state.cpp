@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <thread>
 
 #include <unistd.h>
 
@@ -335,33 +336,336 @@ namespace wry {
 
     } // anonymous namespace
 
-    // Swap in `world` as the only entry in _worlds, and ask the server for
-    // the local client's Player: a JOIN rides the next step, spawning one
-    // if the world does not already map this client (a new game), and
-    // doing nothing if it does (a load of our own save).  Single-threaded
-    // at the call sites (main thread, between pump and render), so the
-    // brief drain is unobservable to the renderer.
-    static void install_displayed_world(WorldState& m, World* world) {
-        Root<World const*> discard;
-        while (m._worlds.try_pop_front(discard)) { }
-        m._worlds.emplace_back(world);
-        m._world_to_render = world;
-        m._steps_taken = 0;
-        // The backlog is left alone: a joiner installing its donated save
-        // has the steps after the boundary waiting in it, and a new or
-        // loaded game started a new session, which cleared it
-        if (m._server)
-            m._server->request_join();
+    // ---- The step pump (docs/step_pump.md) -----------------------------
+
+    // `world` as head, a new lineage, and ask the server for the local
+    // client's Player: a JOIN rides the next step, spawning one if the
+    // world does not already map this client (a new game), and doing
+    // nothing if it does (a load of our own save).  The backlog is left
+    // alone: a joiner installing its donated save has the steps after the
+    // boundary waiting in it, and a new or loaded game started a new
+    // session, which cleared it.  The owner's thread: main with the pump
+    // stopped, or the pump (a donated save)
+    void WorldState::Pump::install(World* world) {
+        head = Root<World const*>(world);
+        steps_taken = 0;
+        applied.store_relaxed(0);
+        if (client)
+            client->request_join();
         // The session's log starts from this World (multiplayer.md
         // section 5); a joiner's placeholder, drawn while its save is in
         // flight, is not one the stream continues
-        if (m._server && !m._awaiting_save)
-            m._open_log(world);
+        if (client && !awaiting_save)
+            open_log(world);
+    }
+
+    void WorldState::Pump::open_log(World const* world) {
+        log = std::make_unique<SessionLog>(log_directory, (uint64_t)world->_time,
+                                           world->content_hash(), serialize_world(world));
+    }
+
+    namespace {
+
+        std::string narrow(String const& s) {
+            return std::string(s.data(), s.chars.size());
+        }
+
+        String widen(std::string const& s) {
+            return String(StringView(s.c_str()));
+        }
+
+    } // namespace
+
+    bool WorldState::Pump::take_input() {
+        if (!client)
+            return false;
+        bool changed = false;
+        for (Step& step : client->take_steps())
+            backlog.push_back(std::move(step));
+        for (RemoteServer::Donation const& d : client->take_donations())
+            donations.push_back(d);
+        if (awaiting_save) {
+            if (std::optional<RemoteServer::DonatedSave> save = client->take_save()) {
+                changed = true;
+                World* world = load_world_from_bytes(save->bytes);
+                if (!world) {
+                    client->disconnect("the donated save is unreadable");
+                } else {
+                    awaiting_save = false;
+                    install(world);
+                    // Proof of receipt: our hash of what we loaded
+                    client->report_hash(save->boundary, head->content_hash());
+                    messages.push_back(widen("Loaded the game at time " + std::to_string(save->boundary)));
+                }
+            }
+        }
+        serve_donations();
+        return changed;
+    }
+
+    // The host's client as donor: a request the relay queued after STEP
+    // boundary names the World that step produced, which is head once it
+    // has been applied; the walk runs on the pool over a rooted snapshot
+    // (io/save.cpp's serialize_world)
+    void WorldState::Pump::serve_donations() {
+        if (!client || !head || awaiting_save)
+            return;
+        const uint64_t time = (uint64_t)head->_time;
+        std::erase_if(donations, [&](RemoteServer::Donation const& d) {
+            if (d.boundary > time)
+                return false;               // not there yet
+            if (d.boundary == time) {
+                assert(scope);
+                client->donate(d, head, *scope);
+            } else {
+                messages.push_back(widen("Cannot donate the world at time " + std::to_string(d.boundary)
+                                         + ": already past it"));
+            }
+            return true;
+        });
+    }
+
+    // After a step is applied: against the record.  The first
+    // disagreement ends the replay with the divergent World as head
+    void WorldState::Pump::replay_check(Step const& step) {
+        if (!replay || replay->result)
+            return;
+        assert(step.number >= replay->first);
+        const uint64_t recorded = replay->hashes[(size_t)(step.number - replay->first)];
+        const uint64_t computed = head->content_hash();
+        if (recorded != computed) {
+            std::string text = "diverged at step " + std::to_string(step.number) + ": this build "
+                             + hash_literal(computed) + ", the log recorded " + hash_literal(recorded);
+            if (!replay->same_build)
+                text += " (another build wrote the log)";
+            replay->result = widen(text);
+            backlog.clear();
+        } else if (step.number == replay->through) {
+            replay->result = widen("replayed steps " + std::to_string(replay->first) + " to "
+                                   + std::to_string(replay->through) + ": consistent");
+        }
+    }
+
+    // The snapshot is written under published_mutex and read under it by
+    // take_published: the unlock here synchronizes-with that lock, which
+    // publishes the fields and, transitively, the World's contents (built
+    // and sealed by World::step before the step's Future completed into
+    // the pump).  The news item comes after, so an idle host that finds
+    // the queue empty has adopted this snapshot (docs/step_pump.md 9.3)
+    void WorldState::Pump::publish() {
+        Root<World const*> dropped;     // the superseded World, released unlocked
+        {
+            std::scoped_lock lock{published_mutex};
+            dropped = std::move(published.world);
+            published.world = head;
+            published.steps_taken = steps_taken;
+            published.awaiting_save = awaiting_save;
+            if (replay)
+                published.replay = ReplayView{replay->path, replay->through, replay->result};
+            else
+                published.replay.reset();
+            published.log_path = log ? log->path() : std::filesystem::path();
+            for (String& m : messages)
+                published.messages.push_back(std::move(m));
+            messages.clear();
+        }
+        news.emplace(Transport::Posted{0, {}});
+    }
+
+    namespace {
+
+        // The pump's last act on its run: set `ended` once the frame is
+        // done with the Pump, on the normal path and when a stop request
+        // destroys the parked frame alike.  The pump's first local, so the
+        // last of them destroyed: every other local Root is gone by then
+        struct PumpEndGuard {
+            std::shared_ptr<WorldState::PumpRun> run;
+            ~PumpEndGuard() {
+                run->ended.set();
+            }
+        };
+
+        // The epoch floor for a step's epoch-allocated transaction
+        // structures across its await.  The await is shielded, so the
+        // frame is never destroyed there and the pin is always released
+        struct GlobalEpochPin {
+            epoch::Epoch epoch = pin_global_epoch();
+            GlobalEpochPin() = default;
+            GlobalEpochPin(GlobalEpochPin const&) = delete;
+            ~GlobalEpochPin() {
+                unpin_global_epoch(epoch);
+            }
+        };
+
+        // The step pump: one sequential task per session (or replay),
+        // owning *p while it runs (docs/step_pump.md).  It takes the
+        // connection's news and applies the backlog one step at a time,
+        // in order, publishing after each step and yielding to the pool
+        // between them, and parks on the transport inbox when there is
+        // nothing to do.  It ends when asked (run->stop and a wake), when
+        // a sessionless backlog is done, or, destroyed while parked, when
+        // the process scope stops.  It never holds a lock across a
+        // suspension, and holds GC objects across them only by Root
+        coroutine::Task step_pump(WorldState::Pump* p, std::shared_ptr<WorldState::PumpRun> run) {
+            PumpEndGuard guard{run};
+            const std::stop_token token = co_await coroutine::GetStopToken{};
+            // run->stop is relaxed: what makes the pump see it is the wake
+            // that follows it into the inbox, which the take below takes
+            // under the inbox's mutex (docs/step_pump.md 9.1)
+            auto stopping = [&] {
+                return run->stop.load_relaxed() || token.stop_requested();
+            };
+            for (;;) {
+                bool changed = p->take_input();
+                while (!stopping() && !p->awaiting_save && !p->backlog.empty()) {
+                    Step step = std::move(p->backlog.front());
+                    p->backlog.pop_front();
+                    // Steps are numbered by the World time they produce;
+                    // a stream that does not continue our World (a join
+                    // into a game that started from a save) is no use to us
+                    const uint64_t expected = (uint64_t)p->head->_time + 1;
+                    if (step.number != expected) {
+                        p->backlog.clear();
+                        std::string why = "the stream does not continue this world: step "
+                                          + std::to_string(step.number) + " for time "
+                                          + std::to_string(expected - 1);
+                        if (p->client)
+                            p->client->disconnect(why);
+                        if (p->replay && !p->replay->result)
+                            p->replay->result = widen(why);
+                        changed = true;
+                        break;
+                    }
+                    Root<World*> next;
+                    {
+                        GlobalEpochPin pin;
+                        Root<World const*> from = p->head;
+                        // Shielded: a step is never cut short by a stop
+                        std::optional<Root<World*>> stepped
+                            = co_await execution::shield(from->step(step.commands));
+                        CHECK(stepped && stepped->_ptr);
+                        next = std::move(*stepped);
+                    }
+                    // The tripwire (multiplayer.md section 5): what we
+                    // computed, for the relay to compare with the reference
+                    // client's
+                    const uint64_t hash = next->content_hash();
+                    if (p->client)
+                        p->client->report_hash(step.number, hash);
+                    // The log: the step as finalized and what it produced here
+                    if (p->log) {
+                        (void) p->log->append(step, hash,
+                                              p->client ? p->client->client_id() : SERVER_CLIENT_ID,
+                                              p->client ? p->client->quantum_ns() : 0);
+                    }
+                    p->head = std::move(next);
+                    ++p->steps_taken;
+                    p->applied.store_relaxed(p->steps_taken);
+                    p->replay_check(step);
+                    p->serve_donations();
+                    p->publish();
+                    changed = false;
+                    // One step per slice of the pool: a long catch-up is
+                    // many short tasks, so no worker stays pinned through
+                    // it (docs/step_pump.md section 8), and the connection
+                    // is serviced between steps
+                    co_await coroutine::TransferToPoolExecutor{};
+                    changed = p->take_input() || changed;
+                }
+                if (changed)
+                    p->publish();
+                if (stopping() || !p->client)
+                    co_return;      // asked to; or sessionless, the backlog done
+                // A requested token destroys the frame here, parked or not
+                co_await p->client->inbox().wait();
+            }
+        }
+
+    } // namespace
+
+    WorldState::PumpStopped::PumpStopped(WorldState& w) : ws(w) {
+        if (ws._pump_stopped_depth++ == 0)
+            ws._stop_pump();
+    }
+
+    WorldState::PumpStopped::~PumpStopped() {
+        if (--ws._pump_stopped_depth == 0) {
+            ws._pump.publish();
+            ws.take_published();
+            ws._start_pump();
+        }
+    }
+
+    // run->stop, then the wake: see step_pump.  The wait for `ended` is
+    // the edge that hands *_pump back (docs/step_pump.md 9.1)
+    void WorldState::_stop_pump() {
+        if (!_pump_run)
+            return;
+        _pump_run->stop.store_relaxed(true);
+        if (_pump_run->client)
+            _pump_run->client->wake();
+        (void) coroutine::sync_wait(_pump_run->ended);
+        _pump_run.reset();
+    }
+
+    coroutine::Task WorldState::_stop_pump_async() {
+        if (!_pump_run)
+            co_return;
+        std::shared_ptr<PumpRun> run = _pump_run;
+        run->stop.store_relaxed(true);
+        if (run->client)
+            run->client->wake();
+        co_await run->ended;
+        if (_pump_run == run)
+            _pump_run.reset();
+    }
+
+    void WorldState::_start_pump() {
+        assert(_pump_stopped_depth == 0);
+        assert(!_pump_run);
+        assert(_pump.client == _client());
+        if (!_pump.client && _pump.backlog.empty())
+            return;                     // nothing to pump
+        _pump_run = std::make_shared<PumpRun>();
+        _pump_run->client = _pump.client;
+        assert(_gui.scope);
+        // The schedule's work-queue mutex publishes *_pump to the task
+        _gui.scope->soon(step_pump(&_pump, _pump_run));
+    }
+
+    // The adopter: the news first, then the snapshot (docs/step_pump.md 9.3)
+    void WorldState::take_published() {
+        (void) _pump.news.try_take();
+        std::vector<String> messages;
+        Root<World const*> dropped;     // the World we move past, released unlocked
+        {
+            std::scoped_lock lock{_pump.published_mutex};
+            Published& p = _pump.published;
+            dropped = std::move(_world_to_render);
+            _world_to_render = p.world;
+            _steps_taken = p.steps_taken;
+            _awaiting_save = p.awaiting_save;
+            _replay_view = p.replay;
+            _log_path = p.log_path;
+            messages = std::move(p.messages);
+            p.messages.clear();
+        }
+        for (String const& m : messages)
+            _gui.append_log(m);
+    }
+
+    bool WorldState::has_world_news() {
+        return _pump.news.size() != 0;
+    }
+
+    coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* WorldState::news_inbox() {
+        return &_pump.news;
     }
 
     // A new or loaded game is a new stream: a fresh relay whose steps
     // continue the installed world's time, that world as its genesis
     void WorldState::new_game() {
+        PumpStopped stopped(*this);
         World* world = nullptr;
         {
             LoadTimer timer("make_starting_world");
@@ -371,16 +675,17 @@ namespace wry {
             LoadTimer timer("_start_hosting");
             _start_hosting((uint64_t)world->_time);
         }
-        LoadTimer timer("install_displayed_world");
-        install_displayed_world(*this, world);
+        LoadTimer timer("install");
+        _pump.install(world);
     }
 
     bool WorldState::load_from_save(std::string const& name) {
         World* world = load_game(name);
         if (!world)
             return false;
+        PumpStopped stopped(*this);
         _start_hosting((uint64_t)world->_time);
-        install_displayed_world(*this, world);
+        _pump.install(world);
         return true;
     }
 
@@ -393,11 +698,12 @@ namespace wry {
     }
 
     void WorldState::_start_session(std::optional<std::string> save) {
+        PumpStopped stopped(*this);
         if (!save && !_gui.join_address.empty()) {
             _start_joining(_gui.join_address, _gui.join_port);
             // A placeholder to draw until the host's save arrives
-            _awaiting_save = true;
-            install_displayed_world(*this, make_starting_world());
+            _pump.awaiting_save = true;
+            _pump.install(make_starting_world());
             return;
         }
         if (save && !load_from_save(*save)) {
@@ -422,6 +728,7 @@ namespace wry {
         }
     }
 
+    // The pump stopped (the callers' PumpStopped)
     void WorldState::_start_hosting(uint64_t head) {
         _end_session(std::chrono::milliseconds(500));
         assert(_gui.scope);
@@ -434,6 +741,7 @@ namespace wry {
             return;
         }
         _server = &_host->client();
+        _pump.client = _client();
         _logged_state = RemoteServer::State::CONNECTING;
     }
 
@@ -443,6 +751,7 @@ namespace wry {
         _remote = RemoteServer::make(*_gui.scope);
         _remote->dial(std::string(address.data(), address.chars.size()), port);
         _server = _remote.get();
+        _pump.client = _client();
         _logged_state = RemoteServer::State::CONNECTING;
         String message("Joining ");
         message.append(address);
@@ -451,10 +760,27 @@ namespace wry {
         _gui.append_log(message);
     }
 
+    // What ending a session leaves: no stream, no log, no replay; head
+    // (the World) stays.  A join that never got its save, a donation
+    // never served: the next session starts clean, or it would never
+    // apply a step.  The pump stopped
+    void WorldState::_clear_session() {
+        assert(!_pump_run);
+        _server = nullptr;
+        _pump.client = nullptr;
+        _pump.backlog.clear();
+        _pump.log.reset();
+        _pump.replay.reset();
+        _pump.awaiting_save = false;
+        _pump.donations.clear();
+    }
+
     // Blocking: the main thread, between frames.  Nothing to wait for when
     // the loops have already ended (the process scope drained)
     void WorldState::_end_session(std::chrono::milliseconds grace) {
+        _stop_pump();
         _server = nullptr;
+        _pump.client = nullptr;
         if (_host) {
             if (!_host->finished())
                 (void) execution::sync_wait(_host->shutdown(grace));
@@ -465,17 +791,13 @@ namespace wry {
                 (void) execution::sync_wait(_remote->shutdown(grace));
             _remote.reset();
         }
-        _backlog.clear();
-        _log.reset();
-        _replay.reset();
-        // A join that never got its save, a donation never served: the
-        // next session starts clean, or it would never apply a step
-        _awaiting_save = false;
-        _donations.clear();
+        _clear_session();
     }
 
     coroutine::Task WorldState::end_session(std::chrono::milliseconds grace) {
+        co_await _stop_pump_async();
         _server = nullptr;
+        _pump.client = nullptr;
         if (_host) {
             co_await _host->shutdown(grace);
             _host.reset();
@@ -484,11 +806,9 @@ namespace wry {
             co_await _remote->shutdown(grace);
             _remote.reset();
         }
-        _backlog.clear();
-        _log.reset();
-        _replay.reset();
-        _awaiting_save = false;
-        _donations.clear();
+        _clear_session();
+        _pump.publish();
+        take_published();
     }
 
     WorldState::~WorldState() {
@@ -501,6 +821,7 @@ namespace wry {
     }
 
     std::expected<uint16_t, String> WorldState::host_listen(uint16_t port) {
+        PumpStopped stopped(*this);
         // A replayed World, sessionless, becomes a game of our own first
         if (!_host && !_remote)
             _host_displayed_world();
@@ -513,19 +834,22 @@ namespace wry {
     }
 
     void WorldState::join(String const& address, uint16_t port) {
+        PumpStopped stopped(*this);
         _start_joining(address, port);
         // The host's client donates its World as of the head we arrive at,
         // and the stream from there follows; until the save has landed the
         // steps wait and whatever is displayed stays as a placeholder
-        _awaiting_save = true;
-        _backlog.clear();
-        _steps_taken = 0;
+        _pump.awaiting_save = true;
+        _pump.backlog.clear();
+        _pump.steps_taken = 0;
+        _pump.applied.store_relaxed(0);
         _server->request_join();
     }
 
     void WorldState::leave() {
         if (!_remote)
             return;
+        PumpStopped stopped(*this);
         _remote->leave();
         // Our world is ours now: a fork of the game, hosted by us from
         // here.  Its client map still names the old game's clients (open
@@ -533,13 +857,13 @@ namespace wry {
         _host_displayed_world();
     }
 
+    // Host the pump's head (the newest applied World, which may be a step
+    // or two ahead of the displayed one)
     void WorldState::_host_displayed_world() {
-        Root<World const*> current;
-        (void) _worlds.try_pop_front(current);
+        PumpStopped stopped(*this);
+        Root<World const*> current = _pump.head;
         assert(current);
         _start_hosting((uint64_t)current->_time);
-        _worlds.emplace_back(current);
-        _backlog.clear();
         if (_server) {
             _server->request_join();
             _open_log(current._ptr);
@@ -548,23 +872,9 @@ namespace wry {
 
     // ---- The session log and its replay (multiplayer.md section 5) ----
 
-    namespace {
-
-        std::string narrow(String const& s) {
-            return std::string(s.data(), s.chars.size());
-        }
-
-        String widen(std::string const& s) {
-            return String(StringView(s.c_str()));
-        }
-
-    } // namespace
-
     void WorldState::_open_log(World const* world) {
-        if (_log_directory.empty())
-            _log_directory = _gui.session_log_directory;   // empty: no log
-        _log = std::make_unique<SessionLog>(_log_directory, (uint64_t)world->_time,
-                                            world->content_hash(), serialize_world(world));
+        assert(!_pump_run);
+        _pump.open_log(world);
     }
 
     std::expected<void, String> WorldState::replay(String const& path_text, std::optional<uint64_t> through) {
@@ -585,9 +895,11 @@ namespace wry {
         if (!world)
             return std::unexpected(String("the log's checkpoint is not a save this build reads"));
         // Sessionless from here: the stream is the file's.  (Ending the
-        // session drops any earlier replay and clears the backlog)
+        // session drops any earlier replay and clears the backlog.)  The
+        // pump replays it, from the end of this call
+        PumpStopped stopped(*this);
         _end_session(std::chrono::milliseconds(500));
-        install_displayed_world(*this, world);
+        _pump.install(world);
         Replay r;
         r.path = path;
         r.first = head + 1;
@@ -607,41 +919,29 @@ namespace wry {
                              + ", " + hash_literal(loaded));
         } else {
             for (size_t i = 0; i != (size_t)(target - head); ++i)
-                _backlog.push_back(std::move(contents->entries[i].step));
+                _pump.backlog.push_back(std::move(contents->entries[i].step));
         }
-        _replay = std::move(r);
+        _pump.replay = std::move(r);
         return {};
     }
 
-    // After a step is applied: against the record.  The first
-    // disagreement ends the replay with the divergent World displayed
-    void WorldState::_replay_check(Step const& step) {
-        if (!_replay || _replay->result)
-            return;
-        assert(step.number >= _replay->first);
-        const uint64_t recorded = _replay->hashes[(size_t)(step.number - _replay->first)];
-        const uint64_t computed = _world_to_render._ptr->content_hash();
-        if (recorded != computed) {
-            std::string text = "diverged at step " + std::to_string(step.number) + ": this build "
-                             + hash_literal(computed) + ", the log recorded " + hash_literal(recorded);
-            if (!_replay->same_build)
-                text += " (another build wrote the log)";
-            _replay->result = widen(text);
-            _backlog.clear();
-        } else if (step.number == _replay->through) {
-            _replay->result = widen("replayed steps " + std::to_string(_replay->first) + " to "
-                                    + std::to_string(_replay->through) + ": consistent");
+    // The World stays where the replay got to
+    void WorldState::cancel_replay() {
+        PumpStopped stopped(*this);
+        if (_pump.replay && !_pump.replay->result) {
+            _pump.backlog.clear();
+            _pump.replay.reset();
         }
     }
 
-    // A copy of the displayed World with one cell changed, in place of it:
+    // A copy of the head World with one cell changed, in place of it:
     // nothing rides the stream, so from the next step this client's hash
     // disagrees with everyone's
     void WorldState::corrupt(Coordinate at, Term term) {
-        Root<World const*> old;
-        if (!_worlds.try_pop_front(old))
+        PumpStopped stopped(*this);
+        if (!_pump.head)
             return;
-        World const* w = old._ptr;
+        World const* w = _pump.head._ptr;
         WaitableMap<Coordinate, Term> terms = w->_term_for_coordinate;
         if (term_is_null(term)) {
             Term dropped{};
@@ -655,74 +955,8 @@ namespace wry {
                                 w->_waiting_on_time, w->_player_for_client,
                                 w->_money, w->_seed);
         next->seal();
-        _world_to_render = next;
-        _worlds.emplace_back(next);
+        _pump.head = Root<World const*>(next);
         _gui.append_log("Corrupted the displayed world: a desync, if the game goes on");
-    }
-
-    bool WorldState::has_server_input() {
-        return (!_awaiting_save && !_backlog.empty()) || (_server && _server->has_input());
-    }
-
-    coroutine::MultiProducerSingleConsumerQueue<Transport::Event>* WorldState::server_inbox() {
-        RemoteServer* client = _client();
-        return client ? &client->inbox() : nullptr;
-    }
-
-    // The host's client as donor: a request the relay queued after STEP
-    // boundary names the World that step produced, which is the displayed
-    // one once it has been applied; the walk runs on the pool over a rooted
-    // snapshot (io/save.cpp's serialize_world)
-    void WorldState::_serve_donations() {
-        RemoteServer* client = _client();
-        if (!client || !_world_to_render || _awaiting_save)
-            return;
-        const uint64_t time = (uint64_t)_world_to_render._ptr->_time;
-        std::erase_if(_donations, [&](RemoteServer::Donation const& d) {
-            if (d.boundary > time)
-                return false;               // not there yet
-            if (d.boundary == time) {
-                client->donate(d, Root<World const*>{_world_to_render._ptr}, *_gui.scope);
-            } else {
-                String message("Cannot donate the world at time ");
-                message.append(StringView(std::to_string(d.boundary).c_str()));
-                message.append(StringView(": already past it"));
-                _gui.append_log(message);
-            }
-            return true;
-        });
-    }
-
-    coroutine::Task WorldState::_apply_step_async(Step const& step) {
-        // A pin in this frame holds the epoch floor for step's
-        // epoch-allocated transaction structures across the await
-        epoch::Epoch pin = pin_global_epoch();
-        Root<World const*> old_world;
-        (void) _worlds.try_pop_front(old_world);
-        assert(old_world);
-        assert(old_world->_time + 1 == (Time)step.number);
-        Root<World*> next = co_await old_world->step(step.commands);
-        unpin_global_epoch(pin);
-        assert(next);
-        // The tripwire (multiplayer.md section 5): what we computed, for
-        // the relay to compare with the reference client's
-        const uint64_t hash = next._ptr->content_hash();
-        if (_server)
-            _server->report_hash(step.number, hash);
-        // The log: the step as finalized and what it produced here
-        if (_log) {
-            RemoteServer* client = _client();
-            (void) _log->append(step, hash,
-                                client ? client->client_id() : SERVER_CLIENT_ID,
-                                client ? client->quantum_ns() : 0);
-        }
-        _world_to_render = next._ptr;
-        _worlds.emplace_back(std::move(next));
-        ++_steps_taken;
-    }
-
-    void WorldState::_apply_step(Step const& step) {
-        (void) execution::sync_wait(_apply_step_async(step));
     }
 
     bool WorldState::save_current(std::string name, move_only_function<void(SaveOutcome)> on_done) {
@@ -733,8 +967,8 @@ namespace wry {
         // background walk reads a stable snapshot even as play continues, and
         // the Root keeps it (and everything reachable) alive until the save
         // finishes.
-        Root<World const*> w;
-        if (!_worlds.try_pop_front(w))
+        Root<World const*> w = _world_to_render;
+        if (!w)
             return false;
         // The callback runs on a worker thread when the save finishes; post the
         // result for the main-thread pump to surface in the log.  It holds
@@ -743,12 +977,11 @@ namespace wry {
         // have destroyed by then
         assert(_gui.scope);
         GuiContext* gui = &_gui;
-        _gui.scope->soon(save_game(w, std::move(name), [gui, on_done = std::move(on_done)](SaveOutcome outcome) mutable {
+        _gui.scope->soon(save_game(std::move(w), std::move(name), [gui, on_done = std::move(on_done)](SaveOutcome outcome) mutable {
             gui->post_notification(outcome ? "Saved." : "Save failed.");
             if (on_done)
                 on_done(std::move(outcome));
         }));
-        _worlds.push_front(std::move(w));
         return true;
     }
 
@@ -905,7 +1138,7 @@ namespace wry {
     //      Metal renderer over this state) -----------------------------------
 
     void WorldState::update(double dt) {
-        (void) dt;   // the world advances one step per frame, not by wall-clock
+        (void) dt;   // the world advances by the server's clock, on the pump
 
         // Service the garbage collector once per frame.
         mutator_repin();
@@ -936,79 +1169,29 @@ namespace wry {
             }
         }
 
-        // The finalized steps that have arrived are the step's input: the
-        // server events and every client's actions, in the server's order.
-        // A frame applies its share and keeps the rest; when current, the
-        // share is everything.  (Single player: our own actions,
-        // round-tripped through the relay in this process.)  A joiner
-        // holds them until the donated save has given it the World they
-        // continue; a host's client serves the donation requests the
-        // relay sent it
-        if (_server) {
-            for (Step& step : _server->take_steps())
-                _backlog.push_back(std::move(step));
-            if (RemoteServer* client = _client()) {
-                for (RemoteServer::Donation const& d : client->take_donations())
-                    _donations.push_back(d);
-                if (_awaiting_save) {
-                    if (std::optional<RemoteServer::DonatedSave> save = client->take_save()) {
-                        World* world = load_world_from_bytes(save->bytes);
-                        if (!world) {
-                            client->disconnect("the donated save is unreadable");
-                        } else {
-                            _awaiting_save = false;
-                            install_displayed_world(*this, world);
-                            // Proof of receipt: our hash of what we loaded
-                            client->report_hash(save->boundary, world->content_hash());
-                            String message("Loaded the game at time ");
-                            message.append(StringView(std::to_string(save->boundary).c_str()));
-                            _gui.append_log(message);
-                        }
-                    }
-                }
-            }
-            _serve_donations();
-        }
-        // The backlog is the step's input whether it came from the session
-        // or from a log under replay (sessionless); a frame applies its
-        // share
-        for (size_t applied = 0; !_awaiting_save && !_backlog.empty() && (applied != max_steps_per_frame); ++applied) {
-            Step step = std::move(_backlog.front());
-            _backlog.pop_front();
-            // Steps are numbered by the World time they produce; a
-            // stream that does not continue our World (a join into a
-            // game that started from a save) is no use to us
-            const uint64_t expected = (uint64_t)_world_to_render._ptr->_time + 1;
-            if (step.number != expected) {
-                _backlog.clear();
-                std::string why = "the stream does not continue this world: step "
-                                  + std::to_string(step.number) + " for time "
-                                  + std::to_string(expected - 1);
-                if (RemoteServer* client = _client())
-                    client->disconnect(why);
-                if (_replay && !_replay->result)
-                    _replay->result = widen(why);
-                break;
-            }
-            _apply_step(step);
-            _replay_check(step);
-            _serve_donations();
-        }
+        // The newest World the pump has published, and what goes with it
+        // (docs/step_pump.md section 5): everything from here to the end
+        // of the frame reads this snapshot.  The steps themselves are the
+        // pump's, off this thread
+        take_published();
 
-        // ~1 Hz: hand a rooted snapshot of the freshly stepped world to the
+        // A stand-in for a slow frame (`frame-stall`): the pump goes on
+        if (_frame_stall.count() > 0)
+            std::this_thread::sleep_for(_frame_stall);
+
+        // ~1 Hz: hand a rooted snapshot of the displayed world to the
         // background map builder.  The load_acquire pairs with the builder's
         // completion store_release, so the previous build's publication is
         // visible before we permit the next one; the map may lag the world
         // by a second or two, by design.
         {
             auto now = std::chrono::steady_clock::now();
-            if (!_map_handoff->in_flight.load_acquire()
+            if (_world_to_render && !_map_handoff->in_flight.load_acquire()
                 && (now - _map_last_start >= std::chrono::seconds(1))) {
                 _map_last_start = now;
                 _map_handoff->in_flight.store_relaxed(true);
                 assert(_gui.scope);
-                _gui.scope->soon(world_map_build(Root<const World*>{_world_to_render._ptr},
-                                                 _map_handoff));
+                _gui.scope->soon(world_map_build(_world_to_render, _map_handoff));
             }
         }
 
@@ -1045,16 +1228,15 @@ namespace wry {
 
     // The machine occupying a tile of the displayed World, or none
     EntityID WorldState::machine_at(Coordinate xy) {
-        Root<World const*> w;
-        if (!_worlds.try_pop_front(w))
+        World const* w = _world_to_render._ptr;
+        if (!w)
             return {};
         EntityID id = {};
         const Entity* e = nullptr;
         const bool machine
-            = w._ptr->_entity_id_for_coordinate.try_get(xy, id) && id
-              && w._ptr->_entity_for_entity_id.try_get(id, e)
+            = w->_entity_id_for_coordinate.try_get(xy, id) && id
+              && w->_entity_for_entity_id.try_get(id, e)
               && dynamic_cast<const Machine*>(e);
-        _worlds.push_front(std::move(w));
         return machine ? id : EntityID{};
     }
 
@@ -1120,12 +1302,10 @@ namespace wry {
         }
         const Entity* e = nullptr;
         const Machine* m = nullptr;
-        Root<World const*> w;
-        if (_worlds.try_pop_front(w)) {
-            if (w._ptr->_entity_for_entity_id.try_get(_follow, e))
+        if (World const* w = _world_to_render._ptr) {
+            if (w->_entity_for_entity_id.try_get(_follow, e))
                 m = dynamic_cast<const Machine*>(e);
             Coordinate at = m ? m->_new_location : Coordinate{};
-            _worlds.push_front(std::move(w));
             if (m) {
                 pan_focus(render_position(at) - _focus_fraction);
                 return;
@@ -1226,12 +1406,11 @@ namespace wry {
     // matter; ghosts are the eventual answer.  Reads the displayed world:
     // the hand is client state, so no command is involved.
     bool WorldState::pipette_at(Coordinate xy) {
-        Root<World const*> w;
-        if (!_worlds.try_pop_front(w))
+        World const* w = _world_to_render._ptr;
+        if (!w)
             return false;
         Term t{};
-        const bool has = w._ptr->_term_for_coordinate.try_get(xy, t);
-        _worlds.push_front(std::move(w));
+        const bool has = w->_term_for_coordinate.try_get(xy, t);
         if (!has || term_is_null(t) || t.is_matter())
             return false;
         hold(t);
@@ -1326,7 +1505,8 @@ namespace wry {
             return Reply::ok();
         }
 
-        // `step n`: done once the world has taken n more steps.  Holds the
+        // `step n`: done once the displayed world has taken n more steps
+        // than the pump had applied when it was issued.  Holds the
         // WorldState by address only to notice that it has gone (the scene
         // changed); it is never dereferenced unless it is still the live
         // one.
@@ -1360,19 +1540,17 @@ namespace wry {
             std::optional<Reply> poll() override {
                 if (gui.world != ws)
                     return Reply::error(String("the world was unloaded"));
-                if (!ws->_replay)
+                if (!ws->_replay_view)
                     return Reply::error(String("the replay was abandoned"));
-                if (!ws->_replay->result)
+                if (!ws->_replay_view->result)
                     return std::nullopt;
-                return Reply::ok(*ws->_replay->result);
+                return Reply::ok(*ws->_replay_view->result);
             }
 
             // The World stays where the replay got to
             void cancel() override {
-                if ((gui.world == ws) && ws->_replay && !ws->_replay->result) {
-                    ws->_backlog.clear();
-                    ws->_replay.reset();
-                }
+                if ((gui.world == ws) && ws->_replay_view && !ws->_replay_view->result)
+                    ws->cancel_replay();
             }
         };
 
@@ -1477,7 +1655,7 @@ namespace wry {
                 if (ws._host)
                     ws._host->relay().step_if_paused((uint64_t)n);
                 return Reply::later(std::make_shared<StepPending>(
-                    c.gui, &ws, ws._steps_taken + (uint64_t)n));
+                    c.gui, &ws, ws._pump.applied.load_relaxed() + (uint64_t)n));
             }));
 
         // The session (multiplayer.md sections 2 and 6)
@@ -1513,19 +1691,19 @@ namespace wry {
             })));
 
         registry.add(make_command<Ctx>(
-            "session", "This process's place in the game: hosting or joined, client id, steps applied", Category::local,
+            "session", "This process's place in the game: hosting or joined, client id, the last step received (head), steps applied (displayed; pumped: by the step pump, live), the displayed time, the relay's clock and head (hosting), the log", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
                 std::string text;
                 RemoteServer* client = ws._client();
                 if (!client) {
-                    if (ws._replay) {
-                        text = "replay of " + ws._replay->path.string() + ": ";
-                        if (ws._replay->result)
-                            text += narrow(*ws._replay->result);
+                    if (ws._replay_view) {
+                        text = "replay of " + ws._replay_view->path.string() + ": ";
+                        if (ws._replay_view->result)
+                            text += narrow(*ws._replay_view->result);
                         else
-                            text += "step " + std::to_string((uint64_t)ws._world_to_render._ptr->_time)
-                                  + " of " + std::to_string(ws._replay->through);
+                            text += "step " + std::to_string((uint64_t)ws._world_to_render->_time)
+                                  + " of " + std::to_string(ws._replay_view->through);
                         return Reply::ok(widen(text));
                     }
                     return Reply::ok(String("no session"));
@@ -1543,14 +1721,20 @@ namespace wry {
                 text += " client " + std::to_string(client->client_id());
                 text += " head " + std::to_string(client->head());
                 text += " applied " + std::to_string(ws._steps_taken);
+                // The pump's own count, live: ahead of the displayed one
+                // by what it has applied since this frame adopted
+                text += " pumped " + std::to_string(ws._pump.applied.load_relaxed());
+                if (ws._world_to_render)
+                    text += " time " + std::to_string((uint64_t)ws._world_to_render->_time);
                 if (ws._awaiting_save)
                     text += " awaiting save";
                 if (ws._host) {
                     Relay::Clock clock = ws._host->relay().clock();
                     text += clock.paused ? " paused" : " running";
+                    text += " relay " + std::to_string(clock.head);
                 }
-                if (ws._log && !ws._log->path().empty())
-                    text += " log " + ws._log->path().string();
+                if (!ws._log_path.empty())
+                    text += " log " + ws._log_path.string();
                 return Reply::ok(widen(text));
             })));
 
@@ -1706,11 +1890,10 @@ namespace wry {
                 Param<Ctx, String>{"path", "the file to write", String("")},
             },
             with_world([](WorldState& ws, String const& path) {
-                Root<World const*> w;
-                if (!ws._worlds.try_pop_front(w))
+                World const* w = ws._world_to_render._ptr;
+                if (!w)
                     return Reply::error(String("no displayed world"));
-                const std::string text = dump_world(w._ptr);
-                ws._worlds.push_front(std::move(w));
+                const std::string text = dump_world(w);
                 if (path.chars.empty())
                     return Reply::ok(widen(text));
                 std::ofstream out(narrow(path), std::ios::binary);
@@ -2131,12 +2314,11 @@ namespace wry {
                 cursor_param("at", "the tile to read"),
             },
             with_world([](WorldState& ws, Coordinate const& at) {
-                Root<World const*> w;
-                if (!ws._worlds.try_pop_front(w))
+                World const* w = ws._world_to_render._ptr;
+                if (!w)
                     return Reply::error(String("no displayed world"));
                 Term t{};
-                const bool has = w._ptr->_term_for_coordinate.try_get(at, t);
-                ws._worlds.push_front(std::move(w));
+                const bool has = w->_term_for_coordinate.try_get(at, t);
                 if (!has)
                     t = term_make_null();
                 if (!command::printable(t))
@@ -2150,12 +2332,26 @@ namespace wry {
             "state-hash", "Show the content hash of the displayed world", Category::local,
             std::tuple<>{},
             with_world([](WorldState& ws) {
-                Root<World const*> w;
-                if (!ws._worlds.try_pop_front(w))
+                World const* w = ws._world_to_render._ptr;
+                if (!w)
                     return Reply::error(String("no displayed world"));
-                const uint64_t h = w._ptr->content_hash();
-                ws._worlds.push_front(std::move(w));
+                const uint64_t h = w->content_hash();
                 return Reply::ok(command::to_string(Hash{h}));
+            })));
+
+        // A slow frame on demand (docs/step_pump.md section 12): the main
+        // thread sleeps this long in every frame, as a long encode or a
+        // stall at nextDrawable would hold it, while the pump steps on
+        registry.add(make_command<Ctx>(
+            "frame-stall", "Sleep the main thread this many milliseconds every frame (0: off), to measure the world against slow frames", Category::local,
+            std::tuple{
+                Param<Ctx, int64_t>{"ms", "milliseconds per frame", int64_t{0}},
+            },
+            with_world([](WorldState& ws, int64_t ms) {
+                if (ms < 0 || ms > 10000)
+                    return Reply::error(String("ms must be 0 to 10000"));
+                ws._frame_stall = std::chrono::milliseconds(ms);
+                return Reply::ok();
             })));
 
         // The camera follows a truck: the machine occupying the tile, or
@@ -2869,8 +3065,9 @@ namespace wry {
     // closes the stream for now); step n has it finalize n steps at once,
     // and the command replies once this client has applied them, the
     // console's next line waiting behind it; cancelling stops the wait;
-    // resume starts the clock again.  update() itself is not driven here
-    // (it repins and forks the step); what it does with the steps is.
+    // resume starts the clock again.  The pump applies the steps; the test
+    // adopts them as update() would (take_published), and update() itself
+    // is not driven (it repins).
     define_test("world_state_clock_commands") {
         coroutine::Nursery scope;
         GuiContext gc;
@@ -2881,22 +3078,13 @@ namespace wry {
             require(ws._host);
             Relay& relay = ws._host->relay();
 
-            // Apply every step that has arrived, as update() would
-            auto apply_available = [&]() -> coroutine::Task {
-                for (Step& s : ws._server->take_steps())
-                    ws._backlog.push_back(std::move(s));
-                while (!ws._backlog.empty()) {
-                    Step step = std::move(ws._backlog.front());
-                    ws._backlog.pop_front();
-                    co_await ws._apply_step_async(step);
-                }
-            };
-            // ... until this client has applied `target` steps and is level
+            // Adopt what the pump has published, as frames would, until
+            // the displayed World has taken `target` steps and is level
             // with the relay's head (a posted step is processed on the
             // pool, so level alone could be early)
             auto catch_up = [&](uint64_t target) -> coroutine::Task {
-                for (int i = 0; i != 2000; ++i) {
-                    co_await apply_available();
+                for (const auto deadline = testing::soon(); std::chrono::steady_clock::now() < deadline;) {
+                    ws.take_published();
                     if ((ws._steps_taken >= target) && (ws._steps_taken == relay.clock().head))
                         co_return;
                     co_await cancelable_sleep(0.005);
@@ -2950,6 +3138,68 @@ namespace wry {
         co_return;
     };
 
+
+    // The step pump (docs/step_pump.md): with no frames at all -- nothing
+    // adopts, as when the main thread is stalled in a long encode -- the
+    // handshake completes, our JOIN rides the stream, and the pump applies
+    // the server's steps as they come, well past the 64 a frame that
+    // update() used to apply; the displayed snapshot does not move until it
+    // is adopted, and then jumps straight to the head, a World whose time
+    // is the count of steps taken.  A lifecycle change mid-stream (corrupt)
+    // stops the pump between steps and starts it again, and the stream
+    // goes on from the edited World.
+    define_test("world_state_step_pump") {
+        coroutine::Nursery scope;
+        GuiContext gc;
+        gc.scope = &scope;
+        {
+            WorldState ws(gc);
+            require(ws._host && ws._pump_run);
+            Relay& relay = ws._host->relay();
+            RemoteServer& client = ws._host->client();
+            const uint64_t displayed = ws._steps_taken;
+            Root<World const*> const shown = ws._world_to_render;
+            require(shown && (uint64_t)shown->_time == 0);
+
+            bool joined = co_await eventually([&] {
+                return client.state() == RemoteServer::State::JOINED;
+            });
+            require(joined);
+            // Over two frames' worth of the old cap, unadopted
+            constexpr uint64_t far = 2 * 64 + 10;
+            bool ran = co_await eventually([&] { return relay.clock().head >= far; });
+            require(ran);
+            bool level = co_await eventually([&] {
+                return ws._pump.applied.load_relaxed() + 8 >= relay.clock().head;
+            });
+            require(level);
+            require(ws._pump.applied.load_relaxed() >= far - 8);
+            require((ws._steps_taken == displayed) && (ws._world_to_render._ptr == shown._ptr));
+            ws.take_published();
+            require(ws._steps_taken >= far - 8);
+            require((uint64_t)ws._world_to_render->_time == ws._steps_taken);
+
+            // corrupt: the pump stopped, its head edited, the pump started
+            const uint64_t before = ws._steps_taken;
+            require(gc.issue(command::Origin::console, "corrupt Coordinate(9, 9) 1").reply.status
+                    == command::Reply::OK);
+            require(ws._pump_run && (ws._steps_taken >= before));
+            bool on = co_await eventually([&] {
+                ws.take_published();
+                return ws._steps_taken >= before + 10;
+            });
+            require(on);
+            Term t = term_make_null();
+            (void) ws._world_to_render->_term_for_coordinate.try_get(Coordinate{9, 9}, t);
+            require(t.is_inty() && (t.as_int() == 1));
+            require((uint64_t)ws._world_to_render->_time == ws._steps_taken);
+
+            co_await ws.end_session(std::chrono::milliseconds(200));
+            require(!ws._pump_run);
+        }
+        (void) co_await scope.join();
+        co_return;
+    };
 
     // Per-step cost on the test worlds, as a number to compare across
     // builds (the content hash must be cheap enough to run every step),
@@ -3017,32 +3267,20 @@ namespace wry {
             require(h);
             return *h;
         };
-        uint64_t h0 = 0;
-        {
-            Root<World const*> w;
-            // Side effects stay outside assert: the suite also runs in a
-            // Release build (the GUI's background test run).
-            const bool popped = ws._worlds.try_pop_front(w);
-            require(popped);
-            if (!popped)
-                co_return;
-            h0 = w._ptr->content_hash();
-            ws._worlds.push_front(std::move(w));
-        }
+        require(ws._world_to_render);
+        const uint64_t h0 = ws._world_to_render->content_hash();
+        const uint64_t t0 = (uint64_t)ws._world_to_render->_time;
+        // The displayed World, until the next adoption, whatever the pump
+        // has done meanwhile
         require(reply_hash() == (Hash{h0}));
+        co_await testing::pause(std::chrono::milliseconds(50));
         require(reply_hash() == (Hash{h0}));
-        // Step the displayed world as update() does.
-        {
-            Root<World const*> old_world;
-            const bool popped = ws._worlds.try_pop_front(old_world);
-            require(popped);
-            if (!popped)
-                co_return;
-            epoch::Epoch pin = pin_global_epoch();
-            Root<World*> next = co_await old_world._ptr->step();
-            unpin_global_epoch(pin);
-            ws._worlds.emplace_back(next);
-        }
+        // Adopt a stepped World, as update() does
+        bool stepped = co_await eventually([&] {
+            ws.take_published();
+            return (uint64_t)ws._world_to_render->_time > t0;
+        });
+        require(stepped);
         require(reply_hash() != (Hash{h0}));
         co_await ws.end_session(std::chrono::milliseconds(200));
         (void) co_await scope.join();
@@ -3055,9 +3293,8 @@ namespace wry {
     // the World at the last step replayed, sessionless; a tampered hash
     // is a divergence at that step; `compare` names it; `dump` is the
     // World as text; `host` makes a replayed World a game again; and
-    // `corrupt` changes the displayed World off the stream.  update() is
-    // not driven here (it repins and forks the step); the backlog is
-    // applied as it would.
+    // `corrupt` changes the displayed World off the stream.  The pump
+    // applies the steps; the test adopts as update() would.
     define_test("world_state_replay") {
         coroutine::Nursery scope;
         GuiContext gc;
@@ -3065,30 +3302,17 @@ namespace wry {
         const std::filesystem::path dir = std::filesystem::temp_directory_path()
             / ("wry-replay-" + std::to_string(getpid()));
         std::filesystem::remove_all(dir);
+        // The session's log in `dir`, from the session's first World
+        gc.session_log_directory = dir;
         {
             WorldState ws(gc);
             using command::Reply;
-            require(ws._host && ws._log && ws._log->path().empty());
-            // The session's log in `dir`: the one opened at construction
-            // has no file yet
-            ws._log_directory = dir;
-            ws._open_log(ws._world_to_render._ptr);
+            require(ws._host);
             Relay& relay = ws._host->relay();
 
-            auto apply_available = [&]() -> coroutine::Task {
-                if (ws._server)
-                    for (Step& s : ws._server->take_steps())
-                        ws._backlog.push_back(std::move(s));
-                while (!ws._backlog.empty()) {
-                    Step step = std::move(ws._backlog.front());
-                    ws._backlog.pop_front();
-                    co_await ws._apply_step_async(step);
-                    ws._replay_check(step);
-                }
-            };
             auto catch_up = [&](uint64_t target) -> coroutine::Task {
-                for (int i = 0; i != 2000; ++i) {
-                    co_await apply_available();
+                for (const auto deadline = testing::soon(); std::chrono::steady_clock::now() < deadline;) {
+                    ws.take_published();
                     if ((ws._steps_taken >= target) && (ws._steps_taken == relay.clock().head))
                         co_return;
                     co_await cancelable_sleep(0.005);
@@ -3107,12 +3331,14 @@ namespace wry {
             auto contains = [](std::string const& s, std::string const& what) {
                 return s.find(what) != std::string::npos;
             };
-            // A pending command driven to completion, the backlog applied
-            // between polls as frames would
+            // A pending command driven to completion, adopting between
+            // polls as frames would
             auto run_to_completion = [&](std::string const& line) -> coroutine::Task {
                 gc.submit(gc.console_source, StringView(line.c_str()));
-                for (int i = 0; (i != 1000) && gc.console_source.pending; ++i) {
-                    co_await apply_available();
+                for (const auto deadline = testing::soon();
+                     gc.console_source.pending && (std::chrono::steady_clock::now() < deadline);) {
+                    co_await cancelable_sleep(0.002);
+                    ws.take_published();
                     ++gc.frame;
                     gc.service_commands();
                 }
@@ -3141,14 +3367,14 @@ namespace wry {
             const uint64_t end_time = (uint64_t)displayed()->_time;
             const uint64_t end_hash = displayed()->content_hash();
             require(end_time >= 4);
-            const std::filesystem::path log = ws._log->path();
+            const std::filesystem::path log = ws._log_path;
             require(!log.empty() && std::filesystem::exists(log));
             {
                 auto o = issue("session");
                 require(contains(narrow(o.reply.text), " log " + log.string()));
             }
             co_await ws.end_session(std::chrono::milliseconds(200));
-            require(!ws._log && !ws._server);
+            require(ws._log_path.empty() && !ws._server && !ws._pump.log);
             require(issue("write Coordinate(4, 4) OPCODE::SWAP").reply.status == Reply::ERROR);
 
             // The whole log replays to the same World
@@ -3158,7 +3384,7 @@ namespace wry {
             require((uint64_t)displayed()->_time == end_time);
             require(displayed()->content_hash() == end_hash);
             require(tile(Coordinate{4, 4}).is_opcode());
-            require(!ws._server && ws._replay && ws._replay->result);
+            require(!ws._server && ws._replay_view && ws._replay_view->result);
             require(contains(narrow(issue("session").reply.text), "replay of " + log.string() + ": replayed"));
 
             // ... or to an earlier step
@@ -3211,7 +3437,7 @@ namespace wry {
             {
                 auto o = issue("host 0");
                 require(o.reply.status == Reply::OK);
-                require(ws._host && ws._log && !ws._replay);
+                require(ws._host && !ws._replay_view);
                 require((uint64_t)displayed()->_time == tampered);
             }
             // corrupt: the displayed World changes, off the stream
@@ -3392,16 +3618,20 @@ namespace wry {
             require(ws._host);
             ws.join(String("127.0.0.1"), 1);            // nothing listens on port 1
             require(ws._remote && ws._awaiting_save);
+            // The pump runs the connection's state machine
             bool refused = co_await eventually([&] {
-                (void) ws._server->take_steps();
                 return ws._remote->state() == RemoteServer::State::DISCONNECTED;
             });
             require(refused);
             (void) refused;
+            ws.take_published();
             require(ws._awaiting_save);                  // the save never came
-            ws._donations.push_back({7, 7});            // and suppose one was pending
+            {
+                WorldState::PumpStopped stopped(ws);    // the pump's state is ours
+                ws._pump.donations.push_back({7, 7});    // and suppose one was pending
+            }
             co_await ws.end_session(std::chrono::milliseconds(200));
-            require(!ws._awaiting_save && ws._donations.empty());
+            require(!ws._awaiting_save && !ws._pump.awaiting_save && ws._pump.donations.empty());
 
             // A new game after it runs: its steps are applied
             ws.new_game();
@@ -3413,17 +3643,11 @@ namespace wry {
             (void) paused;
             relay.step(2);
             bool applied = co_await eventually([&] {
-                for (Step& s : ws._server->take_steps())
-                    ws._backlog.push_back(std::move(s));
-                return ws._backlog.size() + ws._steps_taken >= 3 && relay.clock().head >= 3;
+                ws.take_published();
+                return ws._steps_taken >= 3 && relay.clock().head >= 3;
             });
             require(applied);
             (void) applied;
-            while (!ws._backlog.empty()) {
-                Step step = std::move(ws._backlog.front());
-                ws._backlog.pop_front();
-                co_await ws._apply_step_async(step);
-            }
             require(ws._steps_taken >= 3);
             co_await ws.end_session(std::chrono::milliseconds(200));
         }
