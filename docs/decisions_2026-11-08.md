@@ -186,6 +186,20 @@ after 15 s).  Three things are antony's call:
     2026-08-25 design, bddbf49: adaptive delay with hysteresis,
     rubber-band corrections, hard fast-forward only for big gaps).
     Sketch in chat; build on antony's go-ahead.
+    **Built 2026-11-20** (go-ahead given; step_pump.md section 7,
+    `game/render_clock.hpp`): the pump stamps every World it publishes;
+    main keeps the last 64 and draws World ceil(r) at the moment r, a
+    fraction of a step before its own time, r on a clock a delay behind
+    the schedule (the minimum arrival offset over 2 s).  Delay = jitter
+    spread + 1 step, rising at once and falling 1 step/s; corrections
+    slew within 10%; more than 8 steps behind snaps; outages, catch-ups
+    and resumes are not learned as jitter; a paused stream is drawn at
+    its newest step exactly.  Commands still read the displayed World
+    (27), now the clock's, and `step n` replies once it has the steps.
+    Found on the way: drawing World n over [n, n + 1) would hitch every
+    machine for a step at each waypoint, since a move beginning at n is
+    decided in the step from n and World n does not know it; World m
+    over (m - 1, m] is continuous (tested).
 27. **Commands read the displayed World, not the head.**  `get`, `dump`,
     `state-hash`, `pipette`, `follow` and `save` answer for the World on
     screen, which while the clock runs is up to a frame behind the

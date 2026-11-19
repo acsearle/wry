@@ -231,12 +231,15 @@ design, kept in open item 11.4) comes later.
 as they arrive, off the main thread: the step pump, one pool task per
 session ([docs/step_pump.md](../../../../docs/step_pump.md), since
 2026-11-19; before it, the main thread applied at most 64 a frame).  The
-*frame clock* renders whatever the newest applied World is, adopting
-the pump's latest snapshot once per frame, so a slow frame lowers the
-frame rate and never the step rate.  The smoothed render delay and rubber-banding of the
-2026-08-25 design (an audio-style jitter buffer) are deferred to open
-item 11.6; the first version renders the latest applied step and
-accepts the jitter.  Gameplay absorbs what the network cannot: no
+*frame clock* adopts the pump's latest snapshot once per frame, so a
+slow frame lowers the frame rate and never the step rate.  It does not
+draw the newest applied World: a *render clock* runs at the step rate a
+smoothed delay behind it, choosing from a ring of recent Worlds the one
+that holds the frame's moment and drawing it a fraction of a step
+before its time -- the 2026-08-25 design, an audio-style jitter buffer,
+built 2026-11-20 (step_pump.md section 7).  The delay adapts to the
+jitter observed, rising at once and falling slowly; corrections
+rubber-band; a big gap fast-forwards.  Gameplay absorbs what the network cannot: no
 twitch mechanics, and immediate cosmetic acknowledgment of every local
 action.
 
@@ -767,6 +770,8 @@ tier-2 data exists.
 5. Transport security: TLS under the codec.  Until then, hosting is for
    trusted networks, which the UI should say.
 6. Render clock: the smoothed delay behind the newest applied step.
+   Built 2026-11-20 (step_pump.md section 7); its numbers
+   (`RenderClock::Limits`) want tuning against real networks.
 7. Binary action bodies, if the text form ever costs bandwidth.
 8. Clientless server, and failover by promoting a client: both need the
    server to trust a client as donor and reference; revisit after the

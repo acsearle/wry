@@ -34,6 +34,7 @@
 #include "machine.hpp"
 #include "mpsc_queue.hpp"
 #include "nursery.hpp"
+#include "render_clock.hpp"
 #include "palette.hpp"
 #include "save.hpp"
 #include "simd.hpp"
@@ -324,9 +325,29 @@ namespace wry {
             std::optional<String> result;
         };
 
+        // A World as the render clock sees it (docs/step_pump.md section
+        // 7): when the pump published it, and whether the stream's clock
+        // had stopped after it.  `stepped` false: installed, not stepped
+        // (a new lineage's first World), so on no schedule
+        struct Drawable {
+            Root<World const*> world;       // null once past capacity
+            uint64_t world_time = 0;        // its time
+            double published = 0.0;         // steady_clock seconds
+            bool paused = false;
+            bool stepped = true;
+        };
+        // The most recent Worlds kept for the render clock to choose from,
+        // in the snapshot and on the main thread: about a second of steps
+        static constexpr size_t drawable_capacity = 64;
+
         // A snapshot of the pump's state, as the main thread adopts it
         struct Published {
             Root<World const*> world;       // the pump's head
+            // The head's lineage (Pump::lineage), and the Worlds published
+            // since the adopter last took them, oldest first, at most
+            // drawable_capacity: one per World the head has been
+            uint64_t lineage = 0;
+            std::vector<Drawable> recent;
             uint64_t steps_taken = 0;
             bool awaiting_save = false;
             std::optional<ReplayView> replay;
@@ -364,6 +385,16 @@ namespace wry {
             // Lines for the main thread's log, moved into the snapshot at
             // each publish
             std::vector<String> messages;
+            // Counts installs: a World installed starts a new lineage,
+            // which the render clock does not interpolate across
+            uint64_t lineage = 0;
+            // The stream's clock stopped after the last step applied (it
+            // carried PAUSED; RESUMED clears it)
+            bool stream_paused = false;
+            // The last World put in the snapshot's `recent`, and its
+            // lineage: publish adds head once
+            World const* recorded = nullptr;
+            uint64_t recorded_lineage = 0;
 
             // ---- Written by the main thread only, while the pump is
             //      stopped; read by both
@@ -433,9 +464,24 @@ namespace wry {
             ~PumpStopped();
         };
 
-        // The displayed snapshot (main thread): adopted from the pump by
-        // take_published, read by the renderer and every command
+        // The adopted snapshot (main thread), from the pump by
+        // take_published.  _world_newest is the newest World the pump has
+        // published.  _world_to_render is the displayed one, which the
+        // render clock chose from the recent ones (docs/step_pump.md
+        // section 7), a little behind the newest: the renderer draws it at
+        // _render_before of a step before its own time, and every command
+        // reads it, being what is on screen (decision 27)
+        Root<World const*> _world_newest;
         Root<World const*> _world_to_render;
+        float _render_before = 0.0f;        // in [0, 1)
+        double _render_position = 0.0;      // the clock's: time - before
+        std::deque<Root<World const*>> _drawable;   // consecutive times, oldest first
+        uint64_t _drawable_lineage = ~uint64_t{0};
+        RenderClock _render_clock;
+        // Choose _world_to_render for wall time `now` (steady_clock seconds)
+        void _choose_drawn(double now);
+        // `step n`'s count: _steps_taken as of the displayed World
+        uint64_t _steps_drawn() const;
         uint64_t _steps_taken = 0;
         bool _awaiting_save = false;
         std::optional<ReplayView> _replay_view;

@@ -118,6 +118,20 @@ namespace wry {
 
     };
     
+    // How far along its move a machine is drawn, 0 at _old_time to 1 at
+    // _new_time and after, at the moment tnow - before of a World whose
+    // time is tnow (the render clock, docs/step_pump.md section 7).  A
+    // digging machine is at rest (it shakes in place).  Every move in
+    // World tnow was decided at tnow - 1 or before, so over before in
+    // [0, 1) the moment is never before the move began, and World
+    // tnow + 1 at before = 1 is where World tnow is at before = 0
+    inline float move_progress(Machine const& m, Time tnow, float before) {
+        if (m._phase == Machine::PHASE_MINING || !(m._old_time < m._new_time))
+            return 1.0f;
+        const float t = ((float)(tnow - m._old_time) - before) / (float)(m._new_time - m._old_time);
+        return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    }
+
 } // namespace wry::sim
 
 #endif /* machine_hpp */

@@ -1,6 +1,7 @@
 # The step pump: world stepping off the render frame
 
-Status: BUILT 2026-11-19 on branch `step-pump` (on top of `path-trace`).
+Status: BUILT 2026-11-19 on branch `step-pump` (on top of `path-trace`);
+the render clock (section 7) BUILT 2026-11-20.
 Decisions for antony: [decisions_2026-11-08.md](decisions_2026-11-08.md)
 items 26 to 28.  Measured: section 12.1.
 
@@ -141,11 +142,11 @@ where it goes:
 
 | user | before | after |
 |---|---|---|
-| renderer (`WryWorldScene`), money line | `_world_to_render` | the same field, now the adopted snapshot |
+| renderer (`WryWorldScene`), money line | `_world_to_render` | the same field, now the World the render clock chose from the adopted ones (section 7), drawn at `tnow - _render_before` |
 | `get`, `dump`, `state-hash`, `pipette`, `machine_at` / `follow`, `follow_camera` | pop / push `_worlds` | read `_world_to_render` |
 | `save_current` | pop / push `_worlds` | a Root copy of `_world_to_render` |
 | map builder handoff (~1 Hz) | `_world_to_render` | unchanged |
-| `step N` | target `_steps_taken + N` | target `applied + N` (the pump's live count); replies once the *displayed* count reaches it |
+| `step N` | target `_steps_taken + N` | target `applied + N` (the pump's live count); replies once the *displayed* World has that many (`_steps_drawn`) |
 | `pause`, `resume` | the relay | unchanged (the relay's own inbox) |
 | `write` (submit) | `_server->submit` | unchanged; RemoteServer is locked (section 6) |
 | `session` | live fields | the snapshot, plus the RemoteServer (locked) |
@@ -157,9 +158,11 @@ where it goes:
 | connection-state log lines | main, polling `state()` | unchanged (locked) |
 
 Commands read the **displayed** World, not the head: what you see is
-what `get` and `state-hash` answer for.  While the clock runs they may be
-a step or two behind the stream; when paused, the two are the same once
-the pump has drained (decision 27).
+what `get` and `state-hash` answer for (decision 27).  While the clock
+runs, that World is the render clock's delay behind the newest adopted
+one, which is itself up to a frame behind the head: a step or two
+locally.  When paused the three are the same once the pump has drained,
+because a paused stream is drawn at its newest step (section 7).
 
 
 ## 5. Publication
@@ -169,6 +172,9 @@ state changes (a save landed, a replay finished, a stream refused):
 
     struct Published {
         Root<World const*> world;          // == head
+        uint64_t lineage;                  // counts installs
+        std::vector<Drawable> recent;      // each World head has been, once,
+                                           // stamped (section 7)
         uint64_t steps_taken;
         bool awaiting_save;
         std::optional<ReplayView> replay;  // path, through, result
@@ -184,9 +190,11 @@ Main adopts in `WorldState::take_published()`, the first thing `update()`
 does after repinning:
 
 1. `news.try_take()` (and drop what it took);
-2. lock `published_mutex`, copy the snapshot into the displayed fields,
-   move the messages out, unlock;
-3. append the messages to the log.
+2. lock `published_mutex`, copy the snapshot into the adopted fields,
+   move `recent` and the messages out, unlock;
+3. feed `recent` to the render clock and the ring, and choose the World
+   to display (section 7);
+4. append the messages to the log.
 
 `news` exists for the hosts that sleep when idle (offscreen, headless):
 `GuiContext::idle()` is false while `news` is non-empty, and
@@ -195,9 +203,11 @@ to wait on the transport inbox, which the pump now consumes.  Section 9.3
 shows no publish is left unadopted while main sleeps.
 
 The snapshot holds a Root, so the World it names stays alive however long
-main takes to adopt it.  A World the pump has moved past is dropped when
-the snapshot is overwritten and main's copy moves on; old Worlds are not
-queued.  The deque `_worlds` is gone.
+main takes to adopt it.  The recent Worlds are held, by Root, for the
+render clock: at most 64 in the snapshot and 64 in main's ring.  Past
+that a World the pump has moved past is dropped (its stamp kept), so
+however long main stalls the snapshot holds a bounded number of Worlds.
+The deque `_worlds` is gone.
 
 
 ## 6. RemoteServer
@@ -220,24 +230,134 @@ Lifecycle calls (`leave`, `shutdown`, `dial`, `adopt`) happen with the
 pump stopped.
 
 
-## 7. What the renderer interpolates against
+## 7. The render clock: what the frame draws
 
-`tnow = world_get_time(world)` of the **displayed** World, as before:
-machines interpolate between `_old_time` and `_new_time` at the World's
-own integer time.  Nothing else is consistent with the World being drawn.
+Built 2026-11-20 (decision 26; multiplayer.md open item 11.6; the
+2026-08-25 design, an audio-style jitter buffer).  The code is
+`game/render_clock.hpp` (the clock, pure arithmetic) and
+`WorldState::take_published` / `_choose_drawn` (the ring).
 
-With frames as fast as steps this looks as it did.  With slow frames each
-frame shows the newest step, so motion advances in jumps of
-frame-time x 60 steps, but never lags the stream, and never bursts and
-catches up as the 64-step cap made it do.  With frames faster than steps
-(ProMotion at 120 Hz), consecutive frames repeat a step.
+The frame does not draw the newest World.  Steps become drawable at
+uneven wall times: the network, the relay's timer, and the pump's own
+step times all add jitter.  If each step is drawn the moment it lands,
+that unevenness goes straight to the screen.  At 60 Hz some frames show
+two steps of motion and some show none.  At 120 Hz frames repeat a step
+and then jump.  So instead the frame draws a moment of the world on a
+steady clock.  The clock runs at the step rate, a small adaptive delay
+behind the stream.
 
-A smoother clock is possible without touching the simulation: draw at
-`tnow + f`, f the fraction of a quantum since the snapshot was adopted,
-clamped below 1.  Every machine in motion in World t has `_new_time > t`,
-so `t + f < _new_time` for f < 1, and the interpolation never runs past
-the end of the move it is in.  That is multiplayer.md open item 11.6 (the
-render clock), and decision 26: not built here.
+**The ring.**  The pump puts every World it publishes into the
+snapshot's `recent`, once.  Each entry is stamped with the `steady_clock`
+time the pump published it.  It is also stamped with whether the
+stream's clock had stopped after it: the step carried PAUSED, or was
+stepped while paused.  At each adoption main moves the entries out into
+`_drawable`, which holds the last 64 Worlds (about a second) at
+consecutive times.  If main is slower than that (a frame longer than 64
+steps), the snapshot keeps only the newest 64 Worlds.  Older entries
+keep their stamps without their World, so the clock still learns from
+every arrival.
+
+**Drawing between steps.**  The clock gives a fractional step number r,
+and the frame draws World m = ceil(r) at the moment r, a fraction
+`before = m - r` in [0, 1) of a step before its own time.
+`WryWorldScene` puts each machine at `move_progress(machine, m, before)`
+(machine.hpp) along its move from `_old_time` to `_new_time`.  The rule
+is World m over (m - 1, m], not World n over [n, n + 1).  A step from
+World m - 1 runs at `now() == m - 1`, so every move in World m was
+decided at m - 1 or before (`_old_time <= m - 1`), and World m knows
+where everything is from m - 1 on.  World m - 1 does not know which
+moves begin at m - 1: drawn past its own time it would hold each machine
+at its waypoint for a step, and then jump a step's worth along the next
+move.  Under ceil, consecutive Worlds agree where they meet: World m at
+its own time and World m + 1 a whole step before its own put every
+machine in the same place.  Either it is on the same move at the same
+progress, or it is at rest on the same cell (one move's end, the next
+one's start).  `world_state_move_progress_continuity` checks this over
+300 steps of the starting world, and fails for the floor rule.  At
+integer r the frame is exactly the old integer drawing.  A digging
+machine's shake is a function of the integer time, as before.  The
+newest World is drawable only up to its own time, so r never passes the
+newest step.
+
+**The schedule.**  The relay finalizes step n at n·q plus a constant, q
+being its quantum (from WELCOME: 1/60 s).  A step's *offset* is
+`t - n·q`, where t is when it became drawable here.  The offset is that
+constant plus the step's own delay: network, timer and pump.  Over the
+last 120 arrivals (2 s):
+- the minimum offset is the *base*: when a step arrives at the earliest;
+- the *spread* (max minus min, in steps) is the jitter.
+
+**The target.**  At wall time T the newest step the schedule promises is
+(T - base)/q.  The clock aims a delay D behind it: `target = (T - base)/q
+- D`, with `D = spread + margin`.  The margin is one step, because a step
+arrives whole: the newest step's moment is reached only when the step
+after it is due.  At that delay the latest arrival in the window would
+still have been in time.  D is at most 30 steps (0.5 s).
+
+**Hysteresis.**  D rises at once when the spread does: a late step is a
+reason to buffer more now.  It falls at most a step per second, and only
+once the late step has left the 2 s window.
+
+**Rubber-banding.**  The clock runs at the step rate times
+`1 + clamp(e·q / 0.5 s, ±10%)`.  Here e is how far the target is from
+where the clock would be at the step rate.  A change in D or in the base
+is absorbed by running up to 10% slow or fast, never by a jump.
+
+**Fast-forward.**  If the target is more than 8 steps (133 ms) ahead,
+the clock jumps to it.  Slewing that far at 10% would take ten times as
+long.  Only an outage or a catch-up produces such an error.
+
+**Underrun.**  r never passes the newest step.  A stream later than the
+delay covers holds the picture on the newest World at its own time
+until the next World lands (counted as an underrun).  The clock then
+rubber-bands or fast-forwards on.
+
+**Discontinuities.**  Some arrivals are not jitter, and are not learned
+as it:
+- **A gap.**  An arrival more than 0.25 s behind the schedule is an
+  outage.  Neither it nor the burst that ends it is learned until
+  arrivals are back within the delay.  The picture holds through the
+  outage and fast-forwards after it.  A "gap" that has not closed in
+  0.5 s means the schedule itself moved: the clock learns it afresh.
+- **Early.**  An arrival more than half a step earlier than the base
+  means the window was late, not jittery: a join or load catching up,
+  its backlog applied faster than real time.  The clock learns afresh
+  from that arrival, and the delay does not rise.
+- **Paused.**  The clock draws a step the stream's clock stopped after
+  exactly, at fraction 0.  So a paused world is a still frame (the path
+  tracer converges), and `step n` while paused shows its step as soon as
+  it lands.  Pausing jumps the picture forward by the delay, a step or
+  two locally.  Resuming restarts the relay's timer, so the first step
+  after it starts the schedule afresh.
+- **A new lineage.**  An installed World (a new game, a load, a join, a
+  replay) resets the ring and the clock.  The installed World is drawn
+  as it is until steps follow.
+
+**Who reads which.**  `_world_to_render` is the *displayed* World, the
+clock's choice.  The renderer reads it, and so does every command,
+since what you see is what you get (decision 27): `get`, `dump`,
+`state-hash`, `save`, `pipette`, `follow` and the map.  `step n` replies
+once the displayed World has the steps (`_steps_drawn`).  `_world_newest`
+is the newest adopted World, read by `session`'s `time` and a replay's
+progress.  While paused the two are the same.
+
+**Determinism.**  The clock reads wall time, so which moment of a
+running world a frame shows varies from run to run, as the newest step
+did before.  While paused it is exact, so scripts and screenshots, which
+pause, are unchanged.
+
+**Tuning.**  The numbers are `RenderClock::Limits`.  Single player over
+the socket pair learns a delay of under a step (section 12.1).  Over a
+network D grows with the jitter it sees.  To tune it like an audio
+buffer, watch `session`'s ` render R delay D underruns U snaps S`.  The
+spread is a peak hold (the window maximum).  A high percentile would
+resist a single outlier at the cost of more underruns.  That is
+deferred until real networks show which is wanted.
+
+**Latency.**  A local action shows D later than it would against the
+newest World.  Locally that is under a step.  Over a network it is what
+the jitter costs, and multiplayer.md's answer stands: an immediate
+cosmetic acknowledgment of every local action.
 
 
 ## 8. GC obligations
@@ -270,6 +390,12 @@ wait (scheduled by `emplace`), the step's completion, and the yield.
   and copied by main, both pinned; the count never reaches zero in
   between (the pump's `head` holds one).  An old World's last Root may
   drop on either thread; both are pinned mutators, so the shade is legal.
+- **The ring.**  The render clock's recent Worlds are Roots, in the
+  snapshot and in main's `_drawable`, at most 64 each: a second of steps
+  kept alive.  The Worlds are persistent and share most of their
+  structure, so a second's worth costs what the steps changed, not 64
+  Worlds.  Roots dropped by the pump's trim are released after the lock,
+  like the superseded head.
 - **Main.**  Still repins once per frame.  It may block pinned in
   `_stop_pump` (one step at most), which holds the epoch back that long,
   as `_end_session` already does for longer.
@@ -411,6 +537,9 @@ thread) is unchanged.
   dominate.
 - One pump per WorldState at a time; a second start while one runs is a
   bug (asserted).
+- The render clock adds a stamp and a Root per published World, and one
+  `RenderClock::arrived` (a pass over the 120-entry window) per World at
+  adoption: negligible.
 
 
 ## 12. Tests and measurement
@@ -425,8 +554,26 @@ thread) is unchanged.
   frame, a stand-in for a slow encode, so the effect can be measured
   without a GPU-bound frame.
 - `session` prints, besides `head` (the last step received) and `applied`
-  (the displayed World's count), `pumped` (the pump's live count),
-  `time` (the displayed World's) and `relay` (the relay's head, hosting).
+  (the adopted count), `pumped` (the pump's live count), `time` (the
+  newest adopted World's), `render R delay D underruns U snaps S` (the
+  render clock: the position drawn, the delay in steps, the frames it
+  ran dry, the jumps), and `relay` (the relay's head, hosting).
+- `render_clock_jitter`, `_gap`, `_pause` and `_catch_up` drive the
+  clock with synthetic arrivals and frames:
+  - jittered arrivals drawn at 120 Hz: once warmed up, no underruns, the
+    rate within 10% of the step rate, and a delay just over the worst
+    lateness; calm, it falls to its margin;
+  - a one-second outage: the picture holds, fast-forwards once the burst
+    lands, and the outage is not learned as jitter;
+  - pause, a stepped burst, resume: exact newest steps while paused, and
+    no jump or learned delay after;
+  - a catch-up faster than real time: the delay never rises.
+- `world_state_step_pump` also runs 40 frames on the live session: the
+  displayed World is one of the recent ones, never past the newest, drawn
+  a fraction in [0, 1) of a step before its time, never going backwards.
+- `world_state_move_progress_continuity`: consecutive Worlds agree where
+  they meet (World m at its time, World m + 1 a step before its time),
+  over 300 steps of the starting world.
 
 ### 12.1 Measured
 
@@ -462,8 +609,37 @@ frame here, not the 100-250 ms of a paused accumulation.  The stalls
 stand in for the slower frames.
 
 
+**The render clock** (2026-11-20, `tools/measure_render_clock.py`, Debug,
+offscreen, pt_reference, single player over the socket pair).  Each
+`session` reply is one frame.  The *rms* columns are each quantity's
+RMS residual, in steps, from a straight line in wall time (fitted per
+second, the phase's first second dropped).  `rms newest` is what drawing
+the newest World would show; `rms render` is what the clock draws.
+*Behind* is the mean of newest minus drawn; *delay* is the clock's at
+the phase's end.
+
+    phase        frames  frame ms  render/s  rms newest  rms render  behind  delay  underruns  snaps
+    fast           1612       5.0      60.0       0.297       0.052    0.53   1.07          0      0
+    stall 30 ms     128      47.2      60.1       0.317       0.245    0.67   1.46          0      0
+    stall 250 ms     23     270.4      60.1       0.234       0.125    0.76   1.41          0      0
+    fast again      797       5.0      60.1       0.294       0.051    0.65   1.06          0      0
+    paused          560       5.4       0.0       0.000       0.000    0.00   1.06          0      0
+    resumed         955       5.2      60.0       0.300       0.057    0.50   1.11          4      0
+
+With fast frames the drawn position is about 6 times smoother than the
+newest step: 0.05 of a step from a straight line against 0.3, the
+sawtooth of whole steps landing unevenly.  The delay settles at about a
+step (18 ms) and the picture trails the newest World by about half a
+step.  Under slow frames the residuals are mostly the measurement: the
+reply comes a frame after the frame's clock was read, and with a
+30-270 ms sleep in between, that spacing varies.  Paused, the newest
+step is drawn exactly.  Resuming cost 4 underrun frames while the
+schedule was relearned, and nothing after.  The local stream has little
+jitter; a network's would show in the delay, which this run cannot.
+
 ## 13. Other documents
 
 multiplayer.md section 4 ("Clients keep two clocks") and section 8 ("The
 client ... whose inbox the main thread takes once per frame") describe the
-old arrangement; both are updated to the pump.
+old arrangement; both are updated to the pump.  Open item 11.6 (the
+render clock) is built (section 7).

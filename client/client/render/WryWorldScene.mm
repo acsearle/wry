@@ -77,7 +77,8 @@ struct WryNumberGlyph {
     // The world's state (MVC model): world pipeline, session view/input state,
     // overlays, and the per-frame logic (update / input).  This scene is a thin
     // Metal renderer over it -- _model->_world_to_render is the world the
-    // renderer draws, adopted from the step pump by _model->update().
+    // renderer draws, chosen by the render clock from what _model->update()
+    // adopted from the step pump.
     std::shared_ptr<wry::WorldState> _model;
 
     
@@ -1956,9 +1957,11 @@ struct WryNumberGlyph {
     using namespace ::simd;
     using namespace ::wry;
 
-    // -update adopted the newest World the step pump published (and
-    // serviced the GC) immediately before this -encode, on the same thread
-    // and frame; we only read it here (docs/step_pump.md)
+    // -update adopted what the step pump published (and serviced the GC)
+    // immediately before this -encode, on the same thread and frame, and
+    // the render clock chose from it the World to draw, a little behind
+    // the newest, and the fraction of a step before its time to draw it
+    // at (docs/step_pump.md section 7); we only read them here
     Root<World const*> const& new_world = _model->_world_to_render;
     assert(new_world);
 
@@ -2197,7 +2200,14 @@ struct WryNumberGlyph {
 
     } else {
 
+        // The World's own time, and the render clock's fraction of a step
+        // before it, in [0, 1): the frame shows the moment tnow - tbefore.
+        // Every move a machine is in in this World was decided at
+        // tnow - 1 or before (_old_time <= tnow - 1), so the moment is
+        // never before a move began, and the next World, drawn from
+        // tnow on, agrees with this one at tnow
         auto tnow = world_get_time(new_world._ptr);
+        const float tbefore = _model->_render_before;
         auto&& entities = new_world->_entity_for_entity_id;
 
         // Visible entities by Morton-range descent over the location
@@ -2524,11 +2534,7 @@ struct WryNumberGlyph {
                 // While digging the machine is at rest on its cell (the
                 // dig's times bracket the dig, not a move), shaking
                 const bool digging = p->_phase == wry::Machine::PHASE_MINING;
-                float t = 1.0;
-                if (!digging && (tnow < p->_new_time)) {
-                    assert(tnow >= p->_old_time);
-                    t = (tnow - p->_old_time) / (float) (p->_new_time - p->_old_time);
-                }
+                const float t = wry::move_progress(*p, tnow, tbefore);
                 assert(0.0f <= t);
                 assert(t <= 1.0f);
                 //printf("%lld %lld %lld %g\n", p->_old_time, p->_new_time, tnow, t);

@@ -348,6 +348,8 @@ namespace wry {
     // stopped, or the pump (a donated save)
     void WorldState::Pump::install(World* world) {
         head = Root<World const*>(world);
+        ++lineage;
+        stream_paused = false;
         steps_taken = 0;
         applied.store_relaxed(0);
         if (client)
@@ -372,6 +374,12 @@ namespace wry {
 
         String widen(std::string const& s) {
             return String(StringView(s.c_str()));
+        }
+
+        // The render clock's wall time (docs/step_pump.md section 7)
+        double steady_seconds() {
+            return std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
         }
 
     } // namespace
@@ -454,10 +462,33 @@ namespace wry {
     // the queue empty has adopted this snapshot (docs/step_pump.md 9.3)
     void WorldState::Pump::publish() {
         Root<World const*> dropped;     // the superseded World, released unlocked
+        std::vector<Root<World const*>> dropped_recent;
+        const double now = steady_seconds();
         {
             std::scoped_lock lock{published_mutex};
             dropped = std::move(published.world);
             published.world = head;
+            // The render clock's: each World the head has been, once, with
+            // when it became drawable.  Past capacity the oldest give up
+            // their World and keep only the time, which the clock still
+            // learns from
+            if (head && (head._ptr != recorded || recorded_lineage != lineage)) {
+                std::vector<Drawable>& recent = published.recent;
+                if (published.lineage != lineage) {
+                    for (Drawable& d : recent)
+                        dropped_recent.push_back(std::move(d.world));
+                    recent.clear();
+                    published.lineage = lineage;
+                }
+                const bool stepped = recorded && (recorded_lineage == lineage);
+                recent.push_back(Drawable{head, (uint64_t)head->_time, now, stream_paused, stepped});
+                if (recent.size() > drawable_capacity)
+                    dropped_recent.push_back(std::move(recent[recent.size() - 1 - drawable_capacity].world));
+                if (recent.size() > 64 * drawable_capacity)
+                    recent.erase(recent.begin(), recent.begin() + (ptrdiff_t)drawable_capacity);
+                recorded = head._ptr;
+                recorded_lineage = lineage;
+            }
             published.steps_taken = steps_taken;
             published.awaiting_save = awaiting_save;
             if (replay)
@@ -559,6 +590,12 @@ namespace wry {
                                               p->client ? p->client->quantum_ns() : 0);
                     }
                     p->head = std::move(next);
+                    for (Command const& c : step.commands) {
+                        if (c.kind == Command::PAUSED)
+                            p->stream_paused = true;
+                        else if (c.kind == Command::RESUMED)
+                            p->stream_paused = false;
+                    }
                     ++p->steps_taken;
                     p->applied.store_relaxed(p->steps_taken);
                     p->replay_check(step);
@@ -637,12 +674,17 @@ namespace wry {
     void WorldState::take_published() {
         (void) _pump.news.try_take();
         std::vector<String> messages;
+        std::vector<Drawable> recent;
+        uint64_t lineage = 0;
         Root<World const*> dropped;     // the World we move past, released unlocked
         {
             std::scoped_lock lock{_pump.published_mutex};
             Published& p = _pump.published;
-            dropped = std::move(_world_to_render);
-            _world_to_render = p.world;
+            dropped = std::move(_world_newest);
+            _world_newest = p.world;
+            recent = std::move(p.recent);
+            p.recent.clear();
+            lineage = p.lineage;
             _steps_taken = p.steps_taken;
             _awaiting_save = p.awaiting_save;
             _replay_view = p.replay;
@@ -650,8 +692,61 @@ namespace wry {
             messages = std::move(p.messages);
             p.messages.clear();
         }
+        // The render clock's ring (docs/step_pump.md section 7): a new
+        // lineage starts both again; a World missing from the run (the
+        // pump kept only its time) starts the ring again
+        if (lineage != _drawable_lineage) {
+            _drawable.clear();
+            _render_clock.reset();
+            _drawable_lineage = lineage;
+        }
+        if (_pump.client) {
+            if (const uint64_t ns = _pump.client->quantum_ns())
+                _render_clock.set_quantum((double)ns * 1e-9);
+        }
+        for (Drawable& d : recent) {
+            const uint64_t time = (uint64_t)d.world_time;
+            if (d.stepped)
+                _render_clock.arrived(time, d.published, d.paused);
+            if (!d.world) {
+                _drawable.clear();
+                continue;
+            }
+            if (!_drawable.empty() && time != (uint64_t)_drawable.back()->_time + 1)
+                _drawable.clear();
+            _drawable.push_back(std::move(d.world));
+        }
+        while (_drawable.size() > drawable_capacity)
+            _drawable.pop_front();
+        _choose_drawn(steady_seconds());
         for (String const& m : messages)
             _gui.append_log(m);
+    }
+
+    // Steps taken as of the World drawn: _steps_taken less how far the
+    // render clock is behind the newest
+    uint64_t WorldState::_steps_drawn() const {
+        if (!_world_to_render || !_world_newest)
+            return _steps_taken;
+        const uint64_t behind = (uint64_t)_world_newest->_time - (uint64_t)_world_to_render->_time;
+        return _steps_taken >= behind ? _steps_taken - behind : 0;
+    }
+
+    void WorldState::_choose_drawn(double now) {
+        if (_drawable.empty()) {
+            _world_to_render = _world_newest;
+            _render_before = 0.0f;
+            _render_position = _world_newest ? (double)_world_newest->_time : 0.0;
+            return;
+        }
+        const uint64_t oldest = (uint64_t)_drawable.front()->_time;
+        const uint64_t newest = (uint64_t)_drawable.back()->_time;
+        const double r = _render_clock.advance(now, oldest, newest);
+        // World m drawn over (m - 1, m]: ceil (render_clock.hpp)
+        const uint64_t m = std::clamp((uint64_t)std::ceil(r), oldest, newest);
+        _world_to_render = _drawable[(size_t)(m - oldest)];
+        _render_before = (float)std::clamp((double)m - r, 0.0, 1.0 - 1.0 / 1024.0);
+        _render_position = (double)m - (double)_render_before;
     }
 
     bool WorldState::has_world_news() {
@@ -1520,7 +1615,7 @@ namespace wry {
             std::optional<Reply> poll() override {
                 if (gui.world != ws)
                     return Reply::error(String("the world was unloaded"));
-                if (ws->_steps_taken < target)
+                if (ws->_steps_drawn() < target)
                     return std::nullopt;
                 return Reply::ok();
             }
@@ -1702,7 +1797,7 @@ namespace wry {
                         if (ws._replay_view->result)
                             text += narrow(*ws._replay_view->result);
                         else
-                            text += "step " + std::to_string((uint64_t)ws._world_to_render->_time)
+                            text += "step " + std::to_string((uint64_t)ws._world_newest->_time)
                                   + " of " + std::to_string(ws._replay_view->through);
                         return Reply::ok(widen(text));
                     }
@@ -1724,8 +1819,19 @@ namespace wry {
                 // The pump's own count, live: ahead of the displayed one
                 // by what it has applied since this frame adopted
                 text += " pumped " + std::to_string(ws._pump.applied.load_relaxed());
-                if (ws._world_to_render)
-                    text += " time " + std::to_string((uint64_t)ws._world_to_render->_time);
+                if (ws._world_newest)
+                    text += " time " + std::to_string((uint64_t)ws._world_newest->_time);
+                // The render clock (docs/step_pump.md section 7): the
+                // position drawn, the delay it keeps behind the schedule,
+                // the frames it ran dry and the jumps it made
+                {
+                    char buffer[128];
+                    std::snprintf(buffer, sizeof(buffer), " render %.3f delay %.2f underruns %llu snaps %llu",
+                                  ws._render_position, ws._render_clock.delay(),
+                                  (unsigned long long)ws._render_clock.underruns(),
+                                  (unsigned long long)ws._render_clock.snaps());
+                    text += buffer;
+                }
                 if (ws._awaiting_save)
                     text += " awaiting save";
                 if (ws._host) {
@@ -3143,9 +3249,10 @@ namespace wry {
     // adopts, as when the main thread is stalled in a long encode -- the
     // handshake completes, our JOIN rides the stream, and the pump applies
     // the server's steps as they come, well past the 64 a frame that
-    // update() used to apply; the displayed snapshot does not move until it
+    // update() used to apply; the adopted snapshot does not move until it
     // is adopted, and then jumps straight to the head, a World whose time
-    // is the count of steps taken.  A lifecycle change mid-stream (corrupt)
+    // is the count of steps taken, while the World drawn follows the
+    // render clock a little behind it.  A lifecycle change mid-stream (corrupt)
     // stops the pump between steps and starts it again, and the stream
     // goes on from the edited World.
     define_test("world_state_step_pump") {
@@ -3158,7 +3265,7 @@ namespace wry {
             Relay& relay = ws._host->relay();
             RemoteServer& client = ws._host->client();
             const uint64_t displayed = ws._steps_taken;
-            Root<World const*> const shown = ws._world_to_render;
+            Root<World const*> const shown = ws._world_newest;
             require(shown && (uint64_t)shown->_time == 0);
 
             bool joined = co_await eventually([&] {
@@ -3174,10 +3281,33 @@ namespace wry {
             });
             require(level);
             require(ws._pump.applied.load_relaxed() >= far - 8);
-            require((ws._steps_taken == displayed) && (ws._world_to_render._ptr == shown._ptr));
+            require((ws._steps_taken == displayed) && (ws._world_newest._ptr == shown._ptr));
             ws.take_published();
             require(ws._steps_taken >= far - 8);
-            require((uint64_t)ws._world_to_render->_time == ws._steps_taken);
+            require((uint64_t)ws._world_newest->_time == ws._steps_taken);
+
+            // The render clock (docs/step_pump.md section 7), frame by
+            // frame: it draws one of the recent Worlds, never the newest
+            // beyond its time, a fraction of a step before that World's
+            // time, and never goes backwards
+            {
+                double last = ws._render_position;
+                for (int frame = 0; frame != 40; ++frame) {
+                    co_await cancelable_sleep(0.008);
+                    ws.take_published();
+                    require(ws._world_to_render && ws._world_newest);
+                    const uint64_t drawn = (uint64_t)ws._world_to_render->_time;
+                    const uint64_t newest = (uint64_t)ws._world_newest->_time;
+                    require(drawn <= newest && drawn + WorldState::drawable_capacity > newest);
+                    require(ws._render_before >= 0.0f && ws._render_before < 1.0f);
+                    require(ws._render_position == (double)drawn - (double)ws._render_before);
+                    require(ws._render_position <= (double)newest);
+                    require(ws._render_position >= last);
+                    last = ws._render_position;
+                }
+                // it moved, and it is not stuck at the start
+                require(ws._render_position > (double)far - 8);
+            }
 
             // corrupt: the pump stopped, its head edited, the pump started
             const uint64_t before = ws._steps_taken;
@@ -3190,9 +3320,9 @@ namespace wry {
             });
             require(on);
             Term t = term_make_null();
-            (void) ws._world_to_render->_term_for_coordinate.try_get(Coordinate{9, 9}, t);
+            (void) ws._world_newest->_term_for_coordinate.try_get(Coordinate{9, 9}, t);
             require(t.is_inty() && (t.as_int() == 1));
-            require((uint64_t)ws._world_to_render->_time == ws._steps_taken);
+            require((uint64_t)ws._world_newest->_time == ws._steps_taken);
 
             co_await ws.end_session(std::chrono::milliseconds(200));
             require(!ws._pump_run);
@@ -3248,6 +3378,73 @@ namespace wry {
         co_await bench(make_starting_world(), 200, "starting world");
         if (std::getenv("WRY_BENCH"))
             co_await bench(make_starting_world_big(300, 900), 64, "stress world (300 x 300, 900 machines)");
+        co_return;
+    };
+
+    // The render clock draws World m over the moments (m - 1, m]
+    // (docs/step_pump.md section 7): consecutive Worlds must agree where
+    // they meet.  Over 300 steps of the starting world, every machine in
+    // both World m and World m + 1 is drawn in the same place by World m
+    // at its own time and by World m + 1 a whole step before its: on the
+    // same move at the same progress, or at rest at the same cell facing
+    // the same way (one move's end, the next one's start)
+    define_test("world_state_move_progress_continuity") {
+        Root<World*> w{make_starting_world()};
+        int compared = 0, moving = 0, handovers = 0;
+        for (int i = 0; i != 300; ++i) {
+            epoch::Epoch pin = pin_global_epoch();
+            Root<World*> next = co_await w._ptr->step();
+            unpin_global_epoch(pin);
+            const Time m = w->_time;
+            require(next->_time == m + 1);
+            w->_entity_for_entity_id.kv.for_each([&](EntityID id, const Entity* e) {
+                const Machine* a = dynamic_cast<const Machine*>(e);
+                const Entity* f = nullptr;
+                if (!a || !next->_entity_for_entity_id.try_get(id, f))
+                    return;
+                const Machine* b = dynamic_cast<const Machine*>(f);
+                require(b);
+                // Never before a move began, over the whole range
+                require(b->_phase == Machine::PHASE_MINING || b->_old_time <= m);
+                const float ta = move_progress(*a, m, 0.0f);
+                const float tb = move_progress(*b, m + 1, 1.0f);
+                ++compared;
+                const bool same_move = (a->_old_time == b->_old_time) && (a->_new_time == b->_new_time)
+                    && (a->_old_location == b->_old_location) && (a->_new_location == b->_new_location)
+                    && (a->_old_heading == b->_old_heading) && (a->_new_heading == b->_new_heading)
+                    && ((a->_phase == Machine::PHASE_MINING) == (b->_phase == Machine::PHASE_MINING));
+                if (same_move) {
+                    require(ta == tb);
+                    if (ta > 0.0f && ta < 1.0f)
+                        ++moving;
+                    return;
+                }
+                // A handover: World m has it at a rest point, World m + 1
+                // at the same one
+                auto rest = [](const Machine* x, float t, Coordinate& at, i64& heading) {
+                    if (t == 1.0f) {
+                        at = x->_new_location;
+                        heading = x->_new_heading;
+                        return true;
+                    }
+                    if (t == 0.0f) {
+                        at = x->_old_location;
+                        heading = x->_old_heading;
+                        return true;
+                    }
+                    return false;
+                };
+                Coordinate pa{}, pb{};
+                i64 ha = 0, hb = 0;
+                require(rest(a, ta, pa, ha) && rest(b, tb, pb, hb));
+                require(pa == pb);
+                require((ha & 3) == (hb & 3));
+                ++handovers;
+            });
+            w = std::move(next);
+        }
+        // the starting world has machines, and they move and hand over
+        require(compared > 0 && moving > 0 && handovers > 0);
         co_return;
     };
 
@@ -3319,7 +3516,7 @@ namespace wry {
                 }
                 require(!"did not catch up");
             };
-            auto displayed = [&]() -> World const* { return ws._world_to_render._ptr; };
+            auto displayed = [&]() -> World const* { return ws._world_newest._ptr; };
             auto tile = [&](Coordinate at) -> Term {
                 Term t = term_make_null();
                 (void) displayed()->_term_for_coordinate.try_get(at, t);
