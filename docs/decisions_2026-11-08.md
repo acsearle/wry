@@ -179,6 +179,13 @@ after 15 s).  Three things are antony's call:
     Build it now, or wait for the jitter-buffer design?
     Recommendation: build the clamped fraction now; it is local to
     `tnow` in WryWorldScene.mm, and ProMotion displays show the repeats.
+    **Discussed 2026-11-19:** not the bare fraction: the jitter buffer.
+    The render clock should run at the step rate a smoothed, adaptive
+    delay behind the newest applied step, drawing from a short ring of
+    recent Worlds the one that holds the frame's render time (the
+    2026-08-25 design, bddbf49: adaptive delay with hysteresis,
+    rubber-band corrections, hard fast-forward only for big gaps).
+    Sketch in chat; build on antony's go-ahead.
 27. **Commands read the displayed World, not the head.**  `get`, `dump`,
     `state-hash`, `pipette`, `follow` and `save` answer for the World on
     screen, which while the clock runs is up to a frame behind the
@@ -186,6 +193,7 @@ after 15 s).  Three things are antony's call:
     of a replay and `corrupt` act on the head.)  Keep it so?
     Recommendation: keep it: what you see is what you get, and `step n`
     replies only once the displayed World has the steps.
+    **Decided 2026-11-19:** keep.
 28. **Where the pump runs.**  Built as a pool coroutine, not a dedicated
     thread: `World::step` already fans out over the pool, so a thread
     would only block on it, and would need its own pinning and waking.
@@ -193,3 +201,4 @@ after 15 s).  Three things are antony's call:
     stop the pump around their change, blocking the main thread for at
     most one step.  OK?  Recommendation: yes; revisit only if a
     saturated pool is seen delaying steps.
+    **Decided 2026-11-19:** keep.
