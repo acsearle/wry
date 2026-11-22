@@ -1,11 +1,11 @@
 # Todo
+## Feedback 2026-11-22
+* "path-trace target=<gray suggestion>" doesn't autocomplete, maybe because it's a number?
+* console text doesn't wrap, and some of the help lines are now long enough to be cut off  
 
 ## Feedback 2026-11-11
-- When tracking a truck, the truck jitters because the view and truck position aren't exactly consistent
 - Clicking on a truck to track it seems to stop working after a while
-- When not holding anything, or holding a blank symbol, need to restore some kind of cursor.  Cursor should never be invisible.
 - Surprising/inconsistent that mine, dump, bury don't apply to the square containing symbol
-- Ambient occlusion seemed to produce a strange "bow wave" at full screen -- likely FIXED 2026-11-12 (GTAO noise, 190a435; see done.md): antony to check at full screen
 - Not obvious how to clear a cell
 - Surprising there was no undo (which would be, write back the prior state of last write?)
 
@@ -30,39 +30,21 @@
   6. show the main menu when the splash timer expires, if not already shown
   7. the load / new world buttons are available immediately
   8. the first world render waits on asset loading completion
-- SVG loading (built 2026-11-08; see done.md) follow-ups: gzip'd OT-SVG documents (no zlib in the io layer); no live use site (the atlas symbol sheet is still a PNG, and the drawBezier mesh path is still commented out); the OT-SVG root viewBox is ignored; nested <svg> is not clipped
-- UI in points (built 2026-11-08; see done.md) follow-ups:
-  - The cursor's size on a real display: check it looks right, and whether a large hardware cursor costs anything (decisions item 17's open question)
-  - glyph outline radius and edge AA stay in pixels
-- Decals: a normal-map image per decal (the instance's frame would carry it); emissive, occlusion and embossed normals are done (see done.md)
-- Decouple the glyphs from the tile SDF.  Draw them all as decals (or, to optimize the common case, combine two textures in the raymarcher)
-  - a larger default caption size wants a smaller art panel in tools/make_tile_atlas.py
-  - one decal instance per glyph (~10 per tile) is unmeasured at map-edge zooms
-  - the symbols themselves are still in the tile SDF
-- Generalize the 2D interpolated + 1D analytic SDF to support full analytic.  Superellipsoids?
 - Data driven, simulation tables (prices, dig times, terrain generator parameters) are still compiled in: needs the ruleset-hash vs rules-in-the-World decision (docs/data_driven.md; decisions item 10b).  Presentation tables are done (assets/*.json, see done.md)
 - Opcode help draft (assets/opcodes.json, Claude 2026-11-10) for antony to edit.  Drafter unsure about: LOCATION_LOAD/STORE (not built, run as NOOP; hide from players?); DROP of cargo skips the next cell's instruction (latched STORE treats the target as data: bug or gotcha?); ADD's "576 quadrillion" (2^59) overflow wording, and SUBTRACT/NEGATE/ABS share it unmentioned; HEADING_LOAD lap counting (too much for a tooltip?); 13 made-up display names (IS_* x6, BITWISE_SPLIT, POPCOUNT, ROT, IS_MATTER, VALVE_NORTH_SOUTH, VALVE_EAST_WEST, DO_NOT_QUEUE have no captioned tile: the valve tiles are named in lowercase in assets.json); DO_NOT_QUEUE chaining (machine_language.md 10.4) omitted; NOOP's purpose guessed
 - machine_language.md vs machine.cpp disagreements found while drafting help: (1) DUMP can write under another truck parked on an EMPTY cell (plan_arrival checks only the target value; doc 6.7 / 8.11 say machines cannot write under an occupant) -- DECIDE which is right (decisions item 25); (2) apply_pending comment (~machine.cpp:340) says trucks pick up anything copyable, the code picks up only is_inty; (3) stale "all of these opcodes just manipulate the entity state" (~machine.cpp:605); (4) EXCHANGE can swap cargo onto an instruction tile (doc 8.7 open); (5) doc section 3's cycle omits the DUMP guard, valve gate and junction gate
 - Stale ~/Desktop/assets/opcodes.json (a 2023 name list; only a commented-out line at WryWorldScene.mm:862 mentions it): delete with the LATER assets move
 - Context help for item under cursor: hover or side panel like Factorio.  The text is loaded: presentation().opcode_help(op) (game/presentation.hpp, from assets/opcodes.json); no UI yet
 - LATER (antony 2026-11-10): move the text-based, human-readable parts of ~/Desktop/assets into wry/assets and wry/tools under version control: .json, .py, .svg (things we edit and git can diff), not .obj, .blend, .png or fonts.  ~/Desktop/assets keeps the static and cached PNGs, meshes etc. (maybe eventually nothing).  Leave ambiguous cases where they are and discuss them first
-- Exploded stack: from the steep default camera each item still hides about half of the one below at a one-unit pitch; tune the pitch (or tilt the items toward the camera) if faces need to be read whole
 - Commutative operations on World values.  Operation is applied when its transaction commits, concurrently, in any order.  Could be an atomic add on the value in the new World, for example.  Money is an example.  Attempt a widthdrawal if enough money \_now\_; but if enough people do it on the same turn, goes negative.  Don't try to prevent that, just penalize it - apply overdraft or interest every "month" based on lowest balance.  Fancier implementation for busy variables is to apply the deltas to thread locals and merge at the end of step.
 - Help text, display text, etc. needs a to have meta that allows the easy inclusion (and rendering) of glyphs and keycaps and stuff.
   - keycaps done 2026-11-08 (see done.md).  Next: glyphs (opcode / matter symbols inline)
 - If chemical formulas become an important part of the way we present stuff, we need subscript support
 
 ## Things to change
-- Implement radiance cascades to compare against GTAO, in a later interactive turn (decided 2026-11-09, decisions_2026-11-08.md item 8; investigation in docs/radiance_cascades.md).  With an environment map that suits them: indoors, a large-solid-angle window, relatively high up and relatively close to the view direction, giving soft short shadows; no directional sun and no shadow map at all.  Screen-space limits are fine.  Height field: not yet, since the experiment has no sun
-- Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
-  - PUNTED 2026-11-10 (decisions item 5): indoor lighting waits for the radiance-cascade experiment; the lighting will be made to fit the chosen algorithm.  `environment room` stays built
-- Make the palette a GUI widget
 - Console widget follow-ups: dimensions are still font-derived (half a line) rather than points; modality and scrollback landed 2026-11-10 (decision 13, see done.md): playtest how annoying modality is; no "more below" marker when scrolled back and output arrives; wheel mice (WryDelegate scrollWheel: scales scrollingDeltaY by backing scale regardless of hasPreciseScrollingDeltas, so a notch moves a few pixels: console log, save list and world pan alike)
-- Optical weight of the UI font: Noto Sans Medium is kept (decided 2026-11-09, decisions_2026-11-08.md item 7), but the Light / Regular / Medium comparison (assets/ui_font_weights.png) shows the importance of *optical* weight; antony will think more about that
 
 ## Bugs
-- GTAO scale is specified in pixels?  (Why does it even have a scale, should be scale-free exponentially spaced samples?)
-  - Not pixels: a world-space falloff (analysis 2026-11-08; see done.md).  DECIDE: a scale-free variant (exponentially spaced taps out to the screen edge through the depth pyramid, no falloff) is a design choice, not a bug fix
 
 ## To be decided
 - Power, water, heat want to be partial differential equations.  Not allowed--simply too expensive to compute.  But even a simple global scalar might be heavily contested.  If we think about combining trees, maybe what we can do is have discrete lumps move around.  Building has a buffer of electrictity; occasionally requests top-up electricity from its local substation; likewise the substation holds a buffer it requests from superstation etc., from a power station.  No node has too many attachments, contention is low, and blackouts are local but contagious.
@@ -72,6 +54,62 @@
 - How to handle pop-in pop-out of Terms as they are mined, shipped, picked up etc.
 
 ## Other
+## Parked: graphics (2026-11-22)
+Rendering, the look and the visual UI, parked by antony 2026-11-22 while the work turns elsewhere.  Nothing here is in flight: everything built is on main (path tracer docs/path_tracing.md, step pump and render clock docs/step_pump.md), no graphics branch or worktree is open (deleted branches' tips: ~/Desktop/worktrees.nosync/parked/deleted-branches-2026-11-22.txt; their worktrees' screenshots beside it).  Pick up from here.
+
+### Path tracer (docs/path_tracing.md)
+- `path-trace "error"` shows black with the world running (antony 2026-11-22): a running world restarts the accumulation every step, so no pixel reaches the two samples a standard error needs and the resolve shows 0.  Pause first; or show a distinct colour where n < 2
+- `path-trace target=N` changes nothing visible (antony 2026-11-22): live, the accumulation restarts every step long before any target; paused, the target only says when tracing stops (the noise stops falling).  Naming only `target=` also resets the view and the other arguments to their defaults: the command could keep the current values for arguments not given
+- Not yet run in a window since the interleaved passes (b89779f); mesh alpha cut-outs are not modelled (no mesh texture has alpha today)
+- Use it to judge the open lighting questions below: the fast renderer's camera-facing vertical faces are too dark (IBL lights them from the sky map's lower half), no colour bleeding, GTAO's short range (docs/path_tracing.md section 6)
+
+### Lighting
+- Implement radiance cascades to compare against GTAO, in a later interactive turn (decided 2026-11-09, decisions_2026-11-08.md item 8; investigation in docs/radiance_cascades.md).  With an environment map that suits them: indoors, a large-solid-angle window, relatively high up and relatively close to the view direction, giving soft short shadows; no directional sun and no shadow map at all.  Screen-space limits are fine.  Height field: not yet, since the experiment has no sun
+- Tune the lighting.  Environment map is currently a daytime desert; try indoors with a window.
+  - PUNTED 2026-11-10 (decisions item 5): indoor lighting waits for the radiance-cascade experiment; the lighting will be made to fit the chosen algorithm.  `environment room` stays built
+- BACK POCKET (2026-10-30): directional occlusion in place of AO * IBL.  The ambient term is the hemisphere integral of V * L * f * cos; AO times an irradiance lookup factors it and is only exact for an untextured sky.  Cut the middleman: keep the GTAO slice march but read the sky per visible sector (visibility-bitmask slices, Therrien/Levesque/Gilet 2023, after HBIL and SSDO) at the mip the sector's solid angle implies (Colbert-Krivanek filtered importance sampling), one-bounce colour from the pixels the march hits, and for specular a GGX visible-normal direction marched in screen space (SSR on hit, prefiltered cube on miss).  Diffuse part can run at half res if it outputs irradiance and the composite multiplies by full-res albedo.  Steps in order: bent normal into the irradiance lookup (free from GTAO), bitmask sectors with sky lookups, VNDF march on the metals, then temporal reprojection (no motion vectors or history buffer today) once the noise demands it.  Worth it only if the final sky cube is strongly textured (the dark room with a big window) or low-roughness surfaces are common; the prize is dropping the directional light and shadow maps and having lighting just work for our simple scenes.  Not decided
+- Ambient occlusion seemed to produce a strange "bow wave" at full screen -- likely FIXED 2026-11-12 (GTAO noise, 190a435; see done.md): antony to check at full screen
+- GTAO scale is specified in pixels?  (Why does it even have a scale, should be scale-free exponentially spaced samples?)
+  - Not pixels: a world-space falloff (analysis 2026-11-08; see done.md).  DECIDE: a scale-free variant (exponentially spaced taps out to the screen edge through the depth pyramid, no falloff) is a design choice, not a bug fix
+- GTAO follow-ups: retire the measuring aids `pyramid 0` and `ssao-repeat` when no longer wanted.  Unpursued lever if the GTAO floor matters: fold the upsample's depth test into fewer reads, or run the composite's AO fetch at half res via a sampler (see done.md)
+- TODO: point light shader.
+- TODO (2026-11-01): the look-iteration console commands are debugging aids to retire once the look is decided: `board`, `exposure`, `atlas`, `token`, `toggle-decals` (world_state.cpp) and their WorldState fields (_board_*, _exposure, _symbol_atlas, _token_*, _symbol_decals); fold the chosen values into constants.  The runtime opcode-label stamping in WryWorldScene -loadSymbolAtlasNamed: writes into the cell margin the slabs never show and is superseded by the captions tools/make_tile_atlas.py prints on the tiles; remove it with them
+
+### Geometry, SDF and decals
+- Symbol slabs (landed 2026-10-29; see done.md) follow-ups: slab edges are aliased (one march per pixel, no coverage); thickness = stroke width capped at 20 texels (solid tiles; 32 put their undersides below the ground) -- revisit the cap and whether fillet radii should be global rather than per symbol
+- Decouple the glyphs from the tile SDF.  Draw them all as decals (or, to optimize the common case, combine two textures in the raymarcher)
+  - a larger default caption size wants a smaller art panel in tools/make_tile_atlas.py
+  - one decal instance per glyph (~10 per tile) is unmeasured at map-edge zooms
+  - the symbols themselves are still in the tile SDF
+- TODO: Draw tiles in one pass and symbols as decals, because: we need combinatorial numbers, strings.
+- Generalize the 2D interpolated + 1D analytic SDF to support full analytic.  Superellipsoids?
+- Decals: a normal-map image per decal (the instance's frame would carry it); emissive, occlusion and embossed normals are done (see done.md)
+- Exploded stack: from the steep default camera each item still hides about half of the one below at a one-unit pitch; tune the pitch (or tilt the items toward the camera) if faces need to be read whole
+- SVG loading (built 2026-11-08; see done.md) follow-ups: gzip'd OT-SVG documents (no zlib in the io layer); no live use site (the atlas symbol sheet is still a PNG, and the drawBezier mesh path is still commented out); the OT-SVG root viewBox is ignored; nested <svg> is not clipped
+
+### Text and visual UI
+- mini-map is ridiculously huge in the initial view
+- When not holding anything, or holding a blank symbol, need to restore some kind of cursor.  Cursor should never be invisible.
+- FEEDBACK (2026-11-01): Tile captions too small (zoom?).  (2026-11-08: `caption-decals 130` tries larger ones; see the glyph-decoupling entry.)  The numbers half is done (see done.md)
+- Optical weight of the UI font: Noto Sans Medium is kept (decided 2026-11-09, decisions_2026-11-08.md item 7), but the Light / Regular / Medium comparison (assets/ui_font_weights.png) shows the importance of *optical* weight; antony will think more about that
+- Make the palette a GUI widget
+- HOLD (2026-10-29, Antony): the opcode palette is old, retrofitted as a widget; invisible to `widgets`/`press` (coordinates or `hold` reach it); make it a proper widget later
+- UI in points (built 2026-11-08; see done.md) follow-ups:
+  - The cursor's size on a real display: check it looks right, and whether a large hardware cursor costs anything (decisions item 17's open question)
+  - glyph outline radius and edge AA stay in pixels
+- Zoom (landed 2026-11-05; see done.md) follow-ups: map view near 0.5 should probably still show the minimap and palette; while paused, several pinch events in one frame coalesce and are then clamped to a halving / doubling
+
+### Hazards
+- WryWorldScene _mapTexture[2] double buffer: the same hazard as the SpriteAtlas::commit one (fixed 2026-11-08; see done.md), NOT fixed: replaceRegion into the back texture is safe only because map builds are >= 1 s apart, not by a GPU edge (stamp the texture with the arena's frame value when sampled and defer the upload until signaledValue reaches it).  Also: if SpriteAtlas::release is ever called, the freed region needs the same stamp before reuse
+
+### Ideas (were "For consideration")
+- Ideas from constref@youtube's Vulkan tutorials.  Vendor tinyglTF and stb\_image.  Replaces use of Wavefront for meshes.  Adapt to tinyglTF PBR conventions, minor changes to deferred rendrerer.  Load submeshes into a single global mesh buffer.  Use bindless textures.  Allows single draw call for all meshes, at least per render pass.  Load tglTF in parallel if that helps.
+- Consider adding variable fonts/optical weights.  Consider round-stroke-end font for SDF compatibility.  Consider stb\_font (vector at all?) and freetype (variable at all?) vs our font thing.  Optical weights may be expressible as SDF threshold, but design weight's won't be.
+- Consider if the symbol glyphs belong in a font.
+- wry2 contains a somewhat successful decal shadow experiment for rounded cubes
+- can SDFs be leveraged into soft shadows
+- make our 2+1d SDFs support a lathe mode (lookup length(xy),z)?
+
 ## Won't do
 Things that have been decided against
 - Non-shadow-casting fairy light shader for running lights, headlights, etc.
@@ -84,19 +122,9 @@ Things that have been decided against
 -
 List of one-line reminders of things to think and do
 - Console line editing (landed 2026-11-05; see done.md) follow-ups: try Cmd-C / Cmd-V / Cmd-Z in the window once (real Cmd chords through -keyDown: and the NSPasteboard read / write were never driven); NOT DONE (line_editing.md section 4): dead keys / input methods and grapheme clusters (pointless while the atlas font is ASCII only), Ctrl-R, a candidate popup, a kill ring, scrolling the output, Windows / Linux spellings of copy / paste / undo; more parameters could declare words (file names for `replay`, the atlas names)
-- Zoom (landed 2026-11-05; see done.md) follow-ups: map view near 0.5 should probably still show the minimap and palette; while paused, several pinch events in one frame coalesce and are then clamped to a halving / doubling
-- FEEDBACK (2026-11-01): Tile captions too small (zoom?).  (2026-11-08: `caption-decals 130` tries larger ones; see the glyph-decoupling entry.)  The numbers half is done (see done.md)
 - REMINDER (for much later; decisions_2026-11-08.md item 9): the FEEDBACK (2026-11-01) "U-turn is prominent and unhelpful" means the TURN BACK tile
-- TODO: point light shader.
-- TODO: Draw tiles in one pass and symbols as decals, because: we need combinatorial numbers, strings.
-- TODO (2026-11-01): the look-iteration console commands are debugging aids to retire once the look is decided: `board`, `exposure`, `atlas`, `token`, `toggle-decals` (world_state.cpp) and their WorldState fields (_board_*, _exposure, _symbol_atlas, _token_*, _symbol_decals); fold the chosen values into constants.  The runtime opcode-label stamping in WryWorldScene -loadSymbolAtlasNamed: writes into the cell margin the slabs never show and is superseded by the captions tools/make_tile_atlas.py prints on the tiles; remove it with them
-- Symbol slabs (landed 2026-10-29; see done.md) follow-ups: slab edges are aliased (one march per pixel, no coverage); thickness = stroke width capped at 20 texels (solid tiles; 32 put their undersides below the ground) -- revisit the cap and whether fillet radii should be global rather than per symbol
-- GTAO follow-ups: retire the measuring aids `pyramid 0` and `ssao-repeat` when no longer wanted.  Unpursued lever if the GTAO floor matters: fold the upsample's depth test into fewer reads, or run the composite's AO fetch at half res via a sampler (see done.md)
-- BACK POCKET (2026-10-30): directional occlusion in place of AO * IBL.  The ambient term is the hemisphere integral of V * L * f * cos; AO times an irradiance lookup factors it and is only exact for an untextured sky.  Cut the middleman: keep the GTAO slice march but read the sky per visible sector (visibility-bitmask slices, Therrien/Levesque/Gilet 2023, after HBIL and SSDO) at the mip the sector's solid angle implies (Colbert-Krivanek filtered importance sampling), one-bounce colour from the pixels the march hits, and for specular a GGX visible-normal direction marched in screen space (SSR on hit, prefiltered cube on miss).  Diffuse part can run at half res if it outputs irradiance and the composite multiplies by full-res albedo.  Steps in order: bent normal into the irradiance lookup (free from GTAO), bitmask sectors with sky lookups, VNDF march on the metals, then temporal reprojection (no motion vectors or history buffer today) once the noise demands it.  Worth it only if the final sky cube is strongly textured (the dark room with a big window) or low-roughness surfaces are common; the prize is dropping the directional light and shadow maps and having lighting just work for our simple scenes.  Not decided
-- HOLD (2026-10-29, Antony): the opcode palette is old, retrofitted as a widget; invisible to `widgets`/`press` (coordinates or `hold` reach it); make it a proper widget later
 - Session commands follow-ups: a real save picker for the main menu's Load Game (still the newest).  Named saves done 2026-11-12 (see done.md); review: an unnamed `save` shows as `save ""` in history; names may have leading/trailing spaces; a file whose stem fails validation is silently not listed; on case-insensitive APFS `save Foo` replaces foo.wry
 - IDEA (2026-10-29): screenshot could grow crop / per-widget / off-resolution options (today cropping is the consumer's job on the PNG it writes)
-- WryWorldScene _mapTexture[2] double buffer: the same hazard as the SpriteAtlas::commit one (fixed 2026-11-08; see done.md), NOT fixed: replaceRegion into the back texture is safe only because map builds are >= 1 s apart, not by a GPU edge (stamp the texture with the arena's frame value when sampled and defer the upload until signaledValue reaches it).  Also: if SpriteAtlas::release is ever called, the freed region needs the same stamp before reuse
 - Full implications of the next_ready GC bug; clean rederive from epoch formulation
 - The save's inline waitset count is still found by a second traversal of each tiny inner set (flat AMT saves landed 2026-09-25; see done.md): switch to ArrayMappedTrie::_size (landed 2026-09-28), or reserve a u32 and patch it after the members (IDEA 2026-09-27; Antony wanted to understand the format better first)
 - DEFERRED 2026-09-27 (Antony): the Saver buffers each record body and then copies it into the in-memory stream: one extra copy of every byte, and transient memory equal to the largest open body (the biggest map record).  Write-then-patch lengths are incompatible with a compressed output stream.  Options when it matters: chunk big maps into bounded records (SortedBuilder streams across chunks), stream closed records through the compressor as they close (peak = one open body, not the whole stream), or compute lengths up front
